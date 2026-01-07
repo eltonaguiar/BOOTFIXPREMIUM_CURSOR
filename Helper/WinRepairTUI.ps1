@@ -22,10 +22,10 @@ function Start-TUI {
     
     do {
         Clear-Host
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===============================================================" -ForegroundColor Cyan
         Write-Host "  MIRACLE BOOT v7.2.0 - MS-DOS STYLE MODE" -ForegroundColor Cyan
         Write-Host "  Environment: $envDisplay" -ForegroundColor Gray
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===============================================================" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "1) List Windows Volumes (Sorted)" -ForegroundColor White
         Write-Host "2) Scan Storage Drivers (Detailed)" -ForegroundColor White
@@ -66,7 +66,7 @@ function Start-TUI {
                 Write-Host "`nScanning volumes..." -ForegroundColor Gray
                 Get-WindowsVolumes | Format-Table -AutoSize
                 Write-Host "Press any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "2" {
                 Write-Host "`nScanning for storage driver issues..." -ForegroundColor Gray
@@ -81,7 +81,7 @@ function Start-TUI {
                         Write-Host "Loading drivers..." -ForegroundColor Gray
                         Load-Drivers-Live "X:\Harvested"
                         Write-Host "Drivers loaded. Press any key to continue..." -ForegroundColor Green
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                 }
             }
@@ -95,19 +95,20 @@ function Start-TUI {
                         Write-Host "Injecting drivers into ${win}: using DISM..." -ForegroundColor Gray
                         Inject-Drivers-Offline $win $path
                         Write-Host "Driver injection complete. Press any key to continue..." -ForegroundColor Green
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     } else {
                         Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                 }
             }
             "4" { 
                 Write-Host "`nBCD Entries:" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 bcdedit /enum
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "5" {
                 Write-Host "`nCurrent BCD Entries:" -ForegroundColor Cyan
@@ -122,10 +123,10 @@ function Start-TUI {
                         Set-BCDDescription $id $name
                         Write-Host "BCD entry updated successfully!" -ForegroundColor Green
                         Write-Host "Press any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     } else {
                         Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                 }
             }
@@ -148,8 +149,9 @@ function Start-TUI {
                         }
                     }
                 }
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "7" {
                 Write-Host "`nAttempting to open ChatGPT help..." -ForegroundColor Gray
@@ -162,11 +164,12 @@ function Start-TUI {
                     Write-Host ""
                     Write-Host $result.Instructions -ForegroundColor Cyan
                 }
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "8" {
-                $drive = Read-Host "`nEnter target drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Enter target drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
@@ -175,12 +178,13 @@ function Start-TUI {
                 Write-Host ""
                 $analysis = Get-WindowsInstallFailureReasons -TargetDrive $drive
                 Write-Host $analysis.Report
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "9" {
                 Write-Host "`nBOOT REPAIR OPTIONS" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "1) Rebuild BCD from Windows Installation (bcdboot)" -ForegroundColor White
                 Write-Host "2) Fix Boot Files (bootrec /fixboot)" -ForegroundColor White
@@ -190,73 +194,77 @@ function Start-TUI {
                 Write-Host ""
                 $bootChoice = Read-Host "Select boot repair option"
                 
-                $drive = Read-Host "Target Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
                 switch ($bootChoice) {
-                    "1" {
+                    '1' {
                         $command = "bcdboot ${drive}:\Windows"
                         $confirmed = Confirm-DestructiveOperation -CommandKey "bcdboot" -Command $command -Description "Rebuild BCD from Windows installation"
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = Invoke-Expression $command 2>&1
                             Write-Host $output
-                            Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         } else {
                             Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         }
                     }
-                    "2" {
+                    '2' {
                         $command = "bootrec /fixboot"
                         $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_fixboot" -Command $command -Description "Fix boot sector"
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = bootrec /fixboot 2>&1
                             Write-Host $output
-                            Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         } else {
                             Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         }
                     }
-                    "3" {
+                    '3' {
                         Write-Host "`nScanning for Windows installations..." -ForegroundColor Gray
                         $output = bootrec /scanos 2>&1
                         Write-Host $output
-                        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
-                    "4" {
+                    '4' {
                         $command = "bootrec /rebuildbcd"
                         $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_rebuildbcd" -Command $command -Description "Rebuild BCD"
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = bootrec /rebuildbcd 2>&1
                             Write-Host $output
-                            Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         } else {
                             Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                         }
                     }
-                    "B" { continue }
-                    "b" { continue }
+                    'B' { continue }
+                    'b' { continue }
                     default {
                         Write-Host "`nInvalid selection. Press any key to continue..." -ForegroundColor Red
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                 }
             }
             "A" {
                 Write-Host "`nADVANCED DIAGNOSTICS" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "1) Boot Diagnosis" -ForegroundColor White
                 Write-Host "2) System Restore Check" -ForegroundColor White
@@ -266,26 +274,27 @@ function Start-TUI {
                 Write-Host ""
                 $diagChoice = Read-Host "Select diagnostic option"
                 
-                $drive = Read-Host "Target drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
                 switch ($diagChoice) {
-                    "1" {
+                    '1' {
                         Write-Host "`nRunning boot diagnosis..." -ForegroundColor Gray
                         $diagnosis = Get-BootDiagnosis -TargetDrive $drive
                         Write-Host $diagnosis
-                        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
-                    "2" {
+                    '2' {
                         Write-Host "`nChecking System Restore..." -ForegroundColor Gray
                         $restoreInfo = Get-SystemRestoreInfo -TargetDrive $drive
-                        Write-Host ""
+                        Write-Host ''
                         Write-Host "SYSTEM RESTORE STATUS" -ForegroundColor Cyan
-                        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                        Write-Host "===============================================================" -ForegroundColor Gray
                         Write-Host $restoreInfo.Message
                         if ($restoreInfo.Enabled -and $restoreInfo.RestorePoints.Count -gt 0) {
                             Write-Host "`nRestore Points:" -ForegroundColor Cyan
@@ -295,25 +304,27 @@ function Start-TUI {
                                 $num++
                             }
                         }
-                        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
-                    "3" {
+                    '3' {
                         Write-Host "`nChecking Reagentc health..." -ForegroundColor Gray
                         $reagentcHealth = Get-ReagentcHealth
-                        Write-Host ""
+                        Write-Host ''
                         Write-Host "REAGENTC HEALTH" -ForegroundColor Cyan
-                        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                        Write-Host "===============================================================" -ForegroundColor Gray
                         Write-Host $reagentcHealth.Message
-                        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
-                    "4" {
+                    '4' {
                         Write-Host "`nGathering OS information..." -ForegroundColor Gray
                         $osInfo = Get-OSInfo -TargetDrive $drive
-                        Write-Host ""
+                        Write-Host ''
                         Write-Host "OPERATING SYSTEM INFORMATION" -ForegroundColor Cyan
-                        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                        Write-Host "===============================================================" -ForegroundColor Gray
                         if ($osInfo.Error) {
                             Write-Host "[ERROR] $($osInfo.Error)" -ForegroundColor Red
                         } else {
@@ -324,24 +335,25 @@ function Start-TUI {
                             Write-Host "Architecture: $($osInfo.Architecture)" -ForegroundColor White
                             Write-Host "Language: $($osInfo.Language)" -ForegroundColor White
                         }
-                        Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
-                    "B" { continue }
-                    "b" { continue }
+                    'B' { continue }
+                    'b' { continue }
                     default {
                         Write-Host "`nInvalid selection. Press any key to continue..." -ForegroundColor Red
-                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                 }
             }
             "a" {
                 # Handle lowercase 'a' for Advanced Diagnostics
-                $c = "A"
+                $c = 'A'
                 continue
             }
             "B" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
@@ -358,20 +370,21 @@ function Start-TUI {
                 
                 # Display probability prominently
                 Write-Host ""
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host "===============================================================" -ForegroundColor Cyan
                 Write-Host "  BOOT PROBABILITY: $($bootHealth.BootProbability)%" -ForegroundColor $(if ($bootHealth.BootProbability -ge 75) { "Green" } elseif ($bootHealth.BootProbability -ge 50) { "Yellow" } else { "Red" })
                 Write-Host "  BOOT HEALTH: $($bootHealth.BootHealth)" -ForegroundColor $(if ($bootHealth.BootProbability -ge 75) { "Green" } elseif ($bootHealth.BootProbability -ge 50) { "Yellow" } else { "Red" })
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host "===============================================================" -ForegroundColor Cyan
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "b" {
-                $c = "B"
+                $c = 'B'
                 continue
             }
             "C" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
@@ -381,21 +394,22 @@ function Start-TUI {
                 $repairResult = Start-AutomatedBootRepair -TargetDrive $drive
                 Write-Host ""
                 Write-Host $repairResult.Report
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "c" {
-                $c = "C"
+                $c = 'C'
                 continue
             }
             "D" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
-                $source = Read-Host "Windows installation source path (optional, for offline repair - press Enter to skip)"
+                $source = Read-Host 'Windows installation source path (optional for offline repair - press Enter to skip)'
                 
                 Write-Host "`nRunning system file repair (SFC + DISM)..." -ForegroundColor Gray
                 Write-Host "This may take 15-30 minutes..." -ForegroundColor Yellow
@@ -415,11 +429,12 @@ function Start-TUI {
                 
                 Write-Host ""
                 Write-Host $repairResult.Report
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "c" {
-                $c = "C"
+                $c = 'C'
                 continue
             }
             "D" {
@@ -451,11 +466,12 @@ function Start-TUI {
                 if ($repairResult.RequiresReboot) {
                     Write-Host "`nNOTE: chkdsk has been scheduled for next reboot." -ForegroundColor Yellow
                 }
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "d" {
-                $c = "D"
+                $c = 'D'
                 continue
             }
             "E" {
@@ -473,11 +489,12 @@ function Start-TUI {
                 
                 Write-Host ""
                 Write-Host $diagResult.Report
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "e" {
-                $c = "E"
+                $c = 'E'
                 continue
             }
             "F" {
@@ -495,22 +512,23 @@ function Start-TUI {
                 
                 Write-Host ""
                 Write-Host $diagResult.Report
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "f" {
-                $c = "F"
+                $c = 'F'
                 continue
             }
             "G" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
                 Write-Host "`nCOMPLETE SYSTEM REPAIR" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "This will run:" -ForegroundColor White
                 Write-Host "  1. Comprehensive diagnostics" -ForegroundColor Gray
@@ -531,26 +549,27 @@ function Start-TUI {
                     
                     Write-Host ""
                     Write-Host $repairResult.Report
-                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                 } else {
                     Write-Host "`nOperation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                 }
             }
             "g" {
-                $c = "G"
+                $c = 'G'
                 continue
             }
             "G" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
                 Write-Host "`nCOMPLETE SYSTEM REPAIR" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "This will run:" -ForegroundColor White
                 Write-Host "  1. Comprehensive diagnostics" -ForegroundColor Gray
@@ -571,19 +590,20 @@ function Start-TUI {
                     
                     Write-Host ""
                     Write-Host $repairResult.Report
-                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                 } else {
                     Write-Host "`nOperation cancelled. Press any key to continue..." -ForegroundColor Yellow
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                 }
             }
             "g" {
-                $c = "G"
+                $c = 'G'
                 continue
             }
             "H" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
@@ -601,24 +621,25 @@ function Start-TUI {
                 
                 # Display readiness status prominently
                 Write-Host ""
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
+                Write-Host "===============================================================" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
                 if ($readiness.ReadyForInPlaceUpgrade) {
                     Write-Host "  STATUS: READY FOR IN-PLACE UPGRADE" -ForegroundColor Green
                 } else {
                     Write-Host "  STATUS: BLOCKED - NOT READY FOR IN-PLACE UPGRADE" -ForegroundColor Red
                     Write-Host "  BLOCKERS FOUND: $($readiness.Blockers.Count)" -ForegroundColor Red
                 }
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
+                Write-Host "===============================================================" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "h" {
-                $c = "H"
+                $c = 'H'
                 continue
             }
             "I" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = "C"
                 }
@@ -633,16 +654,17 @@ function Start-TUI {
                 Write-Host ""
                 Write-Host $chainAnalysis.Report
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "i" {
-                $c = "I"
+                $c = 'I'
                 continue
             }
             "J" {
                 Write-Host "`nUTILITIES MENU" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "1) Notepad" -ForegroundColor White
                 Write-Host "2) Registry Editor" -ForegroundColor White
@@ -657,19 +679,19 @@ function Start-TUI {
                 $utilChoice = Read-Host "Select utility"
                 
                 switch ($utilChoice) {
-                    "1" {
+                    '1' {
                         $result = Start-UtilitiesMenu -Utility "Notepad"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "2" {
+                    '2' {
                         $result = Start-UtilitiesMenu -Utility "Registry"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "3" {
+                    '3' {
                         $result = Start-UtilitiesMenu -Utility "PowerShell"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "4" {
+                    '4' {
                         $result = Start-UtilitiesMenu -Utility "SystemRestore"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
@@ -685,31 +707,33 @@ function Start-TUI {
                         $result = Start-UtilitiesMenu -Utility "EventViewer"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "B" { continue }
-                    "b" { continue }
+                    'B' { continue }
+                    'b' { continue }
                     default {
-                        Write-Host "Invalid selection." -ForegroundColor Red
+                        Write-Host 'Invalid selection.' -ForegroundColor Red
                     }
                 }
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "j" {
-                $c = "J"
+                $c = 'J'
                 continue
             }
             "K" {
                 if ($envDisplay -ne "WinPE") {
                     Write-Host "`nBrowser installation is only available in WinPE environment." -ForegroundColor Yellow
                     Write-Host "Current environment: $envDisplay" -ForegroundColor Gray
-                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     continue
                 }
                 
                 Write-Host "`nBROWSER INSTALLATION (WinPE Only)" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "1) Install Chrome Portable" -ForegroundColor White
                 Write-Host "2) Install Firefox Portable" -ForegroundColor White
@@ -719,32 +743,33 @@ function Start-TUI {
                 $browserChoice = Read-Host "Select browser"
                 
                 switch ($browserChoice) {
-                    "1" {
+                    '1' {
                         $result = Install-PortableBrowser -Browser "Chrome"
-                        Write-Host ""
+                        Write-Host ''
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "2" {
+                    '2' {
                         $result = Install-PortableBrowser -Browser "Firefox"
-                        Write-Host ""
+                        Write-Host ''
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
                     }
-                    "B" { continue }
-                    "b" { continue }
+                    'B' { continue }
+                    'b' { continue }
                     default {
-                        Write-Host "Invalid selection." -ForegroundColor Red
+                        Write-Host 'Invalid selection.' -ForegroundColor Red
                     }
                 }
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "k" {
-                $c = "K"
+                $c = 'K'
                 continue
             }
             "L" {
-                $sourceDrive = Read-Host "`nSource drive with working Windows (e.g. C, or press Enter for C)"
+                $sourceDrive = Read-Host 'Source drive with working Windows (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($sourceDrive)) {
                     $sourceDrive = "C"
                 }
@@ -767,11 +792,12 @@ function Start-TUI {
                 Write-Host "Drivers ported: $($result.PortedDrivers.Count)" -ForegroundColor Green
                 Write-Host "Missing drivers detected: $($result.MissingDrivers.Count)" -ForegroundColor $(if ($result.MissingDrivers.Count -gt 0) { "Yellow" } else { "Green" })
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "l" {
-                $c = "L"
+                $c = 'L'
                 continue
             }
             "M" {
@@ -786,7 +812,7 @@ function Start-TUI {
                 $result = Generate-SaveMeTxt -OutputPath $outputPath
                 
                 if ($result.Success) {
-                    Write-Host "[SUCCESS] SAVE_ME.txt generated!" -ForegroundColor Green
+                    Write-Host '[SUCCESS] SAVE_ME.txt generated!' -ForegroundColor Green
                     Write-Host "Location: $($result.Path)" -ForegroundColor Cyan
                     Write-Host ""
                     Write-Host "Opening in Notepad..." -ForegroundColor Yellow
@@ -795,23 +821,25 @@ function Start-TUI {
                     Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
                 }
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
             "m" {
-                $c = "M"
+                $c = 'M'
                 continue
             }
             "N" {
                 Start-DiskManagementHelper -Interactive
             }
             "n" {
-                $c = "N"
+                $c = 'N'
                 continue
             }
-            "O" {
-                Write-Host "`nSYSTEM RESTORE POINT MANAGEMENT" -ForegroundColor Cyan
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+            'O' {
+                Write-Host ''
+                Write-Host 'SYSTEM RESTORE POINT MANAGEMENT' -ForegroundColor Cyan
+                Write-Host '===============================================================' -ForegroundColor Gray
                 Write-Host ""
                 Write-Host "1) Create Restore Point" -ForegroundColor White
                 Write-Host "2) List Restore Points" -ForegroundColor White
@@ -820,17 +848,18 @@ function Start-TUI {
                 Write-Host "B) Back to main menu" -ForegroundColor Yellow
                 Write-Host ""
                 
-                $restoreChoice = Read-Host "Select option"
+                $restoreChoice = Read-Host 'Select option'
                 
                 switch ($restoreChoice) {
-                    "1" {
-                        $description = Read-Host "Restore point description (press Enter for default)"
+                    '1' {
+                        $description = Read-Host 'Restore point description (press Enter for default)'
                         if ([string]::IsNullOrWhiteSpace($description)) {
-                            $description = "Miracle Boot Manual Restore Point"
+                            $description = 'Miracle Boot Manual Restore Point'
                         }
                         
-                        Write-Host "`nCreating restore point..." -ForegroundColor Gray
-                        $result = Create-SystemRestorePoint -Description $description -OperationType "Manual"
+                        Write-Host ''
+                        Write-Host 'Creating restore point...' -ForegroundColor Gray
+                        $result = Create-SystemRestorePoint -Description $description -OperationType 'Manual'
                         
                         if ($result.Success) {
                             Write-Host "[SUCCESS] $($result.Message)" -ForegroundColor Green
@@ -841,40 +870,42 @@ function Start-TUI {
                             Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
                         }
                     }
-                    "2" {
-                        Write-Host "`nRetrieving restore points..." -ForegroundColor Gray
+                    '2' {
+                        Write-Host ''
+                        Write-Host 'Retrieving restore points...' -ForegroundColor Gray
                         $restorePoints = Get-SystemRestorePoints -Limit 20
                         
                         if ($restorePoints.Count -gt 0) {
-                            Write-Host ""
-                            Write-Host "AVAILABLE RESTORE POINTS:" -ForegroundColor Cyan
-                            Write-Host "─────────────────────────────────────────────────────" -ForegroundColor Gray
+                            Write-Host ''
+                            Write-Host 'AVAILABLE RESTORE POINTS:' -ForegroundColor Cyan
+                            Write-Host '─────────────────────────────────────────────────────' -ForegroundColor Gray
                             foreach ($point in $restorePoints) {
                                 Write-Host "ID: $($point.SequenceNumber)" -ForegroundColor White
                                 Write-Host "  Description: $($point.Description)" -ForegroundColor Yellow
                                 Write-Host "  Created: $($point.CreationTime)" -ForegroundColor Gray
                                 Write-Host "  Type: $($point.RestorePointType)" -ForegroundColor Gray
-                                Write-Host ""
+                                Write-Host ''
                             }
                         } else {
                             Write-Host '[INFO] No restore points found or System Restore is disabled.' -ForegroundColor Yellow
                         }
                     }
-                    "3" {
-                        Write-Host "`nWARNING: This will restore your system to a previous state!" -ForegroundColor Red
+                    '3' {
+                        Write-Host ''
+                        Write-Host "WARNING: This will restore your system to a previous state!" -ForegroundColor Red
                         Write-Host "All changes made after the restore point will be lost." -ForegroundColor Yellow
-                        Write-Host ""
-                        $confirm = Read-Host "Are you absolutely sure? Type 'YES' to confirm"
+                        Write-Host ''
+                        $confirm = Read-Host 'Are you absolutely sure? Type YES to confirm'
                         
                         if ($confirm -eq "YES") {
                             $restorePoints = Get-SystemRestorePoints -Limit 20
                             if ($restorePoints.Count -gt 0) {
-                                Write-Host ""
+                                Write-Host ''
                                 Write-Host "Available restore points:" -ForegroundColor Cyan
                                 foreach ($point in $restorePoints) {
-                                    Write-Host "  $($point.SequenceNumber): $($point.Description) - $($point.CreationTime)" -ForegroundColor Gray
+                                    Write-Host "  ID $($point.SequenceNumber) - $($point.Description) - $($point.CreationTime)" -ForegroundColor Gray
                                 }
-                                Write-Host ""
+                                Write-Host ''
                                 $pointId = Read-Host "Enter restore point ID"
                                 
                                 $result = Restore-FromSystemRestorePoint -RestorePointID ([int]$pointId) -Confirm
@@ -888,86 +919,93 @@ function Start-TUI {
                                 Write-Host '[ERROR] No restore points available.' -ForegroundColor Red
                             }
                         } else {
-                            Write-Host "Restore cancelled." -ForegroundColor Yellow
+                            Write-Host 'Restore cancelled.' -ForegroundColor Yellow
                         }
                     }
-                    "4" {
-                        Write-Host "`nManaging restore points..." -ForegroundColor Gray
+                    '4' {
+                        Write-Host ''
+                        Write-Host 'Managing restore points...' -ForegroundColor Gray
                         $result = Manage-SystemRestorePoints -HealthCheck -CleanupOld -KeepDays 30
                         
-                        Write-Host ""
-                        Write-Host "HEALTH STATUS: $($result.HealthStatus)" -ForegroundColor $(if ($result.HealthStatus -eq "Healthy") { "Green" } else { "Yellow" })
+                        Write-Host ''
+                        Write-Host "HEALTH STATUS: $($result.HealthStatus)" -ForegroundColor $(if ($result.HealthStatus -eq 'Healthy') { 'Green' } else { 'Yellow' })
                         Write-Host "Restore Points Deleted: $($result.RestorePointsDeleted)" -ForegroundColor Cyan
-                        Write-Host ""
-                        Write-Host "Actions Taken:" -ForegroundColor Cyan
+                        Write-Host ''
+                        Write-Host 'Actions Taken:' -ForegroundColor Cyan
                         foreach ($action in $result.ActionsTaken) {
                             Write-Host "  - $action" -ForegroundColor Gray
                         }
-                        Write-Host ""
-                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                        Write-Host ''
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { 'Green' } else { 'Yellow' })
                     }
-                    "B" { continue }
-                    "b" { continue }
+                    'B' { continue }
+                    'b' { continue }
                     default {
-                        Write-Host "Invalid selection." -ForegroundColor Red
+                        Write-Host 'Invalid selection.' -ForegroundColor Red
                     }
                 }
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
-            "o" {
-                $c = "O"
+            'o' {
+                $c = 'O'
                 continue
             }
-            "P" {
+            'P' {
                 if (Get-Command Invoke-NetworkDiagnostics -ErrorAction SilentlyContinue) {
-                    Write-Host "`nNETWORK DIAGNOSTICS and DRIVER MANAGEMENT" -ForegroundColor Cyan
-                    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                    Write-Host ''
+                    Write-Host 'NETWORK DIAGNOSTICS and DRIVER MANAGEMENT' -ForegroundColor Cyan
+                    Write-Host '===============================================================' -ForegroundColor Gray
                     Write-Host ""
                     $result = Invoke-NetworkDiagnostics
                     Write-Host $result.Report
                 } else {
-                    Write-Host "`nNetwork Diagnostics module not available." -ForegroundColor Yellow
-                    Write-Host "This feature requires NetworkDiagnostics.ps1 to be loaded." -ForegroundColor Gray
+                    Write-Host ''
+                    Write-Host 'Network Diagnostics module not available.' -ForegroundColor Yellow
+                    Write-Host 'This feature requires NetworkDiagnostics.ps1 to be loaded.' -ForegroundColor Gray
                 }
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
-            "p" {
-                $c = "P"
+            'p' {
+                $c = 'P'
                 continue
             }
-            "R" {
+            'R' {
                 if (Get-Command Show-SymbolHelper -ErrorAction SilentlyContinue) {
                     Show-SymbolHelper
                 } else {
-                    Write-Host "`nKeyboard Symbol Helper not available." -ForegroundColor Yellow
-                    Write-Host "This feature requires KeyboardSymbols.ps1 to be loaded." -ForegroundColor Gray
+                    Write-Host ''
+                    Write-Host 'Keyboard Symbol Helper not available.' -ForegroundColor Yellow
+                    Write-Host 'This feature requires KeyboardSymbols.ps1 to be loaded.' -ForegroundColor Gray
                 }
             }
-            "r" {
-                $c = "R"
+            'r' {
+                $c = 'R'
                 continue
             }
-            "S" {
-                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+            'S' {
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
-                    $drive = "C"
+                    $drive = 'C'
                 }
                 $drive = $drive.TrimEnd(':').ToUpper()
                 
-                Write-Host "`nREPAIR-INSTALL READINESS ENGINE" -ForegroundColor Red
-                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ''
+                Write-Host 'REPAIR-INSTALL READINESS ENGINE' -ForegroundColor Red
+                Write-Host '===============================================================' -ForegroundColor Gray
                 Write-Host ""
-                Write-Host "This will ensure Windows is ready for in-place upgrade (Keep apps + files)" -ForegroundColor Yellow
+                Write-Host 'This will ensure Windows is ready for in-place upgrade (Keep apps + files)' -ForegroundColor Yellow
                 Write-Host ""
                 
                 $fix = Read-Host 'Automatically fix blockers? (Y/N, default Y)'
-                $fixBlockers = ($fix -ne "N" -and $fix -ne "n")
+                $fixBlockers = ($fix -ne 'N' -and $fix -ne 'n')
                 
                 Write-Host ""
-                Write-Host "Running repair-install readiness check..." -ForegroundColor Cyan
+                Write-Host 'Running repair-install readiness check...' -ForegroundColor Cyan
                 Write-Host ""
                 
                 # Progress callback
@@ -984,30 +1022,33 @@ function Start-TUI {
                 
                 if ($result.Eligible) {
                     Write-Host '[SUCCESS] System is ready for repair install!' -ForegroundColor Green
-                    Write-Host "You can now run: setup.exe /auto upgrade /quiet" -ForegroundColor Cyan
+                    Write-Host 'You can now run: setup.exe /auto upgrade /quiet' -ForegroundColor Cyan
                 } else {
                     Write-Host '[WARNING] System is not fully ready. Review blockers above.' -ForegroundColor Yellow
                 }
                 
-                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
-            "s" {
-                $c = "S"
+            's' {
+                $c = 'S'
                 continue
             }
-            "Q" { 
-                Write-Host "`nExiting..." -ForegroundColor Yellow
+            'Q' { 
+                Write-Host ''
+                Write-Host 'Exiting...' -ForegroundColor Yellow
                 break 
             }
-            "q" { 
-                Write-Host "`nExiting..." -ForegroundColor Yellow
+            'q' { 
+                Write-Host ''
+                Write-Host 'Exiting...' -ForegroundColor Yellow
                 break 
             }
             default {
-                Write-Host "`nInvalid selection. Press any key to continue..." -ForegroundColor Red
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                Write-Host 'Invalid selection. Press any key to continue...' -ForegroundColor Red
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
             }
         }
-    } while ($c -ne "Q" -and $c -ne "q")
+    } while ($c -ne 'Q' -and $c -ne 'q')
 }
