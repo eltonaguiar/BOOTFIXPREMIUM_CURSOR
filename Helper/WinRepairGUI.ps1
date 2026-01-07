@@ -726,22 +726,113 @@ $W.FindName("BtnVol").Add_Click({
 # Store BCD entries globally for real-time updates
 $script:BCDEntriesCache = $null
 
-# Helper function to update status bar
+# Helper function to update status bar with enhanced progress tracking
 function Update-StatusBar {
     param(
         [string]$Message = "Ready",
         [switch]$ShowProgress,
-        [switch]$HideProgress
+        [switch]$HideProgress,
+        [int]$Percentage = -1,
+        [string]$Stage = "",
+        [string]$CurrentOperation = "",
+        [TimeSpan]$EstimatedTimeRemaining = $null
     )
     
-    $W.FindName("StatusBarText").Text = $Message
+    # Use dispatcher to ensure UI updates on UI thread
+    $W.Dispatcher.Invoke([action]{
+        $W.FindName("StatusBarText").Text = $Message
+        
+        $progressBar = $W.FindName("StatusBarProgressBar")
+        $progressText = $W.FindName("StatusBarProgress")
+        
+        if ($ShowProgress) {
+            $progressBar.Visibility = "Visible"
+            
+            # If percentage is provided, use determinate progress bar
+            if ($Percentage -ge 0) {
+                $progressBar.IsIndeterminate = $false
+                $progressBar.Value = $Percentage
+                $progressBar.Maximum = 100
+                
+                # Build progress text
+                $progressTextParts = @()
+                if ($Percentage -ge 0) {
+                    $progressTextParts += "$Percentage%"
+                }
+                if ($Stage) {
+                    $progressTextParts += "($Stage)"
+                }
+                if ($CurrentOperation) {
+                    $progressTextParts += "- $CurrentOperation"
+                }
+                if ($EstimatedTimeRemaining -and $EstimatedTimeRemaining.TotalSeconds -gt 0) {
+                    $minutes = [math]::Floor($EstimatedTimeRemaining.TotalMinutes)
+                    $seconds = [math]::Floor($EstimatedTimeRemaining.TotalSeconds % 60)
+                    if ($minutes -gt 0) {
+                        $progressTextParts += "~${minutes}m ${seconds}s remaining"
+                    } else {
+                        $progressTextParts += "~${seconds}s remaining"
+                    }
+                }
+                
+                $progressText.Text = $progressTextParts -join " "
+            } else {
+                # No percentage available, use indeterminate progress bar
+                $progressBar.IsIndeterminate = $true
+                $progressText.Text = "Working..."
+            }
+        } elseif ($HideProgress) {
+            $progressBar.Visibility = "Collapsed"
+            $progressBar.IsIndeterminate = $true
+            $progressBar.Value = 0
+            $progressText.Text = ""
+        }
+    }, [System.Windows.Threading.DispatcherPriority]::Render)
     
-    if ($ShowProgress) {
-        $W.FindName("StatusBarProgressBar").Visibility = "Visible"
-        $W.FindName("StatusBarProgress").Text = "Working..."
-    } elseif ($HideProgress) {
-        $W.FindName("StatusBarProgressBar").Visibility = "Collapsed"
-        $W.FindName("StatusBarProgress").Text = ""
+    # Force UI update
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+# Helper function to create progress callback for repair operations
+function New-ProgressCallback {
+    <#
+    .SYNOPSIS
+    Creates a progress callback scriptblock that updates the GUI status bar with progress information.
+    
+    .DESCRIPTION
+    Returns a scriptblock that can be passed to repair functions like Start-SystemFileRepair,
+    Start-DiskRepair, etc. The callback receives a progress object with Percentage, Stage,
+    CurrentOperation, and EstimatedTimeRemaining properties.
+    #>
+    param(
+        [string]$OperationName = "Operation"
+    )
+    
+    return {
+        param($progress)
+        
+        # Handle both progress object format and simple string messages
+        if ($progress -is [hashtable] -or $progress -is [PSCustomObject]) {
+            $percentage = if ($progress.Percentage) { $progress.Percentage } else { -1 }
+            $stage = if ($progress.Stage) { $progress.Stage } else { "" }
+            $currentOp = if ($progress.CurrentOperation) { $progress.CurrentOperation } else { "" }
+            $estimatedTime = if ($progress.EstimatedTimeRemaining) { $progress.EstimatedTimeRemaining } else { $null }
+            
+            $message = if ($progress.CurrentOperation) {
+                "${OperationName}: $($progress.CurrentOperation)"
+            } else {
+                "${OperationName}: $($progress.Stage)"
+            }
+            
+            if ($percentage -ge 0) {
+                Update-StatusBar -Message $message -ShowProgress -Percentage $percentage -Stage $stage -CurrentOperation $currentOp -EstimatedTimeRemaining $estimatedTime
+            } else {
+                Update-StatusBar -Message $message -ShowProgress -Stage $stage -CurrentOperation $currentOp
+            }
+        } else {
+            # Simple string message
+            Update-StatusBar -Message "${OperationName}: $progress" -ShowProgress
+        }
     }
 }
 

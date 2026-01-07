@@ -216,6 +216,7 @@ if (-not (Test-Path $PSScriptRoot)) {
     $PSScriptRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($MyInvocation.MyCommand.Path))
 }
 
+
 $envType = Get-EnvironmentType
 
 # Load core functions
