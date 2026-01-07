@@ -324,7 +324,10 @@ MiracleBoot_v7_1_1/
 │   ├── WinRepairGUI.ps1     # GUI interface (WPF) for FullOS
 │   ├── WinRepairTUI.ps1     # Text-based interface for WinPE/WinRE
 │   ├── WinRepairCore.cmd    # CMD fallback functions
-│   └── FixWinRepairCore.ps1 # Additional repair functions
+│   ├── FixWinRepairCore.ps1 # Additional repair functions
+│   ├── VersionTracker.ps1   # Automatic backup branch creation (every 20 commits)
+│   ├── EnsureMain.ps1      # Main branch synchronization and management
+│   └── README.md            # Helper scripts documentation
 ├── Test/                     # Testing scripts and documentation
 │   ├── Test-MiracleBoot.ps1
 │   ├── test_new_features.ps1
