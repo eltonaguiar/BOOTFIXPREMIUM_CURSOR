@@ -508,17 +508,68 @@ try {
 # #endregion agent log
 
 try {
+    # #region agent log
+    try {
+        $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "gui-launch-verify"
+            hypothesisId = "XAML-PARSE"
+            location = "WinRepairGUI.ps1:before-parse"
+            message = "About to parse XAML"
+            data = @{ xamlLength = $XAML.Length; xamlPreview = $XAML.Substring(0, [Math]::Min(200, $XAML.Length)) }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+    
+    # First validate XML structure
+    try {
+        $xmlDoc = [xml]$XAML
+        # #region agent log
+        try {
+            $logEntry = @{
+                sessionId = "debug-session"
+                runId = "gui-launch-verify"
+                hypothesisId = "XAML-PARSE"
+                location = "WinRepairGUI.ps1:xml-validated"
+                message = "XML structure validated"
+                data = @{ rootElement = $xmlDoc.DocumentElement.Name }
+                timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json -Compress
+            Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+        } catch {}
+        # #endregion agent log
+    } catch {
+        # #region agent log
+        try {
+            $logEntry = @{
+                sessionId = "debug-session"
+                runId = "gui-launch-verify"
+                hypothesisId = "XAML-PARSE"
+                location = "WinRepairGUI.ps1:xml-validation-failed"
+                message = "XML validation failed"
+                data = @{ error = $_.Exception.Message; innerException = $_.Exception.InnerException.Message }
+                timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json -Compress
+            Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+        } catch {}
+        # #endregion agent log
+        throw "XAML XML structure is invalid: $_"
+    }
+    
     $W=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$XAML)))
     
     # #region agent log
     try {
         $logEntry = @{
             sessionId = "debug-session"
-            runId = "gui-launch-1"
-            hypothesisId = "A"
-            location = "WinRepairGUI.ps1:471"
+            runId = "gui-launch-verify"
+            hypothesisId = "XAML-PARSE"
+            location = "WinRepairGUI.ps1:parse-success"
             message = "XAML parsing success"
-            data = @{ windowType = $W.GetType().FullName }
+            data = @{ windowType = $W.GetType().FullName; windowNotNull = ($W -ne $null) }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -527,13 +578,18 @@ try {
 } catch {
     # #region agent log
     try {
+        $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
         $logEntry = @{
             sessionId = "debug-session"
-            runId = "gui-launch-1"
-            hypothesisId = "A"
-            location = "WinRepairGUI.ps1:471"
+            runId = "gui-launch-verify"
+            hypothesisId = "XAML-PARSE"
+            location = "WinRepairGUI.ps1:parse-failed"
             message = "XAML parsing failed"
-            data = @{ error = $_.Exception.Message }
+            data = @{ 
+                error = $_.Exception.Message
+                innerException = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $null }
+                stackTrace = $_.ScriptStackTrace
+            }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -3268,7 +3324,57 @@ $W.FindName("BtnStartRepair").Add_Click({
     }
 })
 
-$W.ShowDialog() | Out-Null
+# #region agent log
+try {
+    $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+    $logEntry = @{
+        sessionId = "debug-session"
+        runId = "gui-launch-verify"
+        hypothesisId = "VERIFY"
+        location = "WinRepairGUI.ps1:ShowDialog"
+        message = "About to show GUI window"
+        data = @{ windowNotNull = ($W -ne $null) }
+        timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+    } | ConvertTo-Json -Compress
+    Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+} catch {}
+# #endregion agent log
+
+try {
+    $W.ShowDialog() | Out-Null
+    
+    # #region agent log
+    try {
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "gui-launch-verify"
+            hypothesisId = "VERIFY"
+            location = "WinRepairGUI.ps1:ShowDialog-complete"
+            message = "GUI window closed by user"
+            data = @{ success = $true }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+} catch {
+    # #region agent log
+    try {
+        $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "gui-launch-verify"
+            hypothesisId = "VERIFY"
+            location = "WinRepairGUI.ps1:ShowDialog-error"
+            message = "Error showing GUI window"
+            data = @{ error = $_.Exception.Message; stackTrace = $_.ScriptStackTrace }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+    throw
+}
 }
 
 
