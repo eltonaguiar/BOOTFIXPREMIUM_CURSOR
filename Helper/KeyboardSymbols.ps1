@@ -923,8 +923,10 @@ function Export-SymbolDatabase {
 # MODULE INITIALIZATION
 # ============================================================================
 
-# Export public functions
-Export-ModuleMember -Function @(
+# Export public functions (only if running as a module)
+# When dot-sourced, Export-ModuleMember will fail, so we check if we're in a module context
+if ($MyInvocation.MyCommand.ModuleName) {
+    Export-ModuleMember -Function @(
     'Show-SymbolHelper',
     'Show-ALTCodeReference',
     'Launch-OnScreenKeyboard',
@@ -938,6 +940,6 @@ Export-ModuleMember -Function @(
     'Export-SymbolDatabase',
     'Invoke-SymbolCopy',
     'Show-SymbolTable'
-)
-
+    )
+}
 Write-Verbose "KeyboardSymbols module loaded successfully"

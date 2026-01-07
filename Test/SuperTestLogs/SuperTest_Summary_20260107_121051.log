@@ -1,0 +1,13 @@
+Super Test started at 01/07/2026 12:10:51
+Repository root : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+Log directory   : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs
+
+[PASS] Syntax check: MiracleBoot.ps1
+[PASS] Syntax check: Helper/WinRepairCore.ps1
+[PASS] Syntax check: Helper/WinRepairTUI.ps1
+[FAIL] Syntax check: Helper/WinRepairGUI.ps1 - Found 1 syntax error(s)
+      Line 98, Column 20 : Missing closing '}' in statement block or type definition.
+[PASS] Syntax check: Helper/NetworkDiagnostics.ps1
+[PASS] Syntax check: Helper/KeyboardSymbols.ps1
+SYNTAX VALIDATION FAILED: 1 file(s) have syntax errors
+FIX SYNTAX ERRORS BEFORE PROCEEDING

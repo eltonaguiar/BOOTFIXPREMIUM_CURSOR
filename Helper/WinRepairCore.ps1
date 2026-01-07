@@ -927,9 +927,98 @@ function Get-BCDEntries {
     bcdedit /enum /v
 }
 
+function Test-Administrator {
+    <#
+    .SYNOPSIS
+    Checks if the current PowerShell session is running with administrator privileges.
+    
+    .DESCRIPTION
+    Returns $true if running as administrator, $false otherwise.
+    #>
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Get-BCDEntriesParsed {
     # Production-grade BCD parser - captures ALL properties
-    $raw = bcdedit /enum /v
+    # #region agent log
+    try {
+        $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "bcd-access-check"
+            hypothesisId = "BCD-ACCESS"
+            location = "WinRepairCore.ps1:Get-BCDEntriesParsed"
+            message = "About to call bcdedit"
+            data = @{ isAdmin = (Test-Administrator) }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+    
+    # Check for administrator privileges
+    if (-not (Test-Administrator)) {
+        $errorMsg = "Access Denied: BCD operations require administrator privileges.`n`n" +
+                    "Please run Miracle Boot as Administrator:`n" +
+                    "1. Right-click on PowerShell or the shortcut`n" +
+                    "2. Select 'Run as Administrator'`n" +
+                    "3. Then launch Miracle Boot again`n`n" +
+                    "Alternatively, you can use the 'Run as Administrator' option when launching the application."
+        throw $errorMsg
+    }
+    
+    try {
+        $raw = bcdedit /enum /v 2>&1
+        # Check if the output contains access denied error
+        if ($raw -is [System.Array]) {
+            $errorLines = $raw | Where-Object { $_ -match "access is denied|Access is denied|ERROR|The boot configuration data store could not be opened" }
+            if ($errorLines) {
+                $errorText = $errorLines -join "`n"
+                # #region agent log
+                try {
+                    $logEntry = @{
+                        sessionId = "debug-session"
+                        runId = "bcd-access-check"
+                        hypothesisId = "BCD-ACCESS"
+                        location = "WinRepairCore.ps1:Get-BCDEntriesParsed-error"
+                        message = "BCD access denied detected"
+                        data = @{ errorText = $errorText; isAdmin = (Test-Administrator) }
+                        timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+                    } | ConvertTo-Json -Compress
+                    Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+                } catch {}
+                # #endregion agent log
+                throw "Access Denied: The boot configuration data store could not be opened.`n`n" +
+                      "This operation requires administrator privileges.`n`n" +
+                      "Please run Miracle Boot as Administrator."
+            }
+        }
+    } catch {
+        # #region agent log
+        try {
+            $logEntry = @{
+                sessionId = "debug-session"
+                runId = "bcd-access-check"
+                hypothesisId = "BCD-ACCESS"
+                location = "WinRepairCore.ps1:Get-BCDEntriesParsed-exception"
+                message = "Exception calling bcdedit"
+                data = @{ error = $_.Exception.Message; isAdmin = (Test-Administrator) }
+                timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json -Compress
+            Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+        } catch {}
+        # #endregion agent log
+        
+        # Re-throw with enhanced message if it's an access denied error
+        if ($_.Exception.Message -match "access is denied|Access is denied|could not be opened") {
+            throw "Access Denied: The boot configuration data store could not be opened.`n`n" +
+                  "This operation requires administrator privileges.`n`n" +
+                  "Please run Miracle Boot as Administrator."
+        }
+        throw
+    }
+    
     $entries = @()
     $currentEntry = $null
     $entryType = $null
@@ -13375,7 +13464,7 @@ function Start-UtilitiesMenu {
     Launches Windows utilities from WinPE/WinRE environment.
     #>
     param(
-        [ValidateSet("Notepad", "Registry", "PowerShell", "SystemRestore", "CommandPrompt", "DiskManagement", "EventViewer")]
+        [ValidateSet("Notepad", "Registry", "PowerShell", "SystemRestore", "CommandPrompt", "DiskManagement", "EventViewer", "RestartExplorer")]
         [string]$Utility
     )
     
@@ -13445,9 +13534,97 @@ function Start-UtilitiesMenu {
                     $result.Message = "Event Viewer not available in this environment"
                 }
             }
+            "RestartExplorer" {
+                $explorerResult = Restart-WindowsExplorer
+                $result.Success = $explorerResult.Success
+                $result.Message = $explorerResult.Message
+            }
         }
     } catch {
         $result.Message = "Error launching $Utility : $_"
+    }
+    
+    return $result
+}
+
+function Restart-WindowsExplorer {
+    <#
+    .SYNOPSIS
+    Restarts Windows Explorer process if it has crashed or is not responding.
+    
+    .DESCRIPTION
+    Safely restarts the Windows Explorer shell process. This is useful when:
+    - Explorer has crashed and the desktop/taskbar is missing
+    - Explorer is frozen and not responding
+    - Desktop icons or taskbar are not displaying correctly
+    
+    The function:
+    1. Checks if Explorer is running
+    2. Stops the Explorer process gracefully
+    3. Waits a moment for cleanup
+    4. Restarts Explorer
+    
+    .EXAMPLE
+    Restart-WindowsExplorer
+    
+    .NOTES
+    This function requires administrator privileges in some cases.
+    #>
+    
+    $result = @{
+        Success = $false
+        Message = ""
+        WasRunning = $false
+        Restarted = $false
+    }
+    
+    try {
+        # Check if Explorer is currently running
+        $explorerProcesses = Get-Process -Name "explorer" -ErrorAction SilentlyContinue
+        $result.WasRunning = ($explorerProcesses.Count -gt 0)
+        
+        if ($result.WasRunning) {
+            Write-Host "Stopping Windows Explorer..." -ForegroundColor Yellow
+            
+            # Stop Explorer processes
+            try {
+                Stop-Process -Name "explorer" -Force -ErrorAction Stop
+                Write-Host "Explorer stopped. Waiting for cleanup..." -ForegroundColor Gray
+                Start-Sleep -Seconds 2
+            } catch {
+                $result.Message = "Failed to stop Explorer: $($_.Exception.Message)"
+                return $result
+            }
+        } else {
+            Write-Host "Explorer is not running. Starting Explorer..." -ForegroundColor Yellow
+        }
+        
+        # Start Explorer
+        try {
+            Start-Process "explorer.exe" -ErrorAction Stop
+            Write-Host "Explorer started successfully." -ForegroundColor Green
+            Start-Sleep -Seconds 1
+            
+            # Verify Explorer is running
+            $newExplorerProcesses = Get-Process -Name "explorer" -ErrorAction SilentlyContinue
+            if ($newExplorerProcesses.Count -gt 0) {
+                $result.Success = $true
+                $result.Restarted = $true
+                if ($result.WasRunning) {
+                    $result.Message = "Windows Explorer restarted successfully. Desktop and taskbar should be restored."
+                } else {
+                    $result.Message = "Windows Explorer started successfully. Desktop and taskbar should now be visible."
+                }
+            } else {
+                $result.Message = "Explorer process started but could not be verified. It may take a moment to appear."
+            }
+        } catch {
+            $result.Message = "Failed to start Explorer: $($_.Exception.Message)"
+            return $result
+        }
+        
+    } catch {
+        $result.Message = "Unexpected error: $($_.Exception.Message)"
     }
     
     return $result
@@ -15210,6 +15387,235 @@ function Get-RepairInstallCommandLine {
     return $recommendation
 }
 
+function Get-BootFailurePatterns {
+    <#
+    .SYNOPSIS
+    Detects common boot failure patterns from logs and system state (non-destructive analysis).
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $patterns = @{
+        Success = $true
+        DetectedPatterns = @()
+        Confidence = @{}
+        Recommendations = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $report.AppendLine("BOOT FAILURE PATTERN DETECTION") | Out-Null
+    $report.AppendLine("=" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Pattern 1: Missing Boot Manager (bootmgr)
+    try {
+        $bootmgrPath = "$TargetDrive`:\bootmgr"
+        if (-not (Test-Path $bootmgrPath)) {
+            $patterns.DetectedPatterns += @{
+                Pattern = "Missing Boot Manager"
+                Severity = "Critical"
+                Description = "bootmgr file is missing from root of system drive"
+                Confidence = 95
+                FixCommand = "bcdboot $TargetDrive`:\Windows /s $TargetDrive`:"
+            }
+            $patterns.Confidence["Missing Boot Manager"] = 95
+            $patterns.Recommendations += "Run: bcdboot $TargetDrive`:\Windows /s $TargetDrive`:"
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 2: BCD Store Corruption
+    try {
+        $bcdPath = "$TargetDrive`:\Boot\BCD"
+        if (Test-Path $bcdPath) {
+            $bcdTest = bcdedit /enum 2>&1
+            if ($LASTEXITCODE -ne 0 -or $bcdTest -match "The system cannot find|corrupt|invalid") {
+                $patterns.DetectedPatterns += @{
+                    Pattern = "BCD Store Corruption"
+                    Severity = "Critical"
+                    Description = "BCD store exists but cannot be read or is corrupted"
+                    Confidence = 90
+                    FixCommand = "bootrec /rebuildbcd"
+                }
+                $patterns.Confidence["BCD Store Corruption"] = 90
+                $patterns.Recommendations += "Run: bootrec /rebuildbcd"
+            }
+        } else {
+            $patterns.DetectedPatterns += @{
+                Pattern = "Missing BCD Store"
+                Severity = "Critical"
+                Description = "BCD store file is missing"
+                Confidence = 95
+                FixCommand = "bootrec /rebuildbcd"
+            }
+            $patterns.Confidence["Missing BCD Store"] = 95
+            $patterns.Recommendations += "Run: bootrec /rebuildbcd"
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 3: Missing Boot Files (winload.exe, winresume.exe)
+    try {
+        $system32 = "$TargetDrive`:\Windows\System32"
+        $winload = Join-Path $system32 "winload.exe"
+        $winresume = Join-Path $system32 "winresume.exe"
+        
+        $missingFiles = @()
+        if (-not (Test-Path $winload)) {
+            $missingFiles += "winload.exe"
+        }
+        if (-not (Test-Path $winresume)) {
+            $missingFiles += "winresume.exe"
+        }
+        
+        if ($missingFiles.Count -gt 0) {
+            $patterns.DetectedPatterns += @{
+                Pattern = "Missing Boot Loader Files"
+                Severity = "Critical"
+                Description = "Critical boot loader files missing: $($missingFiles -join ', ')"
+                Confidence = 90
+                FixCommand = "sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+            }
+            $patterns.Confidence["Missing Boot Loader Files"] = 90
+            $patterns.Recommendations += "Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 4: EFI System Partition Issues (UEFI systems)
+    try {
+        $efiPath = "$TargetDrive`:\EFI\Microsoft\Boot\bootmgfw.efi"
+        if (-not (Test-Path $efiPath)) {
+            # Check if this is a UEFI system
+            $biosMode = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).BootupState
+            if ($biosMode -match "UEFI|EFI") {
+                $patterns.DetectedPatterns += @{
+                    Pattern = "Missing EFI Boot Files"
+                    Severity = "Critical"
+                    Description = "EFI boot files missing on UEFI system"
+                    Confidence = 85
+                    FixCommand = "bcdboot $TargetDrive`:\Windows /s $TargetDrive`: /f UEFI"
+                }
+                $patterns.Confidence["Missing EFI Boot Files"] = 85
+                $patterns.Recommendations += "Run: bcdboot $TargetDrive`:\Windows /s $TargetDrive`: /f UEFI"
+            }
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 5: Boot Loop / Continuous Restart
+    try {
+        $bootLog = "$TargetDrive`:\Windows\ntbtlog.txt"
+        if (Test-Path $bootLog) {
+            $logContent = Get-Content $bootLog -Tail 100 -ErrorAction SilentlyContinue
+            $restartCount = ($logContent | Select-String -Pattern "restart|reboot|shutdown" -CaseSensitive:$false).Count
+            if ($restartCount -gt 5) {
+                $patterns.DetectedPatterns += @{
+                    Pattern = "Boot Loop Detected"
+                    Severity = "High"
+                    Description = "Multiple restart events detected in boot log"
+                    Confidence = 70
+                    FixCommand = "Check Event Viewer for critical errors, run: Get-BootChainAnalysis"
+                }
+                $patterns.Confidence["Boot Loop Detected"] = 70
+                $patterns.Recommendations += "Run: Get-BootChainAnalysis -TargetDrive $TargetDrive"
+            }
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 6: Driver Load Failures
+    try {
+        $bootLog = "$TargetDrive`:\Windows\ntbtlog.txt"
+        if (Test-Path $bootLog) {
+            $logContent = Get-Content $bootLog -Tail 200 -ErrorAction SilentlyContinue
+            $driverFailures = $logContent | Select-String -Pattern "Did not load driver|Failed to load driver|ERROR.*driver" -CaseSensitive:$false
+            if ($driverFailures.Count -gt 3) {
+                $patterns.DetectedPatterns += @{
+                    Pattern = "Multiple Driver Load Failures"
+                    Severity = "High"
+                    Description = "$($driverFailures.Count) driver load failures detected"
+                    Confidence = 75
+                    FixCommand = "Get-MissingDriversForPorting -SourceDrive $TargetDrive"
+                }
+                $patterns.Confidence["Multiple Driver Load Failures"] = 75
+                $patterns.Recommendations += "Run: Get-MissingDriversForPorting -SourceDrive $TargetDrive"
+            }
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 7: Disk/File System Corruption
+    try {
+        $diskHealth = Test-DiskHealth -TargetDrive $TargetDrive
+        if ($diskHealth.NeedsRepair -or -not $diskHealth.FileSystemHealthy) {
+            $patterns.DetectedPatterns += @{
+                Pattern = "Disk/File System Corruption"
+                Severity = "High"
+                Description = "File system errors detected on system drive"
+                Confidence = 80
+                FixCommand = "chkdsk $TargetDrive`: /f /r"
+            }
+            $patterns.Confidence["Disk/File System Corruption"] = 80
+            $patterns.Recommendations += "Run: chkdsk $TargetDrive`: /f /r (may require reboot)"
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Pattern 8: Registry Corruption
+    try {
+        $regHealth = Test-RegistryHealth -TargetDrive $TargetDrive
+        if (-not $regHealth.Healthy) {
+            $patterns.DetectedPatterns += @{
+                Pattern = "Registry Corruption"
+                Severity = "High"
+                Description = "Registry hive corruption detected"
+                Confidence = 75
+                FixCommand = "sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+            }
+            $patterns.Confidence["Registry Corruption"] = 75
+            $patterns.Recommendations += "Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+        }
+    } catch {
+        # Skip if can't check
+    }
+    
+    # Generate report
+    if ($patterns.DetectedPatterns.Count -gt 0) {
+        $report.AppendLine("DETECTED PATTERNS: $($patterns.DetectedPatterns.Count)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        foreach ($pattern in $patterns.DetectedPatterns) {
+            $report.AppendLine("[$($pattern.Severity)] $($pattern.Pattern)") | Out-Null
+            $report.AppendLine("  Confidence: $($pattern.Confidence)%") | Out-Null
+            $report.AppendLine("  Description: $($pattern.Description)") | Out-Null
+            $report.AppendLine("  Fix: $($pattern.FixCommand)") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+        
+        $report.AppendLine("RECOMMENDED ACTIONS:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        foreach ($rec in $patterns.Recommendations) {
+            $report.AppendLine("  - $rec") | Out-Null
+        }
+    } else {
+        $report.AppendLine("No common boot failure patterns detected.") | Out-Null
+        $report.AppendLine("System may have a unique issue or may be booting normally.") | Out-Null
+    }
+    
+    $patterns.Report = $report.ToString()
+    return $patterns
+}
+
 function Normalize-SetupState {
     <#
     .SYNOPSIS
@@ -16335,6 +16741,493 @@ function Start-RepairTemplate {
     }
     
     $result.Report = $report.ToString()
+    return $result
+}
+
+function Get-BootHealthSummary {
+    <#
+    .SYNOPSIS
+    Comprehensive boot health summary including BCD validity, EFI partition status, boot stack order, and log file analysis.
+    
+    .DESCRIPTION
+    Provides a complete overview of Windows boot health by checking:
+    - BCD (Boot Configuration Data) validity and accessibility
+    - EFI System Partition presence and health
+    - Boot chain analysis showing where boot process succeeds/fails
+    - Boot log file analysis
+    - Overall boot health score
+    
+    .PARAMETER TargetDrive
+    Windows drive letter (e.g., "C")
+    
+    .OUTPUTS
+    Hashtable with comprehensive boot health information
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    # Normalize drive letter
+    if ($TargetDrive -match '^([A-Z]):?$') {
+        $TargetDrive = $matches[1]
+    }
+    
+    $result = @{
+        BootHealthScore = 0
+        MaxScore = 100
+        BCDStatus = @{
+            Valid = $false
+            Accessible = $false
+            Path = ""
+            Details = ""
+            Issues = @()
+        }
+        EFIPartition = @{
+            Present = $false
+            Accessible = $false
+            DriveLetter = ""
+            Details = ""
+            Issues = @()
+        }
+        BootChain = @{
+            LastPassedStage = ""
+            FirstFailedStage = ""
+            ProgressPercent = 0
+            Stages = @()
+            Details = ""
+        }
+        BootLogs = @{
+            Found = $false
+            Path = ""
+            Analysis = $null
+            Details = ""
+        }
+        OverallStatus = "Unknown"
+        Recommendations = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("WINDOWS BOOT HEALTH SUMMARY") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 1: BCD (Boot Configuration Data) Validity
+    # ========================================================================
+    $report.AppendLine("1. BCD (Boot Configuration Data) Status") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $bcdFound = $false
+    $bcdPath = $null
+    $efiDriveLetter = $null
+    
+    # Find EFI partition
+    try {
+        $efiPartitions = Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }
+        if ($efiPartitions) {
+            foreach ($efiPart in $efiPartitions) {
+                if ($efiPart.DriveLetter) {
+                    $efiDriveLetter = $efiPart.DriveLetter
+                    $bcdPath = "$efiDriveLetter`:\EFI\Microsoft\Boot\BCD"
+                    if (Test-Path $bcdPath) {
+                        $bcdFound = $true
+                        $result.BCDStatus.Path = $bcdPath
+                        $result.EFIPartition.DriveLetter = $efiDriveLetter
+                        $result.EFIPartition.Present = $true
+                        $result.EFIPartition.Accessible = $true
+                        break
+                    }
+                }
+            }
+        }
+    } catch {
+        $result.BCDStatus.Issues += "Error checking EFI partitions: $_"
+    }
+    
+    # Check BCD accessibility
+    if ($bcdFound) {
+        $result.BCDStatus.Valid = $true
+        $result.BootHealthScore += 30
+        $report.AppendLine("[OK] BCD file found at: $bcdPath") | Out-Null
+        
+        # Test BCD accessibility with bcdedit
+        try {
+            $bcdTest = bcdedit /enum 2>&1 | Out-String
+            if ($bcdTest -match "The boot configuration data store could not be opened" -or 
+                $bcdTest -match "could not be opened") {
+                $result.BCDStatus.Accessible = $false
+                $result.BCDStatus.Issues += "BCD exists but cannot be opened - may be corrupted or locked"
+                $result.BCDStatus.Details = "BCD file found but bcdedit cannot access it"
+                $report.AppendLine("[FAIL] BCD exists but cannot be opened - may be corrupted") | Out-Null
+                $result.BootHealthScore -= 15
+            } else {
+                $result.BCDStatus.Accessible = $true
+                $result.BCDStatus.Details = "BCD is valid and accessible"
+                $report.AppendLine("[OK] BCD is accessible and can be enumerated") | Out-Null
+                
+                # Check for Windows Boot Manager entry
+                if ($bcdTest -match "Windows Boot Manager") {
+                    $report.AppendLine("[OK] Windows Boot Manager entry found in BCD") | Out-Null
+                } else {
+                    $result.BCDStatus.Issues += "Windows Boot Manager entry not found"
+                    $report.AppendLine("[WARNING] Windows Boot Manager entry not found") | Out-Null
+                    $result.BootHealthScore -= 5
+                }
+            }
+        } catch {
+            $result.BCDStatus.Accessible = $false
+            $result.BCDStatus.Issues += "Error testing BCD accessibility: $_"
+            $report.AppendLine("[ERROR] Could not test BCD accessibility: $_") | Out-Null
+        }
+    } else {
+        $result.BCDStatus.Valid = $false
+        $result.BCDStatus.Issues += "BCD file not found on any EFI partition"
+        $result.BCDStatus.Details = "BCD file is missing"
+        $report.AppendLine("[FAIL] BCD file not found") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 2: EFI System Partition
+    # ========================================================================
+    $report.AppendLine("2. EFI System Partition Status") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    if ($result.EFIPartition.Present) {
+        $result.BootHealthScore += 20
+        $report.AppendLine("[OK] EFI System Partition found") | Out-Null
+        $report.AppendLine("    Drive Letter: $($result.EFIPartition.DriveLetter):") | Out-Null
+        
+        # Check EFI folder structure
+        $efiPath = "$($result.EFIPartition.DriveLetter):\EFI"
+        $microsoftBootPath = "$($result.EFIPartition.DriveLetter):\EFI\Microsoft\Boot"
+        
+        if (Test-Path $efiPath) {
+            $report.AppendLine("[OK] EFI folder structure exists") | Out-Null
+            if (Test-Path $microsoftBootPath) {
+                $report.AppendLine("[OK] Microsoft Boot folder exists") | Out-Null
+                $result.EFIPartition.Details = "EFI partition is healthy and properly structured"
+            } else {
+                $result.EFIPartition.Issues += "Microsoft Boot folder missing"
+                $report.AppendLine("[WARNING] Microsoft Boot folder missing") | Out-Null
+                $result.BootHealthScore -= 5
+            }
+        } else {
+            $result.EFIPartition.Issues += "EFI folder structure missing"
+            $report.AppendLine("[FAIL] EFI folder structure missing") | Out-Null
+            $result.BootHealthScore -= 10
+        }
+    } else {
+        $result.EFIPartition.Issues += "No EFI System Partition detected"
+        $result.EFIPartition.Details = "EFI partition not found - system may use Legacy BIOS"
+        $report.AppendLine("[FAIL] No EFI System Partition found") | Out-Null
+        $report.AppendLine("    Note: System may be using Legacy BIOS mode") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 3: Boot Chain Analysis
+    # ========================================================================
+    $report.AppendLine("3. Boot Chain Analysis") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    try {
+        $bootChainAnalysis = Get-BootChainAnalysis -TargetDrive $TargetDrive
+        $result.BootChain.LastPassedStage = $bootChainAnalysis.FailureStage
+        $result.BootChain.FirstFailedStage = $bootChainAnalysis.FailureStage
+        
+        # Extract boot stages information
+        if ($bootChainAnalysis.BootStages) {
+            $result.BootChain.Stages = $bootChainAnalysis.BootStages
+            
+            # Calculate progress
+            $passedStages = ($bootChainAnalysis.BootStages | Where-Object { $_.Status -eq "Passed" }).Count
+            $totalStages = $bootChainAnalysis.BootStages.Count
+            if ($totalStages -gt 0) {
+                $result.BootChain.ProgressPercent = [math]::Round(($passedStages / $totalStages) * 100)
+            }
+            
+            # Find last passed and first failed
+            $lastPassed = -1
+            $firstFailed = -1
+            for ($i = 0; $i -lt $bootChainAnalysis.BootStages.Count; $i++) {
+                if ($bootChainAnalysis.BootStages[$i].Status -eq "Passed") {
+                    $lastPassed = $i
+                } elseif ($bootChainAnalysis.BootStages[$i].Status -eq "Failed" -and $firstFailed -eq -1) {
+                    $firstFailed = $i
+                }
+            }
+            
+            if ($lastPassed -ge 0) {
+                $result.BootChain.LastPassedStage = $bootChainAnalysis.BootStages[$lastPassed].Name
+            }
+            if ($firstFailed -ge 0) {
+                $result.BootChain.FirstFailedStage = $bootChainAnalysis.BootStages[$firstFailed].Name
+            }
+            
+            # Add to score based on progress
+            $result.BootHealthScore += [math]::Round($result.BootChain.ProgressPercent * 0.3)
+        }
+        
+        $result.BootChain.Details = $bootChainAnalysis.FailureReason
+        if ($bootChainAnalysis.Recommendations) {
+            $result.Recommendations += $bootChainAnalysis.Recommendations
+        }
+        
+        $report.AppendLine("Boot Progress: $($result.BootChain.ProgressPercent)%") | Out-Null
+        if ($result.BootChain.LastPassedStage) {
+            $report.AppendLine("Last Successful Stage: $($result.BootChain.LastPassedStage)") | Out-Null
+        }
+        if ($result.BootChain.FirstFailedStage) {
+            $report.AppendLine("First Failed Stage: $($result.BootChain.FirstFailedStage)") | Out-Null
+            $report.AppendLine("Failure Reason: $($result.BootChain.Details)") | Out-Null
+        } else {
+            $report.AppendLine("[OK] All boot stages completed successfully") | Out-Null
+        }
+        
+    } catch {
+        $result.BootChain.Details = "Error analyzing boot chain: $_"
+        $report.AppendLine("[ERROR] Could not analyze boot chain: $_") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 4: Boot Log Files
+    # ========================================================================
+    $report.AppendLine("4. Boot Log Analysis") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $logPath = "$TargetDrive`:\Windows\ntbtlog.txt"
+    $result.BootLogs.Path = $logPath
+    
+    if (Test-Path $logPath) {
+        $result.BootLogs.Found = $true
+        $result.BootHealthScore += 10
+        $report.AppendLine("[OK] Boot log found at: $logPath") | Out-Null
+        
+        try {
+            $bootLogAnalysis = Get-BootLogAnalysis -TargetDrive $TargetDrive
+            $result.BootLogs.Analysis = $bootLogAnalysis
+            
+            if ($bootLogAnalysis.MissingDrivers.Count -gt 0) {
+                $report.AppendLine("[WARNING] Missing drivers detected: $($bootLogAnalysis.MissingDrivers.Count)") | Out-Null
+                $result.BootLogs.Details = "$($bootLogAnalysis.MissingDrivers.Count) missing drivers found"
+                $result.BootHealthScore -= 5
+            } else {
+                $report.AppendLine("[OK] No critical missing drivers detected") | Out-Null
+                $result.BootLogs.Details = "Boot log analysis completed - no critical issues"
+            }
+            
+            if ($bootLogAnalysis.FailedDrivers.Count -gt 0) {
+                $report.AppendLine("[WARNING] Failed drivers detected: $($bootLogAnalysis.FailedDrivers.Count)") | Out-Null
+                $result.BootHealthScore -= 5
+            }
+            
+        } catch {
+            $result.BootLogs.Details = "Error analyzing boot log: $_"
+            $report.AppendLine("[ERROR] Could not analyze boot log: $_") | Out-Null
+        }
+    } else {
+        $result.BootLogs.Found = $false
+        $result.BootLogs.Details = "Boot log not found - system may not be configured for boot logging"
+        $report.AppendLine("[INFO] Boot log not found at: $logPath") | Out-Null
+        $report.AppendLine("    Note: Boot logging may not be enabled") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # OVERALL STATUS
+    # ========================================================================
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("OVERALL BOOT HEALTH SCORE: $($result.BootHealthScore)/$($result.MaxScore)") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Determine overall status
+    if ($result.BootHealthScore -ge 80) {
+        $result.OverallStatus = "Excellent"
+        $report.AppendLine("STATUS: EXCELLENT - System boot health is very good") | Out-Null
+    } elseif ($result.BootHealthScore -ge 60) {
+        $result.OverallStatus = "Good"
+        $report.AppendLine("STATUS: GOOD - System boot health is acceptable with minor issues") | Out-Null
+    } elseif ($result.BootHealthScore -ge 40) {
+        $result.OverallStatus = "Fair"
+        $report.AppendLine("STATUS: FAIR - System boot health has some issues that should be addressed") | Out-Null
+    } elseif ($result.BootHealthScore -ge 20) {
+        $result.OverallStatus = "Poor"
+        $report.AppendLine("STATUS: POOR - System boot health has significant issues") | Out-Null
+    } else {
+        $result.OverallStatus = "Critical"
+        $report.AppendLine("STATUS: CRITICAL - System boot health is severely compromised") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    
+    # Add recommendations if there are issues
+    if ($result.BootHealthScore -lt 80) {
+        $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        
+        if (-not $result.BCDStatus.Valid -or -not $result.BCDStatus.Accessible) {
+            $report.AppendLine("1. Fix BCD issues:") | Out-Null
+            $report.AppendLine("   - Run: bcdboot $TargetDrive`:\Windows") | Out-Null
+            $report.AppendLine("   - Run: bootrec /rebuildbcd") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if (-not $result.EFIPartition.Present) {
+            $report.AppendLine("2. EFI partition issues:") | Out-Null
+            $report.AppendLine("   - Verify system is using UEFI mode") | Out-Null
+            $report.AppendLine("   - Check if EFI partition exists but has no drive letter") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.BootChain.FirstFailedStage) {
+            $report.AppendLine("3. Boot chain failure at: $($result.BootChain.FirstFailedStage)") | Out-Null
+            foreach ($rec in $result.Recommendations) {
+                $report.AppendLine("   - $rec") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.BootLogs.Analysis -and $result.BootLogs.Analysis.MissingDrivers.Count -gt 0) {
+            $report.AppendLine("4. Missing drivers detected:") | Out-Null
+            $report.AppendLine("   - Use 'Port Missing Drivers' feature to extract and inject drivers") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Get-WindowsUpdateEligibility {
+    <#
+    .SYNOPSIS
+    Checks Windows Update in-place repair upgrade installation eligibility.
+    
+    .DESCRIPTION
+    Comprehensive check for Windows Update in-place upgrade eligibility by:
+    - Testing repair-install eligibility
+    - Checking for blockers
+    - Providing readiness score
+    - Listing recommendations
+    
+    .PARAMETER TargetDrive
+    Windows drive letter (e.g., "C")
+    
+    .OUTPUTS
+    Hashtable with eligibility status and details
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    # Normalize drive letter
+    if ($TargetDrive -match '^([A-Z]):?$') {
+        $TargetDrive = $matches[1]
+    }
+    
+    $result = @{
+        Eligible = $false
+        ReadinessScore = 0
+        MaxScore = 100
+        Blockers = @()
+        Warnings = @()
+        Recommendations = @()
+        Details = @{}
+        Status = "Unknown"
+        Report = ""
+    }
+    
+    try {
+        $eligibility = Test-RepairInstallEligibility -TargetDrive $TargetDrive
+        $result.Eligible = $eligibility.Eligible
+        $result.ReadinessScore = $eligibility.ReadinessScore
+        $result.Blockers = $eligibility.Blockers
+        $result.Warnings = $eligibility.Warnings
+        $result.Recommendations = $eligibility.Recommendations
+        $result.Details = $eligibility.Details
+        
+        # Determine status
+        if ($result.ReadinessScore -ge 80 -and $result.Blockers.Count -eq 0) {
+            $result.Status = "Ready"
+        } elseif ($result.ReadinessScore -ge 60) {
+            $result.Status = "Mostly Ready"
+        } elseif ($result.ReadinessScore -ge 40) {
+            $result.Status = "Needs Work"
+        } else {
+            $result.Status = "Not Ready"
+        }
+        
+        # Build report
+        $report = New-Object System.Text.StringBuilder
+        $separator = "=" * 80
+        
+        $report.AppendLine($separator) | Out-Null
+        $report.AppendLine("WINDOWS UPDATE IN-PLACE REPAIR UPGRADE ELIGIBILITY") | Out-Null
+        $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+        $report.AppendLine($separator) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        $report.AppendLine("READINESS SCORE: $($result.ReadinessScore)/$($result.MaxScore)") | Out-Null
+        $report.AppendLine("STATUS: $($result.Status)") | Out-Null
+        $report.AppendLine("ELIGIBLE: $(if ($result.Eligible) { 'YES' } else { 'NO' })") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($result.Blockers.Count -gt 0) {
+            $report.AppendLine("BLOCKERS PREVENTING UPGRADE:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($blocker in $result.Blockers) {
+                $report.AppendLine("  [BLOCKER] $blocker") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.Warnings.Count -gt 0) {
+            $report.AppendLine("WARNINGS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($warning in $result.Warnings) {
+                $report.AppendLine("  [WARNING] $warning") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.Details.Count -gt 0) {
+            $report.AppendLine("DETAILS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($key in $result.Details.Keys) {
+                $report.AppendLine("  $key : $($result.Details[$key])") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.Recommendations.Count -gt 0) {
+            $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($rec in $result.Recommendations) {
+                $report.AppendLine("  - $rec") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        $result.Report = $report.ToString()
+        
+    } catch {
+        $result.Status = "Error"
+        $result.Blockers += "Error checking eligibility: $_"
+        $result.Report = "ERROR: Could not check Windows Update eligibility: $_"
+    }
+    
     return $result
 }
 

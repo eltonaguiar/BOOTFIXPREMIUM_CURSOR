@@ -1123,6 +1123,290 @@ Notify users of important events, completion status, and recommendations.
 
 ---
 
+## Research: Best Practices & Industry Standards
+
+### Project Structure Best Practices
+
+Based on research of similar Windows repair tools and PowerShell projects:
+
+#### Industry Standard Patterns
+
+**1. Modular Architecture**
+- ✅ **Implemented**: Core modules in `Helper/`, utilities in `Helper Scripts/`
+- **Reference**: WindowsRescue, PowerShell DSC modules
+- **Benefit**: Clear separation of concerns, easier maintenance
+
+**2. Test Organization**
+- ✅ **Implemented**: All tests in `Test/` directory with SuperTest as mandatory gate
+- **Reference**: Pester testing framework, PowerShell module standards
+- **Benefit**: Comprehensive testing, prevents regressions
+
+**3. Entry Point Clarity**
+- ✅ **Implemented**: Only 2 entry points in root (`MiracleBoot.ps1`, `RunMiracleBoot.cmd`)
+- **Reference**: Industry standard for executable projects
+- **Benefit**: Easy discovery, clear usage
+
+**4. Documentation Structure**
+- ✅ **Implemented**: README in root, detailed docs organized by purpose
+- **Reference**: GitHub best practices, open-source standards
+- **Benefit**: Better user experience, easier onboarding
+
+#### Comparison with Similar Tools
+
+**WindowsRescue / Repair-Windows**:
+- Uses `/src` for main scripts (we use root for simplicity)
+- `/tests` for test files (we use `Test/`)
+- Similar modular approach ✅
+- **Our Advantage**: Clearer entry points, better for end users
+
+**PowerShell DSC Modules**:
+- `/DSCResources` for core modules (we use `Helper/`)
+- `/Tests` for Pester tests (we use `Test/`)
+- `/Examples` for usage examples (we integrate in README)
+- **Our Advantage**: Simpler structure, fewer directories
+
+**Hiren's BootCD PE Structure**:
+- Tools organized by category
+- Documentation integrated with tools
+- **Our Advantage**: More modern PowerShell-based approach
+
+### Code Quality Best Practices
+
+**1. Syntax Validation**
+- ✅ **Implemented**: SuperTest Phase 0 - comprehensive syntax validation
+- **Benefit**: Catches errors before users encounter them
+
+**2. Error Pattern Detection**
+- ✅ **Implemented**: 30+ critical error patterns in SuperTest
+- **Benefit**: Prevents common runtime errors from reaching users
+
+**3. GUI Launch Validation**
+- ✅ **Implemented**: SuperTest Phase 1 - GUI launch test
+- **Benefit**: Ensures UI works before release
+
+**4. Comprehensive Testing**
+- ✅ **Implemented**: Multiple test suites (CompleteCodebase, SafeFunctions, Integration)
+- **Benefit**: High confidence in code quality
+
+---
+
+## Research: Technician Tools & Methods
+
+### Tools Technicians Use to Avoid Windows Reinstall
+
+Based on research of professional IT technician practices and tools:
+
+#### 1. Built-in Windows Repair Tools
+
+**DISM (Deployment Image Servicing and Management)**
+- ✅ **Already Implemented**: DISM repair operations in Miracle Boot
+- **Common Use Cases**:
+  - `/RestoreHealth` - Repair Windows image
+  - `/Cleanup-Image` - Clean component store
+  - `/ScanHealth` - Check image health
+- **Our Implementation**: Comprehensive DISM integration with progress tracking
+- **Enhancement Opportunity**: Automated DISM repair sequences
+
+**SFC (System File Checker)**
+- ✅ **Already Implemented**: SFC integration in Miracle Boot
+- **Common Use Cases**:
+  - `sfc /scannow` - Scan and repair system files
+  - `sfc /verifyonly` - Verify without repair
+- **Our Implementation**: SFC with automated repair workflows
+- **Enhancement Opportunity**: SFC + DISM combined repair sequences
+
+**CHKDSK (Check Disk)**
+- ✅ **Already Implemented**: Disk repair operations
+- **Common Use Cases**:
+  - `chkdsk /f` - Fix file system errors
+  - `chkdsk /r` - Locate bad sectors and recover readable information
+- **Our Implementation**: Automated disk repair with safety checks
+- **Enhancement Opportunity**: Smart scheduling (run on next boot if needed)
+
+**Bootrec.exe**
+- ✅ **Already Implemented**: BCD repair operations
+- **Common Use Cases**:
+  - `bootrec /fixmbr` - Fix Master Boot Record
+  - `bootrec /fixboot` - Fix boot sector
+  - `bootrec /rebuildbcd` - Rebuild BCD
+- **Our Implementation**: Comprehensive BCD management and repair
+- **Enhancement Opportunity**: Automated bootrec sequence
+
+#### 2. Third-Party Boot Repair Tools
+
+**EasyBCD**
+- **Features**: Visual BCD editor, boot menu customization
+- **Comparison with Miracle Boot**:
+  - ✅ We have visual BCD editor (GUI mode)
+  - ✅ We have boot menu simulator
+  - ⚠️ We lack: Boot menu customization presets
+  - **Enhancement Opportunity**: Boot menu templates/presets
+
+**BootICE**
+- **Features**: Low-level boot sector editing, MBR/PBR editing
+- **Comparison with Miracle Boot**:
+  - ✅ We have: BCD editing, boot repair
+  - ⚠️ We lack: Direct MBR/PBR editing (safety concern)
+  - **Enhancement Opportunity**: Advanced boot sector repair (with warnings)
+
+**Visual BCD Editor**
+- **Features**: Advanced BCD property editing
+- **Comparison with Miracle Boot**:
+  - ✅ We have: Advanced BCD property editing
+  - ✅ We have: BCD backup/restore
+  - **Status**: Feature parity achieved
+
+#### 3. Recovery Environment Tools
+
+**Hiren's BootCD PE**
+- **Features**: Comprehensive toolkit, network support, browser installation
+- **Comparison with Miracle Boot**:
+  - ✅ We have: Browser installation (WinPE)
+  - ✅ We have: Network diagnostics
+  - ✅ We have: Utilities menu (Notepad, Registry, PowerShell)
+  - ⚠️ We lack: Pre-installed tool suite
+  - **Enhancement Opportunity**: Optional tool pack integration
+
+**Medicat USB**
+- **Features**: Medical-grade recovery environment, extensive tool collection
+- **Comparison with Miracle Boot**:
+  - ✅ We have: Core repair capabilities
+  - ⚠️ We lack: Extensive pre-installed tools
+  - **Enhancement Opportunity**: Tool recommendation system (already implemented)
+
+**Sergei Strelec's WinPE**
+- **Features**: Custom WinPE with drivers and tools
+- **Comparison with Miracle Boot**:
+  - ✅ We work in: WinPE environment
+  - ✅ We have: Driver diagnostics
+  - ⚠️ We lack: Driver injection capabilities
+  - **Enhancement Opportunity**: Automated driver injection
+
+#### 4. Advanced Repair Methods
+
+**In-Place Upgrade / Repair Install**
+- ✅ **Already Implemented**: Comprehensive in-place upgrade readiness checking
+- **Technician Method**: Use Windows ISO to perform repair-only upgrade
+- **Our Implementation**: 
+  - Readiness analysis
+  - Blocker identification
+  - Log analysis
+- **Enhancement Opportunity**: Automated repair install initiation
+
+**System Restore**
+- ✅ **Already Implemented**: System Restore integration
+- **Technician Method**: Restore to known good point before major changes
+- **Our Implementation**: Restore point creation and restoration
+- **Enhancement Opportunity**: Automated restore point before repairs
+
+**Registry Repair**
+- ⚠️ **Partially Implemented**: Basic registry operations
+- **Technician Method**: Manual registry editing for specific issues
+- **Enhancement Opportunity**: 
+  - Automated registry repair sequences
+  - Registry backup/restore
+  - Common registry issue fixes
+
+**Driver Management**
+- ✅ **Already Implemented**: Driver diagnostics and scanning
+- **Technician Method**: Identify missing drivers, download and install
+- **Our Implementation**: 
+  - Driver detection
+  - Missing driver identification
+- **Enhancement Opportunity**: 
+  - Automated driver download (legal/licensing considerations)
+  - Driver injection in WinPE
+  - Driver rollback capabilities
+
+#### 5. Diagnostic & Analysis Tools
+
+**Event Viewer Analysis**
+- ⚠️ **Not Implemented**: Event log analysis
+- **Technician Method**: Review Windows Event Logs for errors
+- **Enhancement Opportunity**: 
+  - Event log parsing
+  - Error pattern detection
+  - Automated event log analysis
+
+**CBS Log Analysis**
+- ✅ **Already Implemented**: CBS log analysis in in-place upgrade readiness
+- **Technician Method**: Analyze Component-Based Servicing logs
+- **Our Implementation**: Comprehensive CBS log parsing
+- **Status**: Feature complete
+
+**Boot Log Analysis**
+- ✅ **Already Implemented**: Boot log analysis and boot chain failure detection
+- **Technician Method**: Review nbtlog.txt and startup logs
+- **Our Implementation**: 
+  - Boot chain stage identification
+  - Failure point detection
+  - Actionable recommendations
+- **Status**: Feature complete
+
+### Technician Workflow Comparison
+
+#### Typical Technician Workflow
+
+1. **Initial Assessment**
+   - Check boot status
+   - Review error messages
+   - Check system logs
+   - ✅ **Miracle Boot**: Boot probability assessment, boot log analysis
+
+2. **Quick Fixes**
+   - Run SFC
+   - Run DISM
+   - Check disk
+   - ✅ **Miracle Boot**: Automated repair workflows
+
+3. **Boot Repair**
+   - Fix BCD
+   - Repair boot sector
+   - Rebuild boot configuration
+   - ✅ **Miracle Boot**: Comprehensive BCD management and repair
+
+4. **Advanced Diagnostics**
+   - Analyze logs
+   - Check component store
+   - Verify system files
+   - ✅ **Miracle Boot**: Comprehensive diagnostics suite
+
+5. **Last Resort**
+   - In-place upgrade
+   - System restore
+   - Full reinstall (avoided if possible)
+   - ✅ **Miracle Boot**: In-place upgrade readiness, system restore
+
+#### Where Miracle Boot Excels
+
+1. **Automation**: Reduces manual steps technicians perform
+2. **Comprehensive**: Combines multiple tools in one interface
+3. **Environment Support**: Works in FullOS, WinRE, WinPE, Shift+F10
+4. **User-Friendly**: GUI and TUI interfaces for different skill levels
+5. **Diagnostics**: Advanced log analysis and boot chain failure detection
+
+#### Enhancement Opportunities Based on Research
+
+**Priority 1: High-Value Additions**
+1. **Event Log Analysis** - Parse Windows Event Logs for common errors
+2. **Automated Repair Sequences** - Pre-defined repair workflows
+3. **Driver Injection** - Inject drivers in WinPE (with legal considerations)
+4. **Registry Repair Automation** - Common registry issue fixes
+
+**Priority 2: Quality of Life**
+1. **Repair Templates** - Save and reuse repair configurations
+2. **Progress Tracking Enhancement** - Better feedback for long operations
+3. **Automated Restore Points** - Before major operations
+4. **Repair History** - Track what was done and results
+
+**Priority 3: Advanced Features**
+1. **Remote Repair** - Support remote systems (security considerations)
+2. **Cloud-Based Diagnostics** - Upload logs for analysis
+3. **AI-Powered Recommendations** - ML-based issue detection
+4. **Multi-Boot Enhanced Support** - Better Linux/dual-boot handling
+
+---
+
 ## Conclusion
 
 This roadmap provides a comprehensive vision for Miracle Boot's future development. The enhancements are prioritized based on impact, user value, and implementation complexity. Regular review and adjustment of priorities based on user feedback and changing needs is recommended.
