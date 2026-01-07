@@ -37,6 +37,13 @@ function Start-TUI {
         Write-Host "8) Check Windows Install Failure Reasons" -ForegroundColor Cyan
         Write-Host "9) Boot Repair (with warnings)" -ForegroundColor Yellow
         Write-Host "A) Advanced Diagnostics" -ForegroundColor Magenta
+        Write-Host "B) Boot Probability / Boot Health Check" -ForegroundColor Cyan
+        Write-Host "C) Automated Boot Repair" -ForegroundColor Green
+        Write-Host "D) System File Repair (SFC + DISM)" -ForegroundColor Green
+        Write-Host "E) Disk Repair (chkdsk)" -ForegroundColor Green
+        Write-Host "F) Comprehensive Diagnostics" -ForegroundColor Cyan
+        Write-Host "G) Complete System Repair" -ForegroundColor Yellow
+        Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
         Write-Host "Q) Quit" -ForegroundColor Yellow
         Write-Host ""
 
@@ -318,6 +325,271 @@ function Start-TUI {
             "a" {
                 # Handle lowercase 'a' for Advanced Diagnostics
                 $c = "A"
+                continue
+            }
+            "B" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nRunning boot probability / boot health check..." -ForegroundColor Gray
+                Write-Host "This will assess the likelihood of successful boot..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                $bootHealth = Get-BootProbability -TargetDrive $drive
+                
+                Write-Host ""
+                Write-Host $bootHealth.Report
+                
+                # Display probability prominently
+                Write-Host ""
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                Write-Host "  BOOT PROBABILITY: $($bootHealth.BootProbability)%" -ForegroundColor $(if ($bootHealth.BootProbability -ge 75) { "Green" } elseif ($bootHealth.BootProbability -ge 50) { "Yellow" } else { "Red" })
+                Write-Host "  BOOT HEALTH: $($bootHealth.BootHealth)" -ForegroundColor $(if ($bootHealth.BootProbability -ge 75) { "Green" } elseif ($bootHealth.BootProbability -ge 50) { "Yellow" } else { "Red" })
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "b" {
+                $c = "B"
+                continue
+            }
+            "C" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nRunning automated boot repair..." -ForegroundColor Gray
+                $repairResult = Start-AutomatedBootRepair -TargetDrive $drive
+                Write-Host ""
+                Write-Host $repairResult.Report
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "c" {
+                $c = "C"
+                continue
+            }
+            "D" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                $source = Read-Host "Windows installation source path (optional, for offline repair - press Enter to skip)"
+                
+                Write-Host "`nRunning system file repair (SFC + DISM)..." -ForegroundColor Gray
+                Write-Host "This may take 15-30 minutes..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                if ([string]::IsNullOrWhiteSpace($source)) {
+                    $repairResult = Start-SystemFileRepair -TargetDrive $drive
+                } else {
+                    $repairResult = Start-SystemFileRepair -TargetDrive $drive -SourcePath $source
+                }
+                
+                Write-Host ""
+                Write-Host $repairResult.Report
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "c" {
+                $c = "C"
+                continue
+            }
+            "D" {
+                $drive = Read-Host "`nTarget drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                $recoverBad = Read-Host "Recover bad sectors? (Y/N - this can take hours)"
+                $recoverBadSectors = ($recoverBad -eq 'Y' -or $recoverBad -eq 'y')
+                
+                Write-Host "`nRunning disk repair (chkdsk)..." -ForegroundColor Gray
+                if ($recoverBadSectors) {
+                    Write-Host "WARNING: Bad sector recovery can take 1-4 hours!" -ForegroundColor Yellow
+                }
+                Write-Host ""
+                
+                $repairResult = Start-DiskRepair -TargetDrive $drive -FixErrors -RecoverBadSectors:$recoverBadSectors
+                
+                Write-Host ""
+                Write-Host $repairResult.Report
+                if ($repairResult.RequiresReboot) {
+                    Write-Host "`nNOTE: chkdsk has been scheduled for next reboot." -ForegroundColor Yellow
+                }
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "d" {
+                $c = "D"
+                continue
+            }
+            "E" {
+                $drive = Read-Host "`nTarget drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nRunning comprehensive diagnostics..." -ForegroundColor Gray
+                Write-Host "This may take a few minutes..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                $diagResult = Start-ComprehensiveDiagnostics -TargetDrive $drive
+                
+                Write-Host ""
+                Write-Host $diagResult.Report
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "e" {
+                $c = "E"
+                continue
+            }
+            "F" {
+                $drive = Read-Host "`nTarget drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nRunning comprehensive diagnostics..." -ForegroundColor Gray
+                Write-Host "This may take a few minutes..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                $diagResult = Start-ComprehensiveDiagnostics -TargetDrive $drive
+                
+                Write-Host ""
+                Write-Host $diagResult.Report
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "f" {
+                $c = "F"
+                continue
+            }
+            "G" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nCOMPLETE SYSTEM REPAIR" -ForegroundColor Cyan
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "This will run:" -ForegroundColor White
+                Write-Host "  1. Comprehensive diagnostics" -ForegroundColor Gray
+                Write-Host "  2. Create repair checkpoint" -ForegroundColor Gray
+                Write-Host "  3. Disk repair (if needed)" -ForegroundColor Gray
+                Write-Host "  4. System file repair (SFC + DISM)" -ForegroundColor Gray
+                Write-Host "  5. Boot repair" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "This process can take 30 minutes to several hours." -ForegroundColor Yellow
+                Write-Host ""
+                $confirm = Read-Host "Do you want to proceed? (Y/N)"
+                
+                if ($confirm -eq 'Y' -or $confirm -eq 'y') {
+                    Write-Host "`nStarting complete system repair..." -ForegroundColor Gray
+                    Write-Host ""
+                    
+                    $repairResult = Start-CompleteSystemRepair -TargetDrive $drive -SkipConfirmation
+                    
+                    Write-Host ""
+                    Write-Host $repairResult.Report
+                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                } else {
+                    Write-Host "`nOperation cancelled. Press any key to continue..." -ForegroundColor Yellow
+                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                }
+            }
+            "g" {
+                $c = "G"
+                continue
+            }
+            "G" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nCOMPLETE SYSTEM REPAIR" -ForegroundColor Cyan
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "This will run:" -ForegroundColor White
+                Write-Host "  1. Comprehensive diagnostics" -ForegroundColor Gray
+                Write-Host "  2. Create repair checkpoint" -ForegroundColor Gray
+                Write-Host "  3. Disk repair (if needed)" -ForegroundColor Gray
+                Write-Host "  4. System file repair (SFC + DISM)" -ForegroundColor Gray
+                Write-Host "  5. Boot repair" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "This process can take 30 minutes to several hours." -ForegroundColor Yellow
+                Write-Host ""
+                $confirm = Read-Host "Do you want to proceed? (Y/N)"
+                
+                if ($confirm -eq 'Y' -or $confirm -eq 'y') {
+                    Write-Host "`nStarting complete system repair..." -ForegroundColor Gray
+                    Write-Host ""
+                    
+                    $repairResult = Start-CompleteSystemRepair -TargetDrive $drive -SkipConfirmation
+                    
+                    Write-Host ""
+                    Write-Host $repairResult.Report
+                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                } else {
+                    Write-Host "`nOperation cancelled. Press any key to continue..." -ForegroundColor Yellow
+                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                }
+            }
+            "g" {
+                $c = "G"
+                continue
+            }
+            "H" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nRunning in-place upgrade readiness check..." -ForegroundColor Gray
+                Write-Host "This will analyze Windows logs and system health..." -ForegroundColor Yellow
+                Write-Host "Checking: nbtlog.txt, `$WINDOWS.~BT, `$Windows.~WS, CBS logs, etc." -ForegroundColor Cyan
+                Write-Host ""
+                
+                $readiness = Get-InPlaceUpgradeReadiness -TargetDrive $drive
+                
+                Write-Host ""
+                Write-Host $readiness.Report
+                
+                # Display readiness status prominently
+                Write-Host ""
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
+                if ($readiness.ReadyForInPlaceUpgrade) {
+                    Write-Host "  STATUS: READY FOR IN-PLACE UPGRADE" -ForegroundColor Green
+                } else {
+                    Write-Host "  STATUS: BLOCKED - NOT READY FOR IN-PLACE UPGRADE" -ForegroundColor Red
+                    Write-Host "  BLOCKERS FOUND: $($readiness.Blockers.Count)" -ForegroundColor Red
+                }
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor $(if ($readiness.ReadyForInPlaceUpgrade) { "Green" } else { "Red" })
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "h" {
+                $c = "H"
                 continue
             }
             "Q" { 

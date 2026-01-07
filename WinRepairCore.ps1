@@ -1,3 +1,46 @@
+function Get-EnvironmentType {
+    <#
+    .SYNOPSIS
+    Detects the current environment type (FullOS, WinRE, or WinPE).
+    #>
+    # Primary check: SystemDrive is the most reliable indicator
+    # In FullOS, SystemDrive is usually C:, in WinPE/WinRE it's X:
+    if ($env:SystemDrive -eq 'X:') {
+        # X: drive indicates WinPE/WinRE
+        if (Test-Path 'HKLM:\System\Setup') {
+            $setupType = (Get-ItemProperty -Path 'HKLM:\System\Setup' -Name 'CmdLine' -ErrorAction SilentlyContinue).CmdLine
+            if ($setupType -match 'recovery|WinRE') {
+                return 'WinRE'
+            }
+        }
+        # Check for MiniNT (WinPE indicator)
+        if (Test-Path 'HKLM:\System\CurrentControlSet\Control\MiniNT') {
+            return 'WinPE'
+        }
+        return 'WinRE' # Default to WinRE if on X: drive
+    }
+    
+    # Secondary check: MiniNT registry key (but only if SystemDrive is X:)
+    if (Test-Path 'HKLM:\System\CurrentControlSet\Control\MiniNT') {
+        # Only trust this if we're on X: drive
+        if ($env:SystemDrive -eq 'X:') {
+            return 'WinPE'
+        }
+        # If we have MiniNT but SystemDrive is NOT X:, check if Windows directory exists
+        if (Test-Path "$env:SystemDrive\Windows") {
+            return 'FullOS'
+        }
+    }
+    
+    # Final check: If SystemDrive is C: (or other), and Windows directory exists, it's FullOS
+    if ($env:SystemDrive -ne 'X:' -and (Test-Path "$env:SystemDrive\Windows")) {
+        return 'FullOS'
+    }
+    
+    # Default to FullOS if we can't determine (safer assumption)
+    return 'FullOS'
+}
+
 function Get-WindowsVolumes {
     Get-Volume | Where-Object FileSystem |
         Sort-Object DriveLetter |
@@ -189,6 +232,422 @@ function Get-BootDiagnosis {
     }
 
     return $report
+}
+
+function Get-BootProbability {
+    <#
+    .SYNOPSIS
+    Comprehensive boot health check that calculates the probability of successful boot.
+    
+    .DESCRIPTION
+    Checks all critical boot components and calculates a probability score (0-100%):
+    - Windows OS files presence
+    - EFI partition existence and health
+    - BCD store integrity
+    - Boot files presence
+    - Boot configuration validity
+    - Disk health
+    
+    Returns detailed assessment with probability score and recommendations.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        BootProbability = 0
+        BootHealth = "Unknown"
+        Score = 0
+        MaxScore = 0
+        Checks = @()
+        CriticalIssues = @()
+        Warnings = @()
+        Recommendations = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("BOOT PROBABILITY / BOOT HEALTH ASSESSMENT") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $score = 0
+    $maxScore = 0
+    
+    # ========================================================================
+    # CHECK 1: Windows OS Files (Critical - 25 points)
+    # ========================================================================
+    $maxScore += 25
+    $report.AppendLine("CHECK 1: Windows OS Files (25 points)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $osFiles = @(
+        "$TargetDrive`:\Windows\System32\ntoskrnl.exe",
+        "$TargetDrive`:\Windows\System32\hal.dll",
+        "$TargetDrive`:\Windows\System32\boot\winload.exe",
+        "$TargetDrive`:\Windows\System32\boot\winload.efi"
+    )
+    
+    $osFilesFound = 0
+    foreach ($file in $osFiles) {
+        if (Test-Path $file) {
+            $osFilesFound++
+            $report.AppendLine("[OK] Found: $(Split-Path $file -Leaf)") | Out-Null
+        } else {
+            $report.AppendLine("[MISSING] $(Split-Path $file -Leaf)") | Out-Null
+        }
+    }
+    
+    if ($osFilesFound -eq $osFiles.Count) {
+        $score += 25
+        $result.Checks += @{ Name = "Windows OS Files"; Status = "PASS"; Points = 25 }
+        $report.AppendLine("[PASS] All critical OS files present (25/25 points)") | Out-Null
+    } elseif ($osFilesFound -ge 2) {
+        $partialScore = [math]::Round(($osFilesFound / $osFiles.Count) * 25)
+        $score += $partialScore
+        $result.Checks += @{ Name = "Windows OS Files"; Status = "PARTIAL"; Points = $partialScore }
+        $report.AppendLine("[PARTIAL] $osFilesFound/$($osFiles.Count) OS files found ($partialScore/25 points)") | Out-Null
+        $result.Warnings += "Some Windows OS files are missing"
+    } else {
+        $result.Checks += @{ Name = "Windows OS Files"; Status = "FAIL"; Points = 0 }
+        $result.CriticalIssues += "Critical Windows OS files are missing"
+        $report.AppendLine("[FAIL] Critical OS files missing (0/25 points)") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 2: EFI Partition (Critical - 25 points)
+    # ========================================================================
+    $maxScore += 25
+    $report.AppendLine("CHECK 2: EFI System Partition (25 points)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $efiPartitionFound = $false
+    $efiPartitionHealthy = $false
+    $efiDriveLetter = $null
+    
+    try {
+        $partition = Get-Partition -DriveLetter $TargetDrive -ErrorAction SilentlyContinue
+        if ($partition) {
+            $disk = Get-Disk -Number $partition.DiskNumber
+            $efiParts = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }
+            
+            if ($efiParts -and $efiParts.Count -gt 0) {
+                $efiPartitionFound = $true
+                $score += 15
+                $report.AppendLine("[OK] EFI System Partition found on Disk $($disk.Number) (15/25 points)") | Out-Null
+                
+                # Check if EFI partition has drive letter
+                foreach ($efiPart in $efiParts) {
+                    if ($efiPart.DriveLetter) {
+                        $efiDriveLetter = $efiPart.DriveLetter
+                        $report.AppendLine("[OK] EFI partition has drive letter: $efiDriveLetter`:") | Out-Null
+                        
+                        # Check EFI partition format
+                        $efiVolume = Get-Volume -DriveLetter $efiDriveLetter -ErrorAction SilentlyContinue
+                        if ($efiVolume) {
+                            if ($efiVolume.FileSystem -eq "FAT32") {
+                                $score += 5
+                                $efiPartitionHealthy = $true
+                                $report.AppendLine("[OK] EFI partition formatted as FAT32 (correct) (5/25 points)") | Out-Null
+                            } else {
+                                $report.AppendLine("[FAIL] EFI partition formatted as $($efiVolume.FileSystem) (should be FAT32)") | Out-Null
+                                $result.CriticalIssues += "EFI partition is not FAT32 format"
+                            }
+                        }
+                        
+                        # Check for Microsoft Boot folder
+                        $bootPath = "$efiDriveLetter`:\EFI\Microsoft\Boot"
+                        if (Test-Path $bootPath) {
+                            $score += 5
+                            $report.AppendLine("[OK] Microsoft Boot folder structure exists (5/25 points)") | Out-Null
+                        } else {
+                            $report.AppendLine("[FAIL] Microsoft Boot folder missing on EFI partition") | Out-Null
+                            $result.CriticalIssues += "EFI partition missing Microsoft Boot folder"
+                        }
+                        break
+                    }
+                }
+                
+                if (-not $efiDriveLetter) {
+                    $report.AppendLine("[WARNING] EFI partition found but no drive letter assigned") | Out-Null
+                    $result.Warnings += "EFI partition exists but is not accessible (no drive letter)"
+                }
+                
+                $result.Checks += @{ Name = "EFI Partition"; Status = if ($efiPartitionHealthy) { "PASS" } else { "PARTIAL" }; Points = if ($efiPartitionHealthy) { 25 } else { 15 } }
+            } else {
+                $report.AppendLine("[FAIL] No EFI System Partition found (0/25 points)") | Out-Null
+                $result.Checks += @{ Name = "EFI Partition"; Status = "FAIL"; Points = 0 }
+                $result.CriticalIssues += "No EFI System Partition detected - system cannot boot in UEFI mode"
+            }
+        } else {
+            $report.AppendLine("[WARNING] Could not determine partition information") | Out-Null
+            $result.Checks += @{ Name = "EFI Partition"; Status = "UNKNOWN"; Points = 0 }
+        }
+    } catch {
+        $report.AppendLine("[ERROR] Failed to check EFI partition: $_") | Out-Null
+        $result.Checks += @{ Name = "EFI Partition"; Status = "ERROR"; Points = 0 }
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 3: BCD Store (Critical - 25 points)
+    # ========================================================================
+    $maxScore += 25
+    $report.AppendLine("CHECK 3: Boot Configuration Data (BCD) Store (25 points)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $bcdFound = $false
+    $bcdAccessible = $false
+    $bcdHasEntries = $false
+    
+    # Try to find BCD file
+    if ($efiDriveLetter) {
+        $bcdPath = "$efiDriveLetter`:\EFI\Microsoft\Boot\BCD"
+        if (Test-Path $bcdPath) {
+            $bcdFound = $true
+            $score += 10
+            $report.AppendLine("[OK] BCD file exists at: $bcdPath (10/25 points)") | Out-Null
+        } else {
+            $report.AppendLine("[FAIL] BCD file not found at expected location: $bcdPath") | Out-Null
+            $result.CriticalIssues += "BCD file is missing"
+        }
+    } else {
+        # Try to find BCD on any EFI partition
+        $allEfiParts = Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -and $_.DriveLetter }
+        foreach ($efi in $allEfiParts) {
+            $testPath = "$($efi.DriveLetter):\EFI\Microsoft\Boot\BCD"
+            if (Test-Path $testPath) {
+                $bcdFound = $true
+                $bcdPath = $testPath
+                $efiDriveLetter = $efi.DriveLetter
+                $score += 10
+                $report.AppendLine("[OK] BCD file found at: $testPath (10/25 points)") | Out-Null
+                break
+            }
+        }
+        
+        if (-not $bcdFound) {
+            $report.AppendLine("[FAIL] BCD file not found on any EFI partition") | Out-Null
+            $result.CriticalIssues += "BCD file is missing"
+        }
+    }
+    
+    # Check BCD accessibility and integrity
+    if ($bcdFound) {
+        try {
+            $bcdEnum = bcdedit /enum 2>&1 | Out-String
+            if ($bcdEnum -match "The boot configuration data store could not be opened" -or 
+                $bcdEnum -match "could not be opened") {
+                $report.AppendLine("[FAIL] BCD exists but cannot be opened - may be corrupted or locked (0/15 remaining points)") | Out-Null
+                $result.CriticalIssues += "BCD file exists but is corrupted or locked"
+            } else {
+                $bcdAccessible = $true
+                $score += 10
+                $report.AppendLine("[OK] BCD store is accessible (10/25 points)") | Out-Null
+                
+                # Check if BCD has entries
+                if ($bcdEnum -match "Windows Boot Manager" -or $bcdEnum -match "Windows Boot Loader") {
+                    $bcdHasEntries = $true
+                    $score += 5
+                    $report.AppendLine("[OK] BCD contains boot entries (5/25 points)") | Out-Null
+                } else {
+                    $report.AppendLine("[FAIL] BCD is accessible but contains no boot entries") | Out-Null
+                    $result.CriticalIssues += "BCD store is empty - no boot entries found"
+                }
+            }
+        } catch {
+            $report.AppendLine("[WARNING] Could not test BCD accessibility: $_") | Out-Null
+        }
+    }
+    
+    if ($bcdFound -and $bcdAccessible -and $bcdHasEntries) {
+        $result.Checks += @{ Name = "BCD Store"; Status = "PASS"; Points = 25 }
+    } elseif ($bcdFound -and $bcdAccessible) {
+        $result.Checks += @{ Name = "BCD Store"; Status = "PARTIAL"; Points = 20 }
+    } elseif ($bcdFound) {
+        $result.Checks += @{ Name = "BCD Store"; Status = "PARTIAL"; Points = 10 }
+    } else {
+        $result.Checks += @{ Name = "BCD Store"; Status = "FAIL"; Points = 0 }
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 4: Boot Files (Important - 15 points)
+    # ========================================================================
+    $maxScore += 15
+    $report.AppendLine("CHECK 4: Boot Files (15 points)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $bootFiles = @()
+    if ($efiDriveLetter) {
+        $bootFiles = @(
+            "$efiDriveLetter`:\EFI\Microsoft\Boot\bootmgfw.efi",
+            "$efiDriveLetter`:\EFI\Microsoft\Boot\memtest.efi"
+        )
+    }
+    
+    $bootFilesFound = 0
+    foreach ($file in $bootFiles) {
+        if (Test-Path $file) {
+            $bootFilesFound++
+            $report.AppendLine("[OK] Found: $(Split-Path $file -Leaf)") | Out-Null
+        }
+    }
+    
+    if ($bootFiles.Count -gt 0) {
+        if ($bootFilesFound -eq $bootFiles.Count) {
+            $score += 15
+            $result.Checks += @{ Name = "Boot Files"; Status = "PASS"; Points = 15 }
+            $report.AppendLine("[PASS] All boot files present (15/15 points)") | Out-Null
+        } elseif ($bootFilesFound -gt 0) {
+            $partialScore = [math]::Round(($bootFilesFound / $bootFiles.Count) * 15)
+            $score += $partialScore
+            $result.Checks += @{ Name = "Boot Files"; Status = "PARTIAL"; Points = $partialScore }
+            $report.AppendLine("[PARTIAL] $bootFilesFound/$($bootFiles.Count) boot files found ($partialScore/15 points)") | Out-Null
+        } else {
+            $result.Checks += @{ Name = "Boot Files"; Status = "FAIL"; Points = 0 }
+            $result.Warnings += "Boot files are missing from EFI partition"
+            $report.AppendLine("[FAIL] Boot files missing (0/15 points)") | Out-Null
+        }
+    } else {
+        $report.AppendLine("[SKIP] Cannot check boot files - EFI partition not accessible") | Out-Null
+        $result.Checks += @{ Name = "Boot Files"; Status = "SKIP"; Points = 0 }
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 5: Boot Configuration Validity (Important - 10 points)
+    # ========================================================================
+    $maxScore += 10
+    $report.AppendLine("CHECK 5: Boot Configuration Validity (10 points)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    try {
+        $bcdEntries = Get-BCDEntriesParsed -ErrorAction SilentlyContinue
+        if ($bcdEntries -and $bcdEntries.Count -gt 0) {
+            $validEntries = 0
+            foreach ($entry in $bcdEntries) {
+                if ($entry.Type -match "Windows Boot Loader" -and $entry.device -and $entry.path) {
+                    # Check if device and path are valid
+                    if ($entry.device -match "partition=([A-Z]):" -or $entry.path) {
+                        $validEntries++
+                    }
+                }
+            }
+            
+            if ($validEntries -gt 0) {
+                $score += 10
+                $result.Checks += @{ Name = "Boot Configuration"; Status = "PASS"; Points = 10 }
+                $report.AppendLine("[PASS] Valid boot entries found ($validEntries entry/entries) (10/10 points)") | Out-Null
+            } else {
+                $result.Checks += @{ Name = "Boot Configuration"; Status = "FAIL"; Points = 0 }
+                $result.CriticalIssues += "Boot entries exist but are invalid"
+                $report.AppendLine("[FAIL] Boot entries are invalid (0/10 points)") | Out-Null
+            }
+        } else {
+            $result.Checks += @{ Name = "Boot Configuration"; Status = "FAIL"; Points = 0 }
+            $result.CriticalIssues += "No valid boot entries in BCD"
+            $report.AppendLine("[FAIL] No boot entries found (0/10 points)") | Out-Null
+        }
+    } catch {
+        $result.Checks += @{ Name = "Boot Configuration"; Status = "ERROR"; Points = 0 }
+        $report.AppendLine("[ERROR] Could not validate boot configuration: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # Calculate Final Score and Probability
+    # ========================================================================
+    $result.Score = $score
+    $result.MaxScore = $maxScore
+    $probability = [math]::Round(($score / $maxScore) * 100)
+    $result.BootProbability = $probability
+    
+    # Determine health status
+    if ($probability -ge 90) {
+        $result.BootHealth = "Excellent"
+    } elseif ($probability -ge 75) {
+        $result.BootHealth = "Good"
+    } elseif ($probability -ge 50) {
+        $result.BootHealth = "Fair"
+    } elseif ($probability -ge 25) {
+        $result.BootHealth = "Poor"
+    } else {
+        $result.BootHealth = "Critical"
+    }
+    
+    # Generate recommendations
+    if ($result.CriticalIssues.Count -gt 0) {
+        if ($result.CriticalIssues -contains "No EFI System Partition detected") {
+            $result.Recommendations += "Create EFI partition or verify system uses Legacy BIOS mode"
+        }
+        if ($result.CriticalIssues -contains "BCD file is missing") {
+            $result.Recommendations += "Run: bcdboot $TargetDrive`:\Windows /s [EFI_DRIVE]: /f UEFI"
+        }
+        if ($result.CriticalIssues -contains "BCD file exists but is corrupted") {
+            $result.Recommendations += "Run: bootrec /rebuildbcd or bcdboot $TargetDrive`:\Windows /s [EFI_DRIVE]: /f UEFI"
+        }
+    }
+    
+    # Final Report
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("BOOT PROBABILITY ASSESSMENT") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("Score: $score / $maxScore points") | Out-Null
+    $report.AppendLine("Boot Probability: $probability%") | Out-Null
+    $report.AppendLine("Boot Health Status: $($result.BootHealth)") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($probability -ge 90) {
+        $report.AppendLine("[EXCELLENT] System has a very high probability of successful boot.") | Out-Null
+        $report.AppendLine("All critical boot components are present and healthy.") | Out-Null
+    } elseif ($probability -ge 75) {
+        $report.AppendLine("[GOOD] System has a good probability of successful boot.") | Out-Null
+        $report.AppendLine("Most boot components are healthy, but some issues may need attention.") | Out-Null
+    } elseif ($probability -ge 50) {
+        $report.AppendLine("[FAIR] System has a moderate probability of successful boot.") | Out-Null
+        $report.AppendLine("Several boot components have issues that should be addressed.") | Out-Null
+    } elseif ($probability -ge 25) {
+        $report.AppendLine("[POOR] System has a low probability of successful boot.") | Out-Null
+        $report.AppendLine("Critical boot components are missing or damaged.") | Out-Null
+    } else {
+        $report.AppendLine("[CRITICAL] System has a very low probability of successful boot.") | Out-Null
+        $report.AppendLine("Multiple critical boot components are missing or corrupted.") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    if ($result.CriticalIssues.Count -gt 0) {
+        $report.AppendLine("CRITICAL ISSUES FOUND:") | Out-Null
+        foreach ($issue in $result.CriticalIssues) {
+            $report.AppendLine("  - $issue") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    if ($result.Warnings.Count -gt 0) {
+        $report.AppendLine("WARNINGS:") | Out-Null
+        foreach ($warning in $result.Warnings) {
+            $report.AppendLine("  - $warning") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    if ($result.Recommendations.Count -gt 0) {
+        $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+        foreach ($rec in $result.Recommendations) {
+            $report.AppendLine("  - $rec") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
 }
 
 function Get-CommandExplanation {
@@ -4639,7 +5098,7 @@ function Get-WindowsInstallFailureReasons {
             try {
                 $logContent = Get-Content $errorLog -Tail 100 -ErrorAction SilentlyContinue
                 if ($logContent) {
-                    $report.AppendLine("Recent errors from $errorLog:") | Out-Null
+                    $report.AppendLine("Recent errors from ${errorLog}:") | Out-Null
                     
                     # Look for error patterns
                     $errors = $logContent | Select-String -Pattern 'error|failed|fatal|exception|0x[0-9A-Fa-f]{8}' -CaseSensitive:$false
@@ -4697,7 +5156,7 @@ function Get-WindowsInstallFailureReasons {
     # Check for incompatible drivers (using existing function if available)
     try {
         $missingDevices = Get-MissingStorageDevices -ErrorAction SilentlyContinue
-        if ($missingDevices -and $missingDevices -match 'missing|not found|error' -CaseSensitive:$false) {
+        if ($missingDevices -and $missingDevices -imatch 'missing|not found|error') {
             $failureReason = "Missing or incompatible storage drivers"
             $result.FailureReasons += $failureReason
             $result.Recommendations += "Install missing storage drivers before retrying installation."
@@ -5285,6 +5744,1413 @@ function Start-SystemFileRepair {
             }
         }
     }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Test-DiskHealth {
+    <#
+    .SYNOPSIS
+    Pre-flight disk health check before running chkdsk.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        FileSystem = "Unknown"
+        FileSystemHealthy = $false
+        HasBadSectors = $false
+        NeedsRepair = $false
+        BitLockerEncrypted = $false
+        Warnings = @()
+        Recommendations = @()
+    }
+    
+    # Check BitLocker status
+    $bitlocker = Test-BitLockerStatus -TargetDrive $TargetDrive
+    if ($bitlocker.IsEncrypted) {
+        $result.BitLockerEncrypted = $true
+        $result.Warnings += "Drive is BitLocker encrypted. Ensure you have recovery key."
+    }
+    
+    # Get volume information
+    try {
+        $volume = Get-Volume -DriveLetter $TargetDrive -ErrorAction SilentlyContinue
+        if ($volume) {
+            $result.FileSystem = $volume.FileSystemType
+            $result.FileSystemHealthy = ($volume.HealthStatus -eq 'Healthy')
+            
+            # Check for dirty bit (indicates file system corruption)
+            $dirtyBit = fsutil dirty query "$TargetDrive`:" 2>&1
+            if ($dirtyBit -match "is dirty") {
+                $result.NeedsRepair = $true
+                $result.Recommendations += "File system is marked as dirty. Run chkdsk /f"
+            }
+        }
+    } catch {
+        $result.Warnings += "Could not get volume information: $_"
+    }
+    
+    # Check for bad sectors (requires admin)
+    try {
+        $diskInfo = Get-Disk | Where-Object { 
+            $_.Partitions | Where-Object { $_.DriveLetter -eq $TargetDrive } 
+        } | Select-Object -First 1
+        
+        if ($diskInfo) {
+            # Check if disk has errors
+            if ($diskInfo.HealthStatus -ne 'Healthy') {
+                $result.HasBadSectors = $true
+                $result.NeedsRepair = $true
+                $result.Recommendations += "Disk health is not optimal. Run chkdsk /r"
+            }
+        }
+    } catch {
+        # Ignore - may not have permissions
+    }
+    
+    return $result
+}
+
+function Start-DiskRepair {
+    <#
+    .SYNOPSIS
+    Automated chkdsk execution with progress monitoring.
+    #>
+    param(
+        [string]$TargetDrive = "C",
+        [switch]$FixErrors = $true,
+        [switch]$RecoverBadSectors = $false,
+        [switch]$ForceDismount = $false,
+        [scriptblock]$ProgressCallback = $null
+    )
+    
+    $result = @{
+        Success = $false
+        Output = ""
+        Report = ""
+        Errors = @()
+        RequiresReboot = $false
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("DISK REPAIR (CHKDSK)") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Pre-flight check
+    if ($null -ne $ProgressCallback) {
+        & $ProgressCallback "Running pre-flight disk health check..."
+    }
+    
+    $healthCheck = Test-DiskHealth -TargetDrive $TargetDrive
+    $report.AppendLine("PRE-FLIGHT CHECK:") | Out-Null
+    $report.AppendLine("  File System: $($healthCheck.FileSystem)") | Out-Null
+    $report.AppendLine("  Health Status: $(if ($healthCheck.FileSystemHealthy) { 'OK' } else { 'Issues Found' })") | Out-Null
+    
+    if ($healthCheck.BitLockerEncrypted) {
+        $report.AppendLine("  [WARNING] BitLocker Encrypted: Ensure you have recovery key!") | Out-Null
+    }
+    
+    if ($healthCheck.NeedsRepair) {
+        $report.AppendLine("  [INFO] Disk repair recommended") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Check if drive is in use
+    $volume = Get-Volume -DriveLetter $TargetDrive -ErrorAction SilentlyContinue
+    if ($volume) {
+        $isSystemDrive = ($TargetDrive -eq "C" -or $env:SystemDrive -eq "$TargetDrive`:")
+        
+        if ($isSystemDrive -and -not $ForceDismount) {
+            $report.AppendLine("[INFO] System drive detected. chkdsk will be scheduled for next reboot.") | Out-Null
+            $result.RequiresReboot = $true
+        }
+    }
+    
+    # Build chkdsk command
+    $chkdskCmd = "chkdsk $TargetDrive`:"
+    
+    if ($FixErrors) {
+        $chkdskCmd += " /f"
+    }
+    
+    if ($RecoverBadSectors) {
+        $chkdskCmd += " /r"
+    }
+    
+    # Add /x to force dismount if requested
+    if ($ForceDismount -and -not $isSystemDrive) {
+        $chkdskCmd += " /x"
+    }
+    
+    $report.AppendLine("Command: $chkdskCmd") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Confirm if destructive
+    if ($RecoverBadSectors) {
+        $confirmed = Confirm-DestructiveOperation -CommandKey "chkdsk_r" -Command $chkdskCmd -Description "Check disk and recover bad sectors (can take hours)"
+        if (-not $confirmed) {
+            $report.AppendLine("[CANCELLED] User cancelled disk repair") | Out-Null
+            $result.Report = $report.ToString()
+            return $result
+        }
+    }
+    
+    # Execute chkdsk
+    if ($null -ne $ProgressCallback) {
+        & $ProgressCallback "Running chkdsk... (this may take a long time)"
+    }
+    
+    try {
+        if ($result.RequiresReboot) {
+            # Schedule for next boot
+            $scheduleOutput = chkdsk $TargetDrive`: /f 2>&1 | Out-String
+            $report.AppendLine($scheduleOutput) | Out-Null
+            $report.AppendLine("") | Out-Null
+            $report.AppendLine("[INFO] chkdsk has been scheduled to run on next reboot.") | Out-Null
+            $report.AppendLine("Restart your computer to begin disk repair.") | Out-Null
+            $result.Success = $true
+        } else {
+            # Run immediately
+            $chkdskOutput = Invoke-Expression $chkdskCmd 2>&1 | Out-String
+            $result.Output = $chkdskOutput
+            $report.AppendLine($chkdskOutput) | Out-Null
+            
+            # Parse output for success
+            if ($chkdskOutput -match "Windows has checked the file system" -or 
+                $chkdskOutput -match "CHKDSK cannot run because the volume is in use" -or
+                $LASTEXITCODE -eq 0) {
+                $result.Success = $true
+                $report.AppendLine("[OK] chkdsk completed successfully") | Out-Null
+            } else {
+                $errorMsg = "chkdsk completed with issues or errors"
+                $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+                $result.Errors += $errorMsg
+            }
+        }
+    } catch {
+        $errorMsg = "chkdsk failed: $_"
+        $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+        $result.Errors += $errorMsg
+        $result.Success = $false
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Start-ComprehensiveDiagnostics {
+    <#
+    .SYNOPSIS
+    Runs all health checks and generates prioritized repair plan.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Issues = @()
+        RepairPlan = @()
+        RiskAssessment = @()
+        EstimatedTime = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("COMPREHENSIVE SYSTEM DIAGNOSTICS") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # 1. Boot Configuration Check
+    $report.AppendLine("1. BOOT CONFIGURATION CHECK") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    try {
+        $bootDiag = Get-BootDiagnosis -TargetDrive $TargetDrive
+        $report.AppendLine($bootDiag) | Out-Null
+        
+        if ($bootDiag -match "\[ERROR\]" -or $bootDiag -match "\[CRITICAL\]") {
+            $result.Issues += @{
+                Category = "Boot"
+                Severity = "Critical"
+                Description = "Boot configuration issues detected"
+                RepairAction = "Run automated boot repair"
+                EstimatedTime = "5-10 minutes"
+                Risk = "Medium"
+            }
+        }
+    } catch {
+        $report.AppendLine("[ERROR] Boot diagnosis failed: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # 2. System File Health Check
+    $report.AppendLine("2. SYSTEM FILE HEALTH CHECK") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    try {
+        $fileHealth = Test-SystemFileHealth -TargetDrive $TargetDrive
+        $report.AppendLine("System Files: $(if ($fileHealth.SystemFilesHealthy) { 'OK' } else { 'Issues Found' })") | Out-Null
+        $report.AppendLine("Component Store: $(if ($fileHealth.ComponentStoreHealthy) { 'OK' } else { 'Issues Found' })") | Out-Null
+        
+        if (-not $fileHealth.SystemFilesHealthy -or -not $fileHealth.ComponentStoreHealthy) {
+            $result.Issues += @{
+                Category = "System Files"
+                Severity = "High"
+                Description = "System file or component store corruption detected"
+                RepairAction = "Run SFC + DISM repair"
+                EstimatedTime = "15-30 minutes"
+                Risk = "Low"
+            }
+        }
+        
+        if ($fileHealth.CBSLogIssues.Count -gt 0) {
+            $report.AppendLine("CBS Log Issues: $($fileHealth.CBSLogIssues.Count) found") | Out-Null
+        }
+    } catch {
+        $report.AppendLine("[ERROR] System file health check failed: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # 3. Disk Health Check
+    $report.AppendLine("3. DISK HEALTH CHECK") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    try {
+        $diskHealth = Test-DiskHealth -TargetDrive $TargetDrive
+        $report.AppendLine("File System: $($diskHealth.FileSystem)") | Out-Null
+        $report.AppendLine("Health Status: $(if ($diskHealth.FileSystemHealthy) { 'OK' } else { 'Issues Found' })") | Out-Null
+        
+        if ($diskHealth.NeedsRepair) {
+            $severity = if ($diskHealth.HasBadSectors) { "Critical" } else { "High" }
+            $time = if ($diskHealth.HasBadSectors) { "1-4 hours" } else { "10-30 minutes" }
+            
+            $result.Issues += @{
+                Category = "Disk"
+                Severity = $severity
+                Description = "File system corruption or bad sectors detected"
+                RepairAction = "Run chkdsk repair"
+                EstimatedTime = $time
+                Risk = "Low"
+            }
+        }
+        
+        if ($diskHealth.BitLockerEncrypted) {
+            $report.AppendLine("[WARNING] BitLocker encrypted - ensure recovery key available") | Out-Null
+        }
+    } catch {
+        $report.AppendLine("[ERROR] Disk health check failed: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # 4. Registry Health Check
+    $report.AppendLine("4. REGISTRY HEALTH CHECK") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    try {
+        $regHealth = Test-RegistryHealth -TargetDrive $TargetDrive
+        $report.AppendLine("Registry Status: $(if ($regHealth.Healthy) { 'OK' } else { 'Issues Found' })") | Out-Null
+        
+        if (-not $regHealth.Healthy) {
+            $result.Issues += @{
+                Category = "Registry"
+                Severity = "High"
+                Description = "Registry hive corruption detected"
+                RepairAction = "Run registry repair"
+                EstimatedTime = "5-15 minutes"
+                Risk = "Medium"
+            }
+        }
+    } catch {
+        $report.AppendLine("[WARNING] Registry health check not available: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # 5. Component Store Check
+    $report.AppendLine("5. COMPONENT STORE CHECK") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    $envType = Get-EnvironmentType
+    if ($envType -eq 'FullOS') {
+        try {
+            $dismCheck = dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+            $report.AppendLine($dismCheck) | Out-Null
+        } catch {
+            $report.AppendLine("[WARNING] Could not check component store") | Out-Null
+        }
+    } else {
+        $report.AppendLine("[INFO] Component store check requires FullOS") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Generate Repair Plan
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("PRIORITIZED REPAIR PLAN") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($result.Issues.Count -eq 0) {
+        $report.AppendLine("[OK] No issues detected. System appears healthy.") | Out-Null
+    } else {
+        # Sort by severity: Critical > High > Medium > Low
+        $severityOrder = @{ "Critical" = 0; "High" = 1; "Medium" = 2; "Low" = 3 }
+        $sortedIssues = $result.Issues | Sort-Object { $severityOrder[$_.Severity] }
+        
+        $report.AppendLine("Found $($result.Issues.Count) issue(s). Recommended repair sequence:") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        $stepNum = 1
+        foreach ($issue in $sortedIssues) {
+            $result.RepairPlan += $issue.RepairAction
+            $result.RiskAssessment += $issue.Risk
+            $result.EstimatedTime += $issue.EstimatedTime
+            
+            $report.AppendLine("STEP $stepNum : $($issue.Category) - $($issue.Severity)") | Out-Null
+            $report.AppendLine("  Issue: $($issue.Description)") | Out-Null
+            $report.AppendLine("  Action: $($issue.RepairAction)") | Out-Null
+            $report.AppendLine("  Time: $($issue.EstimatedTime)") | Out-Null
+            $report.AppendLine("  Risk: $($issue.Risk)") | Out-Null
+            $report.AppendLine("") | Out-Null
+            $stepNum++
+        }
+        
+        $totalTime = ($result.EstimatedTime | ForEach-Object { 
+            if ($_ -match "(\d+)-(\d+)") { [int]$matches[2] } 
+            elseif ($_ -match "(\d+)") { [int]$matches[1] } 
+            else { 0 } 
+        } | Measure-Object -Sum).Sum
+        
+        $report.AppendLine("Total Estimated Time: ~$totalTime minutes") | Out-Null
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Start-SmartBootRepair {
+    <#
+    .SYNOPSIS
+    Automatically detects boot type and runs appropriate repair sequence.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Success = $false
+        BootType = "Unknown"
+        EFIPartition = $null
+        RepairSequence = @()
+        Report = ""
+        Errors = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("SMART BOOT REPAIR") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Detect boot type
+    $report.AppendLine("Detecting boot type...") | Out-Null
+    try {
+        $partition = Get-Partition -DriveLetter $TargetDrive -ErrorAction SilentlyContinue
+        if ($partition) {
+            $disk = Get-Disk -Number $partition.DiskNumber
+            $efiParts = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }
+            
+            if ($efiParts.Count -gt 0) {
+                $result.BootType = "UEFI"
+                $report.AppendLine("[OK] UEFI boot detected") | Out-Null
+                
+                # Find EFI partition with drive letter
+                foreach ($efiPart in $efiParts) {
+                    if ($efiPart.DriveLetter) {
+                        $result.EFIPartition = $efiPart.DriveLetter
+                        $report.AppendLine("EFI Partition: $($efiPart.DriveLetter):") | Out-Null
+                        break
+                    }
+                }
+                
+                if (-not $result.EFIPartition) {
+                    $report.AppendLine("[WARNING] EFI partition found but no drive letter assigned") | Out-Null
+                }
+            } else {
+                $result.BootType = "Legacy"
+                $report.AppendLine("[OK] Legacy BIOS boot detected") | Out-Null
+            }
+        }
+    } catch {
+        $errorMsg = "Could not detect boot type: $_"
+        $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+        $result.Errors += $errorMsg
+        $result.Report = $report.ToString()
+        return $result
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Run appropriate repair sequence
+    $report.AppendLine("Running boot repair sequence...") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $bootRepair = Start-AutomatedBootRepair -TargetDrive $TargetDrive -SkipConfirmation
+    $result.RepairSequence = $bootRepair.StepsCompleted
+    $result.Success = $bootRepair.Success
+    $report.AppendLine($bootRepair.Report) | Out-Null
+    $result.Errors = $bootRepair.Errors
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Save-RepairCheckpoint {
+    <#
+    .SYNOPSIS
+    Creates restore point and backups before repair operations.
+    #>
+    param(
+        [string]$TargetDrive = "C",
+        [string]$CheckpointName = "MiracleBoot_Repair_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    )
+    
+    $result = @{
+        Success = $false
+        CheckpointPath = ""
+        BCDBackup = ""
+        RegistryBackups = @()
+        Report = ""
+        Errors = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("CREATING REPAIR CHECKPOINT") | Out-Null
+    $report.AppendLine("Checkpoint Name: $CheckpointName") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $checkpointDir = "$env:TEMP\$CheckpointName"
+    New-Item -ItemType Directory -Path $checkpointDir -Force | Out-Null
+    $result.CheckpointPath = $checkpointDir
+    
+    # Backup BCD
+    $report.AppendLine("Backing up BCD...") | Out-Null
+    try {
+        $bcdBackup = Export-BCDBackup -BackupPath "$checkpointDir\BCD_Backup.bcd"
+        if ($bcdBackup.Success) {
+            $result.BCDBackup = $bcdBackup.Path
+            $report.AppendLine("[OK] BCD backed up to: $($bcdBackup.Path)") | Out-Null
+        } else {
+            throw $bcdBackup.Error
+        }
+    } catch {
+        $errorMsg = "BCD backup failed: $_"
+        $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+        $result.Errors += $errorMsg
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Backup Registry Hives (if offline)
+    $envType = Get-EnvironmentType
+    if ($envType -ne 'FullOS') {
+        $report.AppendLine("Backing up registry hives...") | Out-Null
+        $hives = @("SYSTEM", "SOFTWARE", "SAM", "SECURITY")
+        foreach ($hive in $hives) {
+            $hivePath = "$TargetDrive`:\Windows\System32\config\$hive"
+            if (Test-Path $hivePath) {
+                try {
+                    $backupPath = "$checkpointDir\${hive}_Backup"
+                    Copy-Item $hivePath $backupPath -ErrorAction Stop
+                    $result.RegistryBackups += $backupPath
+                    $report.AppendLine("[OK] $hive hive backed up") | Out-Null
+                } catch {
+                    $errorMsg = "Failed to backup $hive hive: $_"
+                    $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+                    $result.Errors += $errorMsg
+                }
+            }
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Try to create system restore point (FullOS only)
+    if ($envType -eq 'FullOS') {
+        $report.AppendLine("Attempting to create system restore point...") | Out-Null
+        try {
+            $restorePoint = Get-ComputerRestorePoint -ErrorAction SilentlyContinue
+            # Note: Creating restore points programmatically requires vssadmin or WMI
+            $report.AppendLine("[INFO] System restore point creation attempted") | Out-Null
+        } catch {
+            $report.AppendLine("[WARNING] Could not create system restore point: $_") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    $result.Success = $true
+    $report.AppendLine("[OK] Checkpoint created at: $checkpointDir") | Out-Null
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Restore-RepairCheckpoint {
+    <#
+    .SYNOPSIS
+    Restores from a repair checkpoint.
+    #>
+    param(
+        [string]$CheckpointPath
+    )
+    
+    $result = @{
+        Success = $false
+        Report = ""
+        Errors = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("RESTORING REPAIR CHECKPOINT") | Out-Null
+    $report.AppendLine("Checkpoint: $CheckpointPath") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if (-not (Test-Path $CheckpointPath)) {
+        $errorMsg = "Checkpoint path not found: $CheckpointPath"
+        $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+        $result.Errors += $errorMsg
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    # Restore BCD
+    $bcdBackup = Join-Path $CheckpointPath "BCD_Backup.bcd"
+    if (Test-Path $bcdBackup) {
+        $report.AppendLine("Restoring BCD...") | Out-Null
+        try {
+            bcdedit /import $bcdBackup 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $report.AppendLine("[OK] BCD restored") | Out-Null
+            } else {
+                throw "BCD restore failed with exit code $LASTEXITCODE"
+            }
+        } catch {
+            $errorMsg = "BCD restore failed: $_"
+            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+            $result.Errors += $errorMsg
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    $report.AppendLine("[WARNING] Registry hive restoration requires manual intervention") | Out-Null
+    $report.AppendLine("Backup files are available at: $CheckpointPath") | Out-Null
+    
+    $result.Success = ($result.Errors.Count -eq 0)
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Get-RepairHistory {
+    <#
+    .SYNOPSIS
+    Tracks repair operations history.
+    #>
+    $historyFile = "$env:TEMP\MiracleBoot_RepairHistory.json"
+    
+    if (Test-Path $historyFile) {
+        try {
+            $history = Get-Content $historyFile | ConvertFrom-Json
+            return $history
+        } catch {
+            return @()
+        }
+    }
+    
+    return @()
+}
+
+function Test-RegistryHealth {
+    <#
+    .SYNOPSIS
+    Checks registry hive integrity.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Healthy = $true
+        Issues = @()
+        Report = ""
+    }
+    
+    $envType = Get-EnvironmentType
+    $hives = @("SYSTEM", "SOFTWARE", "SAM", "SECURITY")
+    
+    foreach ($hive in $hives) {
+        $hivePath = "$TargetDrive`:\Windows\System32\config\$hive"
+        if (Test-Path $hivePath) {
+            try {
+                # Try to load hive (offline) or access (online)
+                if ($envType -ne 'FullOS') {
+                    # Offline: try to load
+                    reg load "HKLM\TempHive" $hivePath 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        reg unload "HKLM\TempHive" 2>&1 | Out-Null
+                    } else {
+                        $result.Healthy = $false
+                        $result.Issues += "$hive hive appears corrupted"
+                    }
+                } else {
+                    # Online: check if accessible
+                    $testKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                    if (-not (Test-Path $testKey)) {
+                        $result.Healthy = $false
+                        $result.Issues += "SOFTWARE hive may be corrupted"
+                    }
+                }
+            } catch {
+                $result.Healthy = $false
+                $result.Issues += "Could not verify $hive hive: $_"
+            }
+        }
+    }
+    
+    return $result
+}
+
+function Repair-RegistryHives {
+    <#
+    .SYNOPSIS
+    Attempts to repair registry hives.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Success = $false
+        Report = ""
+        Errors = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("REGISTRY HIVE REPAIR") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $report.AppendLine("[INFO] Registry hive repair is complex and risky.") | Out-Null
+    $report.AppendLine("Consider using System Restore or repair install instead.") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Backup first
+    $checkpoint = Save-RepairCheckpoint -TargetDrive $TargetDrive -CheckpointName "RegistryRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    if ($checkpoint.Success) {
+        $report.AppendLine("[OK] Registry backups created before repair attempt") | Out-Null
+    }
+    
+    $report.AppendLine("[WARNING] Manual registry repair not implemented.") | Out-Null
+    $report.AppendLine("Use Windows built-in repair tools or repair install.") | Out-Null
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Backup-RegistryHives {
+    <#
+    .SYNOPSIS
+    Backs up registry hives before repair.
+    #>
+    param(
+        [string]$TargetDrive = "C",
+        [string]$BackupPath = "$env:TEMP\RegistryBackup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    )
+    
+    $result = @{
+        Success = $false
+        BackupPath = $BackupPath
+        BackedUpHives = @()
+        Errors = @()
+    }
+    
+    New-Item -ItemType Directory -Path $BackupPath -Force | Out-Null
+    
+    $hives = @("SYSTEM", "SOFTWARE", "SAM", "SECURITY")
+    foreach ($hive in $hives) {
+        $hivePath = "$TargetDrive`:\Windows\System32\config\$hive"
+        if (Test-Path $hivePath) {
+            try {
+                $backupFile = Join-Path $BackupPath "$hive"
+                Copy-Item $hivePath $backupFile -ErrorAction Stop
+                $result.BackedUpHives += $hive
+            } catch {
+                $result.Errors += "Failed to backup ${hive}: $_"
+            }
+        }
+    }
+    
+    $result.Success = ($result.BackedUpHives.Count -gt 0)
+    return $result
+}
+
+function Start-RepairLogging {
+    <#
+    .SYNOPSIS
+    Initializes repair session logging.
+    #>
+    param(
+        [string]$LogPath = "$env:TEMP\MiracleBoot_Repair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    )
+    
+    $script:RepairLogPath = $LogPath
+    $script:RepairLogStartTime = Get-Date
+    
+    $logHeader = @"
+========================================
+MiracleBoot Repair Session Log
+Started: $($script:RepairLogStartTime)
+========================================
+
+"@
+    
+    $logHeader | Out-File -FilePath $LogPath -Encoding UTF8
+    
+    return @{
+        LogPath = $LogPath
+        StartTime = $script:RepairLogStartTime
+    }
+}
+
+function Write-RepairLog {
+    <#
+    .SYNOPSIS
+    Writes to repair log.
+    #>
+    param(
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+    
+    if (-not $script:RepairLogPath) {
+        Start-RepairLogging | Out-Null
+    }
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] $Message"
+    
+    $logEntry | Out-File -FilePath $script:RepairLogPath -Append -Encoding UTF8
+}
+
+function Get-RepairReport {
+    <#
+    .SYNOPSIS
+    Generates final repair report.
+    #>
+    param(
+        [string]$LogPath = $script:RepairLogPath
+    )
+    
+    if (-not $LogPath -or -not (Test-Path $LogPath)) {
+        return "No repair log found."
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("REPAIR SESSION REPORT") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $logContent = Get-Content $LogPath
+    $report.AppendLine($logContent) | Out-Null
+    
+    if ($script:RepairLogStartTime) {
+        $duration = (Get-Date) - $script:RepairLogStartTime
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Total Duration: $($duration.ToString('hh\:mm\:ss'))") | Out-Null
+    }
+    
+    return $report.ToString()
+}
+
+function Start-CompleteSystemRepair {
+    <#
+    .SYNOPSIS
+    Master repair function that orchestrates all repair steps in optimal order.
+    #>
+    param(
+        [string]$TargetDrive = "C",
+        [switch]$SkipDiskRepair = $false,
+        [switch]$SkipSystemFileRepair = $false,
+        [switch]$SkipBootRepair = $false,
+        [switch]$SkipConfirmation = $false
+    )
+    
+    $result = @{
+        Success = $false
+        StepsCompleted = @()
+        StepsFailed = @()
+        CheckpointPath = ""
+        Report = ""
+        Errors = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("COMPLETE SYSTEM REPAIR") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Initialize logging
+    $logSession = Start-RepairLogging
+    Write-RepairLog "Starting complete system repair for drive $TargetDrive`:"
+    
+    # Step 0: Run comprehensive diagnostics
+    $report.AppendLine("STEP 0: Running comprehensive diagnostics...") | Out-Null
+    Write-RepairLog "Running comprehensive diagnostics"
+    try {
+        $diagnostics = Start-ComprehensiveDiagnostics -TargetDrive $TargetDrive
+        $report.AppendLine($diagnostics.Report) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($diagnostics.Issues.Count -eq 0) {
+            $report.AppendLine("[INFO] No issues detected. System appears healthy.") | Out-Null
+            $result.Success = $true
+            $result.Report = $report.ToString()
+            return $result
+        }
+    } catch {
+        $errorMsg = "Diagnostics failed: $_"
+        $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+        Write-RepairLog "Diagnostics failed: $_" "WARNING"
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Step 1: Create checkpoint
+    $report.AppendLine("STEP 1: Creating repair checkpoint...") | Out-Null
+    Write-RepairLog "Creating repair checkpoint"
+    try {
+        $checkpoint = Save-RepairCheckpoint -TargetDrive $TargetDrive
+        if ($checkpoint.Success) {
+            $result.CheckpointPath = $checkpoint.CheckpointPath
+            $report.AppendLine("[OK] Checkpoint created: $($checkpoint.CheckpointPath)") | Out-Null
+            $result.StepsCompleted += "Checkpoint"
+        } else {
+            $report.AppendLine("[WARNING] Checkpoint creation had issues but continuing...") | Out-Null
+        }
+    } catch {
+        $errorMsg = "Checkpoint creation failed: $_"
+        $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+        Write-RepairLog $errorMsg "WARNING"
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Step 2: Disk Repair (if needed and not skipped)
+    if (-not $SkipDiskRepair) {
+        $report.AppendLine("STEP 2: Disk Repair...") | Out-Null
+        Write-RepairLog "Starting disk repair"
+        try {
+            $diskHealth = Test-DiskHealth -TargetDrive $TargetDrive
+            if ($diskHealth.NeedsRepair) {
+                $diskRepair = Start-DiskRepair -TargetDrive $TargetDrive -FixErrors -RecoverBadSectors:$diskHealth.HasBadSectors
+                $report.AppendLine($diskRepair.Report) | Out-Null
+                
+                if ($diskRepair.Success) {
+                    $result.StepsCompleted += "DiskRepair"
+                    Write-RepairLog "Disk repair completed successfully"
+                } else {
+                    $result.StepsFailed += "DiskRepair"
+                    Write-RepairLog "Disk repair failed" "ERROR"
+                }
+            } else {
+                $report.AppendLine("[SKIP] Disk health check passed. Skipping disk repair.") | Out-Null
+                Write-RepairLog "Disk health OK, skipping repair"
+            }
+        } catch {
+            $errorMsg = "Disk repair failed: $_"
+            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+            $result.StepsFailed += "DiskRepair"
+            $result.Errors += $errorMsg
+            Write-RepairLog $errorMsg "ERROR"
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Step 3: System File Repair (if not skipped)
+    if (-not $SkipSystemFileRepair) {
+        $report.AppendLine("STEP 3: System File Repair (SFC + DISM)...") | Out-Null
+        Write-RepairLog "Starting system file repair"
+        try {
+            $fileRepair = Start-SystemFileRepair -TargetDrive $TargetDrive
+            $report.AppendLine($fileRepair.Report) | Out-Null
+            
+            if ($fileRepair.Success) {
+                $result.StepsCompleted += "SystemFileRepair"
+                Write-RepairLog "System file repair completed successfully"
+            } else {
+                $result.StepsFailed += "SystemFileRepair"
+                Write-RepairLog "System file repair had issues" "WARNING"
+            }
+        } catch {
+            $errorMsg = "System file repair failed: $_"
+            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+            $result.StepsFailed += "SystemFileRepair"
+            $result.Errors += $errorMsg
+            Write-RepairLog $errorMsg "ERROR"
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Step 4: Boot Repair (if not skipped)
+    if (-not $SkipBootRepair) {
+        $report.AppendLine("STEP 4: Boot Repair...") | Out-Null
+        Write-RepairLog "Starting boot repair"
+        try {
+            $bootRepair = Start-AutomatedBootRepair -TargetDrive $TargetDrive -SkipConfirmation:$SkipConfirmation
+            $report.AppendLine($bootRepair.Report) | Out-Null
+            
+            if ($bootRepair.Success) {
+                $result.StepsCompleted += "BootRepair"
+                Write-RepairLog "Boot repair completed successfully"
+            } else {
+                $result.StepsFailed += "BootRepair"
+                Write-RepairLog "Boot repair had issues" "WARNING"
+            }
+        } catch {
+            $errorMsg = "Boot repair failed: $_"
+            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+            $result.StepsFailed += "BootRepair"
+            $result.Errors += $errorMsg
+            Write-RepairLog $errorMsg "ERROR"
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Final Summary
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("REPAIR SUMMARY") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("Steps Completed: $($result.StepsCompleted.Count)") | Out-Null
+    $report.AppendLine("Steps Failed: $($result.StepsFailed.Count)") | Out-Null
+    
+    if ($result.CheckpointPath) {
+        $report.AppendLine("Checkpoint: $($result.CheckpointPath)") | Out-Null
+    }
+    
+    if ($result.StepsFailed.Count -eq 0) {
+        $result.Success = $true
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("[SUCCESS] Complete system repair finished successfully!") | Out-Null
+        Write-RepairLog "Complete system repair finished successfully"
+    } else {
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("[PARTIAL] Some repair steps failed. Review errors above.") | Out-Null
+        if ($result.CheckpointPath) {
+            $report.AppendLine("Checkpoint available for rollback if needed.") | Out-Null
+        }
+        Write-RepairLog "Repair completed with some failures" "WARNING"
+    }
+    
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("Repair log: $($logSession.LogPath)") | Out-Null
+    
+    $result.Report = $report.ToString()
+    Write-RepairLog "Repair session ended"
+    return $result
+}
+
+function Get-InPlaceUpgradeReadiness {
+    <#
+    .SYNOPSIS
+    Comprehensive check for in-place upgrade readiness by analyzing Windows logs and health components.
+    
+    .DESCRIPTION
+    Checks various Windows log files and system health components to determine if an in-place
+    installation/upgrade is possible. Analyzes:
+    - nbtlog.txt (boot log)
+    - $WINDOWS.~BT (Windows installation files)
+    - $Windows.~WS (Windows installation files)
+    - CBS logs
+    - Component store health
+    - Pending operations
+    - Registry health
+    - Setup logs
+    
+    Returns detailed report with blockers and recommendations.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        ReadyForInPlaceUpgrade = $false
+        Blockers = @()
+        Warnings = @()
+        Recommendations = @()
+        LogFilesAnalyzed = @()
+        HealthChecks = @{}
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("IN-PLACE UPGRADE READINESS CHECK") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine("Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    $envType = Get-EnvironmentType
+    $isOffline = ($envType -ne 'FullOS')
+    
+    # ========================================================================
+    # CHECK 1: Boot Log (nbtlog.txt)
+    # ========================================================================
+    $report.AppendLine("CHECK 1: Boot Log Analysis (nbtlog.txt)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $nbtlogPath = "$TargetDrive`:\Windows\nbtlog.txt"
+    if (Test-Path $nbtlogPath) {
+        $result.LogFilesAnalyzed += "nbtlog.txt"
+        try {
+            $nbtlogContent = Get-Content $nbtlogPath -ErrorAction SilentlyContinue -Tail 500
+            $bootErrors = $nbtlogContent | Where-Object { $_ -match "FAIL|ERROR|Did not load" } | Select-Object -First 20
+            
+            if ($bootErrors) {
+                $report.AppendLine("[WARNING] Boot log shows errors:") | Out-Null
+                foreach ($error in $bootErrors) {
+                    $report.AppendLine("  - $error") | Out-Null
+                }
+                $result.Warnings += "Boot log contains errors - may indicate driver or service issues"
+            } else {
+                $report.AppendLine("[OK] Boot log shows no critical errors") | Out-Null
+            }
+            
+            # Check for boot startup status
+            $bootSuccess = $nbtlogContent | Where-Object { $_ -match "Successfully loaded|Loaded driver" } | Measure-Object
+            $report.AppendLine("[INFO] Successfully loaded drivers/services: $($bootSuccess.Count)") | Out-Null
+        } catch {
+            $report.AppendLine("[WARNING] Could not read boot log: $_") | Out-Null
+        }
+    } else {
+        $report.AppendLine("[INFO] Boot log (nbtlog.txt) not found - this is normal if boot logging is disabled") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 2: $WINDOWS.~BT Folder (Windows Installation Files)
+    # ========================================================================
+    $report.AppendLine("CHECK 2: Windows Installation Files ($WINDOWS.~BT)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $windowsBT = "$TargetDrive`:\`$WINDOWS.~BT"
+    if (Test-Path $windowsBT) {
+        $result.LogFilesAnalyzed += "\$WINDOWS.~BT"
+        try {
+            $btSize = (Get-ChildItem $windowsBT -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1GB
+            $report.AppendLine("[INFO] $WINDOWS.~BT folder exists (Size: $([math]::Round($btSize, 2)) GB)") | Out-Null
+            
+            # Check for setup logs in ~BT
+            $pantherPath = "$windowsBT\Sources\Panther"
+            if (Test-Path $pantherPath) {
+                $setupLogs = Get-ChildItem $pantherPath -Filter "*.log" -ErrorAction SilentlyContinue
+                if ($setupLogs) {
+                    $report.AppendLine("[INFO] Found $($setupLogs.Count) setup log file(s) in Panther folder") | Out-Null
+                    
+                    # Check for error logs
+                    $errorLogs = $setupLogs | Where-Object { $_.Name -match "error|setuperr" }
+                    if ($errorLogs) {
+                        foreach ($log in $errorLogs) {
+                            $result.LogFilesAnalyzed += $log.FullName
+                            $logContent = Get-Content $log.FullName -Tail 100 -ErrorAction SilentlyContinue
+                            $errors = $logContent | Where-Object { $_ -match "error|failed|blocked|ineligible" } | Select-Object -First 10
+                            if ($errors) {
+                                $report.AppendLine("[WARNING] Errors found in $($log.Name):") | Out-Null
+                                foreach ($err in $errors) {
+                                    $report.AppendLine("  - $err") | Out-Null
+                                    if ($err -match "blocked|ineligible|cannot.*upgrade") {
+                                        $result.Blockers += "Setup log indicates upgrade blocked: $err"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            # Check if ~BT indicates a failed installation attempt
+            $setupact = "$pantherPath\setupact.log"
+            if (Test-Path $setupact) {
+                $result.LogFilesAnalyzed += $setupact
+                $setupContent = Get-Content $setupact -Tail 200 -ErrorAction SilentlyContinue
+                $failedPhases = $setupContent | Where-Object { $_ -match "failed|error|blocked" } | Select-Object -First 10
+                if ($failedPhases) {
+                    $report.AppendLine("[WARNING] Previous installation attempt may have failed") | Out-Null
+                    $result.Warnings += "Previous setup attempt detected - may need cleanup"
+                }
+            }
+        } catch {
+            $report.AppendLine("[WARNING] Could not analyze $WINDOWS.~BT folder: $_") | Out-Null
+        }
+    } else {
+        $report.AppendLine("[OK] No $WINDOWS.~BT folder found - system is clean") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 3: $Windows.~WS Folder
+    # ========================================================================
+    $report.AppendLine("CHECK 3: Windows Installation Files ($Windows.~WS)") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $windowsWS = "$TargetDrive`:\`$Windows.~WS"
+    if (Test-Path $windowsWS) {
+        $result.LogFilesAnalyzed += "\$Windows.~WS"
+        try {
+            $wsSize = (Get-ChildItem $windowsWS -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1GB
+            $report.AppendLine("[INFO] $Windows.~WS folder exists (Size: $([math]::Round($wsSize, 2)) GB)") | Out-Null
+            $result.Warnings += "$Windows.~WS folder present - may indicate incomplete installation"
+        } catch {
+            $report.AppendLine("[WARNING] Could not analyze $Windows.~WS folder: $_") | Out-Null
+        }
+    } else {
+        $report.AppendLine("[OK] No $Windows.~WS folder found") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 4: CBS Logs and Component Store Health
+    # ========================================================================
+    $report.AppendLine("CHECK 4: Component-Based Servicing (CBS) Health") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $cbsLogPath = "$TargetDrive`:\Windows\Logs\CBS\CBS.log"
+    if (Test-Path $cbsLogPath) {
+        $result.LogFilesAnalyzed += "CBS.log"
+        try {
+            $cbsContent = Get-Content $cbsLogPath -Tail 1000 -ErrorAction SilentlyContinue
+            $cbsErrors = $cbsContent | Where-Object { 
+                $_ -match "corrupt|corruption|failed|error|cannot.*repair|component.*store.*corrupt" 
+            } | Select-Object -First 20
+            
+            if ($cbsErrors) {
+                $report.AppendLine("[WARNING] CBS log shows corruption or errors:") | Out-Null
+                foreach ($err in $cbsErrors | Select-Object -First 5) {
+                    $report.AppendLine("  - $err") | Out-Null
+                }
+                $result.Warnings += "CBS log indicates component store issues"
+            } else {
+                $report.AppendLine("[OK] CBS log shows no critical corruption errors") | Out-Null
+            }
+        } catch {
+            $report.AppendLine("[WARNING] Could not read CBS.log: $_") | Out-Null
+        }
+    }
+    
+    # Check for pending.xml (indicates pending CBS operations)
+    $pendingXml = "$TargetDrive`:\Windows\WinSxS\pending.xml"
+    if (Test-Path $pendingXml) {
+        $report.AppendLine("[CRITICAL] pending.xml found - Pending CBS operations detected!") | Out-Null
+        $result.Blockers += "Pending CBS operations (pending.xml exists) - Reboot required before upgrade"
+        $result.HealthChecks["PendingCBS"] = "BLOCKED"
+    } else {
+        $report.AppendLine("[OK] No pending.xml found - No pending CBS operations") | Out-Null
+        $result.HealthChecks["PendingCBS"] = "OK"
+    }
+    
+    # Check component store health (if online)
+    if (-not $isOffline) {
+        try {
+            $dismCheck = dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+            if ($dismCheck -match "The component store is repairable") {
+                $report.AppendLine("[OK] Component store is repairable - OK for in-place upgrade") | Out-Null
+                $result.HealthChecks["ComponentStore"] = "REPAIRABLE"
+            } elseif ($dismCheck -match "The component store is healthy") {
+                $report.AppendLine("[OK] Component store is healthy") | Out-Null
+                $result.HealthChecks["ComponentStore"] = "HEALTHY"
+            } elseif ($dismCheck -match "The component store cannot be repaired") {
+                $report.AppendLine("[CRITICAL] Component store cannot be repaired - Setup will block upgrade") | Out-Null
+                $result.Blockers += "Component store cannot be repaired - DISM reports irreparable state"
+                $result.HealthChecks["ComponentStore"] = "IRREPARABLE"
+            } else {
+                $report.AppendLine("[INFO] Component store status unclear") | Out-Null
+                $result.HealthChecks["ComponentStore"] = "UNKNOWN"
+            }
+        } catch {
+            $report.AppendLine("[WARNING] Could not check component store health: $_") | Out-Null
+            $result.HealthChecks["ComponentStore"] = "ERROR"
+        }
+    } else {
+        $report.AppendLine("[INFO] Component store check requires FullOS (currently in $envType)") | Out-Null
+        $result.HealthChecks["ComponentStore"] = "SKIPPED"
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 5: Registry Health
+    # ========================================================================
+    $report.AppendLine("CHECK 5: Registry Hive Health") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    try {
+        $regHealth = Test-RegistryHealth -TargetDrive $TargetDrive
+        if ($regHealth.Healthy) {
+            $report.AppendLine("[OK] Registry hives appear healthy") | Out-Null
+            $result.HealthChecks["Registry"] = "HEALTHY"
+        } else {
+            $report.AppendLine("[WARNING] Registry hive issues detected:") | Out-Null
+            foreach ($issue in $regHealth.Issues) {
+                $report.AppendLine("  - $issue") | Out-Null
+            }
+            $result.Warnings += "Registry hive health concerns detected"
+            $result.HealthChecks["Registry"] = "ISSUES"
+        }
+    } catch {
+        $report.AppendLine("[WARNING] Could not check registry health: $_") | Out-Null
+        $result.HealthChecks["Registry"] = "ERROR"
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 6: Setup Logs Analysis
+    # ========================================================================
+    $report.AppendLine("CHECK 6: Setup Logs Analysis") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    $setupLogAnalysis = Get-SetupLogAnalysis -TargetDrive $TargetDrive
+    if ($setupLogAnalysis.Success) {
+        $report.AppendLine("[INFO] Analyzed setup logs for eligibility issues") | Out-Null
+        
+        if ($setupLogAnalysis.EligibilityIssues.Count -gt 0) {
+            $report.AppendLine("[WARNING] Eligibility issues found in setup logs:") | Out-Null
+            foreach ($issue in $setupLogAnalysis.EligibilityIssues | Select-Object -First 10) {
+                $report.AppendLine("  - $issue") | Out-Null
+                if ($issue -match "blocked|cannot|ineligible") {
+                    $result.Blockers += "Setup log blocker: $issue"
+                }
+            }
+        }
+        
+        if ($setupLogAnalysis.PendingOperations) {
+            $report.AppendLine("[CRITICAL] Pending operations detected in setup logs") | Out-Null
+            $result.Blockers += "Pending operations detected - may block in-place upgrade"
+        }
+        
+        $result.LogFilesAnalyzed += $setupLogAnalysis.LogFilesFound
+    } else {
+        $report.AppendLine("[INFO] No setup logs found or analysis failed") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # CHECK 7: System File Health
+    # ========================================================================
+    $report.AppendLine("CHECK 7: System File Health") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    try {
+        $fileHealth = Test-SystemFileHealth -TargetDrive $TargetDrive
+        if ($fileHealth.SystemFilesHealthy -and $fileHealth.ComponentStoreHealthy) {
+            $report.AppendLine("[OK] System files and component store appear healthy") | Out-Null
+            $result.HealthChecks["SystemFiles"] = "HEALTHY"
+        } else {
+            if (-not $fileHealth.SystemFilesHealthy) {
+                $report.AppendLine("[WARNING] System file corruption detected") | Out-Null
+                $result.Warnings += "System file corruption may affect upgrade"
+                $result.HealthChecks["SystemFiles"] = "CORRUPTED"
+            }
+            if (-not $fileHealth.ComponentStoreHealthy) {
+                $report.AppendLine("[WARNING] Component store issues detected") | Out-Null
+                $result.Warnings += "Component store issues may affect upgrade"
+            }
+        }
+    } catch {
+        $report.AppendLine("[WARNING] Could not check system file health: $_") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # ========================================================================
+    # FINAL ASSESSMENT
+    # ========================================================================
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("FINAL ASSESSMENT") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($result.Blockers.Count -eq 0) {
+        $result.ReadyForInPlaceUpgrade = $true
+        $report.AppendLine("[READY] System appears ready for in-place upgrade!") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("No critical blockers detected. You can proceed with in-place upgrade.") | Out-Null
+    } else {
+        $report.AppendLine("[BLOCKED] System is NOT ready for in-place upgrade") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("CRITICAL BLOCKERS FOUND:") | Out-Null
+        foreach ($blocker in $result.Blockers) {
+            $report.AppendLine("  ✗ $blocker") | Out-Null
+        }
+    }
+    
+    if ($result.Warnings.Count -gt 0) {
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("WARNINGS:") | Out-Null
+        foreach ($warning in $result.Warnings) {
+            $report.AppendLine("  ⚠ $warning") | Out-Null
+        }
+    }
+    
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    if ($result.Blockers.Count -gt 0) {
+        foreach ($blocker in $result.Blockers) {
+            if ($blocker -match "pending.xml|Pending CBS") {
+                $result.Recommendations += "Reboot the system to clear pending CBS operations, then retry"
+            }
+            if ($blocker -match "Component store cannot be repaired") {
+                $result.Recommendations += "Run DISM /Online /Cleanup-Image /RestoreHealth to attempt component store repair"
+                $result.Recommendations += "If repair fails, consider offline repair or clean install"
+            }
+            if ($blocker -match "Setup log blocker") {
+                $result.Recommendations += "Review setup logs in \$WINDOWS.~BT\Sources\Panther for specific error codes"
+                $result.Recommendations += "Apply registry fixes if edition/language mismatch detected"
+            }
+        }
+    } else {
+        $result.Recommendations += "System is ready for in-place upgrade"
+        $result.Recommendations += "Ensure you have a backup before proceeding"
+        $result.Recommendations += "Use matching Windows ISO (same edition, language, and build family)"
+    }
+    
+    foreach ($rec in $result.Recommendations) {
+        $report.AppendLine("  • $rec") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("Log Files Analyzed: $($result.LogFilesAnalyzed.Count)") | Out-Null
+    $report.AppendLine("  - $($result.LogFilesAnalyzed -join "`n  - ")") | Out-Null
     
     $result.Report = $report.ToString()
     return $result

@@ -268,8 +268,9 @@ $XAML = @"
                     <Button Content="One-Click Registry Fixes" Height="35" Name="BtnOneClickFix" Background="#28a745" Foreground="White" Width="200" Margin="0,0,10,0"/>
                     <Button Content="Filter Driver Forensics" Height="35" Name="BtnFilterForensics" Background="#17a2b8" Foreground="White" Width="180" Margin="0,0,10,0"/>
                     <Button Content="Recommended Tools" Height="35" Name="BtnRecommendedTools" Background="#6c757d" Foreground="White" Width="160" Margin="0,0,10,0"/>
-                    <Button Content="Export In-Use Drivers" Height="35" Name="BtnExportDrivers" Background="#28a745" Foreground="White" Width="180" Margin="0,0,10,0"/>
-                    <Button Content="Generate Cleanup Script" Height="35" Name="BtnGenCleanupScript" Background="#ffc107" Foreground="Black" Width="180"/>
+                        <Button Content="Export In-Use Drivers" Height="35" Name="BtnExportDrivers" Background="#28a745" Foreground="White" Width="180" Margin="0,0,10,0"/>
+                        <Button Content="Generate Cleanup Script" Height="35" Name="BtnGenCleanupScript" Background="#ffc107" Foreground="Black" Width="180" Margin="0,0,10,0"/>
+                        <Button Content="In-Place Upgrade Readiness" Height="35" Name="BtnInPlaceReadiness" Background="#dc3545" Foreground="White" Width="200"/>
                     </StackPanel>
                 </StackPanel>
                 
@@ -609,13 +610,17 @@ $W.FindName("BtnBCD").Add_Click({
     try {
         # Force UI update immediately
         $W.Dispatcher.Invoke([action]{
-            Update-StatusBar -Message "Loading BCD entries..." -ShowProgress
+            Update-StatusBar -Message "Loading BCD Entries..." -ShowProgress
         }, [System.Windows.Threading.DispatcherPriority]::Render)
+        [System.Windows.Forms.Application]::DoEvents()
         
         $rawBcd = bcdedit /enum
         $W.FindName("BCDBox").Text = $rawBcd
         
-        Update-StatusBar -Message "Parsing BCD entries..." -ShowProgress
+        $W.Dispatcher.Invoke([action]{
+            Update-StatusBar -Message "Parsing BCD entries..." -ShowProgress
+        }, [System.Windows.Threading.DispatcherPriority]::Render)
+        [System.Windows.Forms.Application]::DoEvents()
         
         # Get default boot entry ID
         $defaultEntryId = Get-BCDDefaultEntryId
@@ -624,7 +629,10 @@ $W.FindName("BtnBCD").Add_Click({
         $entries = Get-BCDEntriesParsed
         $script:BCDEntriesCache = $entries
         
-        Update-StatusBar -Message "Processing boot entries..." -ShowProgress
+        $W.Dispatcher.Invoke([action]{
+            Update-StatusBar -Message "Processing boot entries..." -ShowProgress
+        }, [System.Windows.Threading.DispatcherPriority]::Render)
+        [System.Windows.Forms.Application]::DoEvents()
         
         $bcdItems = @()
         foreach ($entry in $entries) {
@@ -652,7 +660,10 @@ $W.FindName("BtnBCD").Add_Click({
             }
         }
         
-        Update-StatusBar -Message "Updating BCD list..." -ShowProgress
+        $W.Dispatcher.Invoke([action]{
+            Update-StatusBar -Message "Updating BCD list..." -ShowProgress
+        }, [System.Windows.Threading.DispatcherPriority]::Render)
+        [System.Windows.Forms.Application]::DoEvents()
         
         $W.FindName("BCDList").ItemsSource = $bcdItems
         
@@ -663,7 +674,10 @@ $W.FindName("BtnBCD").Add_Click({
         $W.FindName("TxtTimeout").Text = $timeout
         $W.FindName("SimTimeout").Text = "Seconds until auto-start: $timeout"
         
-        Update-StatusBar -Message "Checking for duplicate entries..." -ShowProgress
+        $W.Dispatcher.Invoke([action]{
+            Update-StatusBar -Message "Checking for duplicate entries..." -ShowProgress
+        }, [System.Windows.Threading.DispatcherPriority]::Render)
+        [System.Windows.Forms.Application]::DoEvents()
         
         # Check for duplicates
         $duplicates = Find-DuplicateBCEEntries
@@ -2056,6 +2070,75 @@ $W.FindName("BtnGenCleanupScript").Add_Click({
         } catch {
             [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
         }
+    }
+})
+
+$W.FindName("BtnInPlaceReadiness").Add_Click({
+    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+    $drive = "C"
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    Update-StatusBar -Message "Running in-place upgrade readiness check..." -ShowProgress
+    $W.FindName("LogAnalysisBox").Text = "Running comprehensive in-place upgrade readiness check...`n`n"
+    $W.FindName("LogAnalysisBox").Text += "Analyzing:`n"
+    $W.FindName("LogAnalysisBox").Text += "  - Boot log (nbtlog.txt)`n"
+    $W.FindName("LogAnalysisBox").Text += "  - Windows installation files (`$WINDOWS.~BT, `$Windows.~WS)`n"
+    $W.FindName("LogAnalysisBox").Text += "  - CBS logs and component store`n"
+    $W.FindName("LogAnalysisBox").Text += "  - Registry health`n"
+    $W.FindName("LogAnalysisBox").Text += "  - Setup logs`n"
+    $W.FindName("LogAnalysisBox").Text += "  - System file health`n`n"
+    $W.FindName("LogAnalysisBox").Text += "This may take a few minutes...`n`n"
+    
+    try {
+        $readiness = Get-InPlaceUpgradeReadiness -TargetDrive $drive
+        
+        $output = $readiness.Report
+        
+        # Add visual status indicator
+        $output += "`n`n"
+        $output += "=" * 80 + "`n"
+        if ($readiness.ReadyForInPlaceUpgrade) {
+            $output += "STATUS: ✓ READY FOR IN-PLACE UPGRADE`n"
+        } else {
+            $output += "STATUS: ✗ BLOCKED - NOT READY FOR IN-PLACE UPGRADE`n"
+            $output += "BLOCKERS FOUND: $($readiness.Blockers.Count)`n"
+        }
+        $output += "=" * 80 + "`n"
+        
+        $W.FindName("LogAnalysisBox").Text = $output
+        
+        if ($readiness.ReadyForInPlaceUpgrade) {
+            Update-StatusBar -Message "System is ready for in-place upgrade" -HideProgress
+            [System.Windows.MessageBox]::Show(
+                "System appears ready for in-place upgrade!`n`nNo critical blockers detected.`n`nReview the detailed report for any warnings.",
+                "Ready for In-Place Upgrade",
+                "OK",
+                "Information"
+            )
+        } else {
+            Update-StatusBar -Message "System is NOT ready - $($readiness.Blockers.Count) blocker(s) found" -HideProgress
+            $blockerList = $readiness.Blockers -join "`n  • "
+            [System.Windows.MessageBox]::Show(
+                "System is NOT ready for in-place upgrade.`n`nBLOCKERS:`n  • $blockerList`n`nReview the detailed report for recommendations.",
+                "Blockers Detected",
+                "OK",
+                "Warning"
+            )
+        }
+    } catch {
+        Update-StatusBar -Message "Error during readiness check: $_" -HideProgress
+        $W.FindName("LogAnalysisBox").Text = "ERROR: Failed to run in-place upgrade readiness check:`n`n$_"
+        [System.Windows.MessageBox]::Show(
+            "Error running readiness check: $_",
+            "Error",
+            "OK",
+            "Error"
+        )
     }
 })
 
