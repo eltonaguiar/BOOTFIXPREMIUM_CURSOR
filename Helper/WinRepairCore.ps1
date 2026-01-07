@@ -2339,19 +2339,19 @@ function Get-OSInfo {
 
 function Get-UnofficialRepairTips {
     $tips = @"
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
   UNOFFICIAL REPAIR INSTALLATION TIPS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 ⚠️  WARNING: These methods are NOT officially recommended by Microsoft and 
    may carry risk. Proceed at your own discretion. These steps are community-
    sourced workarounds for restoring system integrity without a clean wipe.
    These tips prioritize keeping your files and software intact.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 1: Windows 11 Cloud Repair (Hidden Feature)
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Windows 11 (22H2+) built-in cloud repair tool - more reliable than 
          "Reset this PC" because it downloads a fresh, verified image from 
          Microsoft specifically to repair system files.
@@ -2367,10 +2367,10 @@ Why it's better: Performs a repair install WITHOUT needing to download an ISO
 
 Outcome: Cloud-based repair install that keeps your files and apps intact.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 2: The "In-Place" Upgrade Repair (Standard Method)
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Refresh Windows system files while keeping all apps, settings, and 
          personal files.
 
@@ -2385,10 +2385,10 @@ Instructions:
 Outcome: Overwrites corrupted system DLLs and registry hives with fresh copies 
          while leaving the Users and Program Files folders intact.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 3: The "Product Server" Compatibility Bypass (Force Command)
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Uses a command-line switch to force Windows Setup to ignore certain 
          version/edition mismatches that usually block an In-Place Upgrade.
 
@@ -2405,10 +2405,10 @@ Outcome: This often bypasses the "You cannot keep your files" restriction on
 ⚠️  Note: This works on some Windows versions but not all. Test in a non-
    critical environment first.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 4: Registry "EditionID" Override
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Tricks the installer into thinking the current OS is a version it 
          can upgrade/repair.
 
@@ -2425,10 +2425,10 @@ Outcome: Useful when the system thinks it is a "Workstation" or "Enterprise"
 ⚠️  CRITICAL: Make a registry backup first! Run: reg export HKLM\SOFTWARE backup.reg
    Restore if needed: reg import backup.reg
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 5: The "Restore to Repair" Workflow
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Restores the bootloader just enough to enter the OS, specifically to 
          trigger an In-Place Repair.
 
@@ -2441,10 +2441,10 @@ Instructions:
 Outcome: Prioritizes software and file preservation by using the bootloader fix 
          as a "stepping stone" to a full system refresh.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 6: Offline Component Store Repair (DISM) - From WinPE/Hiren's
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Repair a non-booting Windows image using a healthy external source 
          (ISO/USB) from a WinPE environment like Hiren's BootCD.
 
@@ -2461,7 +2461,7 @@ The Goal: This fixes the system files enough to let you boot back into your
 
 Outcome: Repairs system files offline, allowing you to boot back into Windows 
          to complete the full in-place upgrade.
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Repair a non-booting Windows image using a healthy external source 
          (ISO/USB).
 
@@ -2478,10 +2478,10 @@ Outcome: Forces Windows to replace "staged" system files that are corrupted,
 Alternative (if install.wim not found):
    dism /Image:C:\ /Cleanup-Image /RestoreHealth /Source:D:\sources /LimitAccess
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 TIP 7: Manual Hive Injection
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Summary: Replace a corrupted SYSTEM registry hive with a backup.
 
 Instructions:
@@ -2499,12 +2499,12 @@ Outcome: Restores boot-critical registry keys if the "Inaccessible Boot Device"
 ⚠️  CRITICAL: Only attempt this if you have a recent backup of the SYSTEM hive.
    Incorrect registry restoration can make the system completely unbootable.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 PRO-TIP: Preserving Game Libraries on F: Drive
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 If you perform an In-Place Upgrade, Windows may "forget" that your Steam libraries 
 are on F:. To fix this without redownloading:
 
@@ -2517,57 +2517,57 @@ are on F:. To fix this without redownloading:
 This works for Epic Games, GOG, and other game launchers too - just point them 
 to your existing library folders.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 DISCLAIMER:
 These methods are provided as-is for advanced users. Always backup critical 
 data before attempting repairs. Microsoft Support should be consulted for 
 production systems or critical data scenarios.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 "@
     return $tips
 }
 
 function Get-RecommendedTools {
     $tools = @"
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
   RECOMMENDED RECOVERY TOOLS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 If you are serious about maintaining your system (and your game libraries on 
 the F: drive), these are the "Must-Have" tools:
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Tool                          │ Purpose                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Hiren's BootCD PE             │ The ultimate Win10-based recovery           │
-│                                │ environment. Includes tools for             │
-│                                │ partitioning, driver injection, and         │
-│                                │ registry editing.                           │
-│                                │ Download: hirensbootcd.org                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Macrium Reflect (Rescue)      │ ESSENTIAL. Its "Fix Windows Boot           │
-│                                │ Problems" button is magic—it fixes          │
-│                                │ complex BCD/UEFI issues that bootrec       │
-│                                │ often fails at.                             │
-│                                │ Download: macrium.com/reflectfree          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Sergei Strelec's WinPE        │ A more "advanced" alternative to Hiren's.    │
-│                                │ It contains almost every diagnostic tool    │
-│                                │ known to man.                               │
-│                                │ Download: sergeistrelec.name               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Explorer++                    │ A lightweight file manager that often        │
-│                                │ works in WinPE when the standard file       │
-│                                │ explorer is buggy.                          │
-│                                │ Download: explorerplusplus.com             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Microsoft SaRA                │ (Support and Recovery Assistant) A          │
-│                                │ specialized tool that automates fixes for   │
-│                                │ Windows Activation and Office issues.       │
-│                                │ Download: aka.ms/SaRASetup                 │
-└─────────────────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------+
+| Tool                          | Purpose                                     |
++---------------------------------------------------------------+
+| Hiren's BootCD PE             | The ultimate Win10-based recovery           |
+|                                | environment. Includes tools for             |
+|                                | partitioning, driver injection, and         |
+|                                | registry editing.                           |
+|                                | Download: hirensbootcd.org                 |
++---------------------------------------------------------------+
+| Macrium Reflect (Rescue)      | ESSENTIAL. Its "Fix Windows Boot           |
+|                                | Problems" button is magic—it fixes          |
+|                                | complex BCD/UEFI issues that bootrec       |
+|                                | often fails at.                             |
+|                                | Download: macrium.com/reflectfree          |
++---------------------------------------------------------------+
+| Sergei Strelec's WinPE        | A more "advanced" alternative to Hiren's.    |
+|                                | It contains almost every diagnostic tool    |
+|                                | known to man.                               |
+|                                | Download: sergeistrelec.name               |
++---------------------------------------------------------------+
+| Explorer++                    | A lightweight file manager that often        |
+|                                | works in WinPE when the standard file       |
+|                                | explorer is buggy.                          |
+|                                | Download: explorerplusplus.com             |
++---------------------------------------------------------------+
+| Microsoft SaRA                | (Support and Recovery Assistant) A          |
+|                                | specialized tool that automates fixes for   |
+|                                | Windows Activation and Office issues.       |
+|                                | Download: aka.ms/SaRASetup                 |
++---------------------------------------------------------------+
 
 USAGE TIPS:
 • Keep Hiren's BootCD PE on a USB drive for emergency recovery
@@ -2575,7 +2575,7 @@ USAGE TIPS:
 • Use Sergei Strelec's WinPE for advanced registry and file system repairs
 • Explorer++ is invaluable when Windows Explorer crashes in recovery mode
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 "@
     return $tools
 }
@@ -3096,17 +3096,17 @@ function Export-DriverFiles {
         # Create instructions file
         $instructionsPath = Join-Path $DestinationFolder "INSTRUCTIONS.txt"
         $instructions = @"
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
   DRIVER EXTRACT INSTRUCTIONS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 This folder contains all driver files extracted from your working PC.
 Use these drivers to restore your system on new hardware or in recovery scenarios.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 FOR ACRONIS TRUE IMAGE UNIVERSAL RESTORE:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 1. Copy this entire folder to a USB drive or network location accessible from
    your recovery environment.
@@ -3119,10 +3119,10 @@ FOR ACRONIS TRUE IMAGE UNIVERSAL RESTORE:
 3. The folder structure is preserved - each driver is in its own subfolder
    as required by Acronis Universal Restore.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 FOR OTHER RECOVERY TOOLS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 - Windows Recovery Environment (WinRE):
   Use: drvload [path]\driver.inf
@@ -3133,10 +3133,10 @@ FOR OTHER RECOVERY TOOLS:
 - Manual Installation:
   Right-click INF files and select "Install"
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 IMPORTANT REMINDERS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 ⚠️  BACKUP TO CLOUD STORAGE:
    - Upload this folder to Google Drive, OneDrive, or Dropbox
@@ -3154,10 +3154,10 @@ IMPORTANT REMINDERS:
    - They may not work on significantly different hardware
    - Always test in a recovery environment before relying on them
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 FOLDER CONTENTS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 - Each subfolder contains a complete driver package (INF, SYS, CAT, DLL files)
 - Driver_Manifest.txt: List of all extracted drivers and their devices
@@ -3167,7 +3167,7 @@ Total Size: {0} MB
 Total Drivers: {1}
 Total Files: {2}
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 "@
         $instructionsFormatted = $instructions -f `
             [math]::Round($result.TotalSize/1MB, 2), `
@@ -4025,7 +4025,7 @@ REPAIR INSTALL FORCER - INSTRUCTIONS
 ===============================================================
 
 WHAT THIS DOES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Forces Windows Setup to perform a "repair-only" in-place upgrade that:
   - Reinstalls Windows system files
   - Rebuilds component store
@@ -4034,7 +4034,7 @@ Forces Windows Setup to perform a "repair-only" in-place upgrade that:
   - WITHOUT: Feature jump, Build bump, Edition change
 
 HARD REQUIREMENTS (MUST MATCH):
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   ✓ Edition: EXACT match (Pro → Pro, Home → Home)
   ✓ Architecture: EXACT (x64 → x64, x86 → x86)
   ✓ Build Family: SAME (19041 ↔ 19045 is OK, but 19041 ↔ 22000 is NOT)
@@ -4044,7 +4044,7 @@ HARD REQUIREMENTS (MUST MATCH):
   ✓ CBS: Not permanently locked
 
 STEP-BY-STEP PROCESS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 1. GET THE CORRECT ISO
    - Use Media Creation Tool for your Windows version
@@ -4081,7 +4081,7 @@ STEP-BY-STEP PROCESS:
    - SafeOS phase indicates repair is happening
 
 WHEN THIS WILL NOT WORK:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   ✗ Boot breaks before login
   ✗ SYSTEM or SOFTWARE registry hive is corrupt
   ✗ CBS is permanently pending
@@ -4090,14 +4090,14 @@ WHEN THIS WILL NOT WORK:
   ✗ Edition/Architecture/Build mismatch
 
 ALTERNATIVES IF REPAIR INSTALL FAILS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   - Offline servicing (DISM)
   - Side-by-side reinstall
   - Image restore from backup
   - Clean install (last resort)
 
 IMPORTANT NOTES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   - This is NOT a true "repair-only" button - it's a same-build in-place upgrade
   - Microsoft uses this exact method internally to fix "zombie Windows" machines
   - Always backup important data before proceeding
@@ -4380,7 +4380,7 @@ OFFLINE REPAIR INSTALL FORCER - INSTRUCTIONS
 ===============================================================
 
 WHAT THIS DOES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Forces Windows Setup to perform an in-place upgrade on a NON-BOOTING Windows
 installation by manipulating offline registry hives. This is an ADVANCED/HACKY
 method that tricks Setup into thinking it's upgrading a running OS.
@@ -4394,12 +4394,12 @@ This method:
   - Apps are preserved if registry and Program Files are intact
 
 ⚠️  WARNING: This is a GRAY-AREA NUCLEAR HACK
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 This method is documented only in advanced forums (MDL, Win-Raid).
 Use at your own risk. This is NOT officially supported by Microsoft.
 
 HARD REQUIREMENTS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   ✓ Must boot from WinPE or WinRE (SystemDrive = X:)
   ✓ Offline Windows installation must exist on target drive
   ✓ SYSTEM and SOFTWARE registry hives must be loadable
@@ -4407,14 +4407,14 @@ HARD REQUIREMENTS:
   ✓ Component store (WinSxS) should be readable
 
 WHEN THIS WORKS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   ✓ Registry is intact (can be loaded)
   ✓ Program Files structure is consistent
   ✓ Component store is readable
   ✓ Migration engine can access offline files
 
 WHEN THIS FAILS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   ✗ Pending CBS operations (pending.xml exists)
   ✗ Corrupt SOFTWARE registry hive
   ✗ Missing servicing metadata
@@ -4422,7 +4422,7 @@ WHEN THIS FAILS:
   ✗ Program Files structure is inconsistent
 
 STEP-BY-STEP PROCESS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 1. BOOT FROM WINPE/WINRE
    - Boot from Windows installation media
@@ -4462,7 +4462,7 @@ STEP-BY-STEP PROCESS:
    - SafeOS phase indicates repair is happening
 
 ADVANCED NOTES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   - Registry hives are automatically backed up before modification
   - Backup location is shown in output
   - If repair fails, you can restore hives from backup
@@ -4470,14 +4470,14 @@ ADVANCED NOTES:
   - This method bypasses normal Setup checks
 
 ALTERNATIVES IF THIS FAILS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   - Offline servicing with DISM
   - Side-by-side reinstall
   - Image restore from backup
   - Clean install (last resort)
 
 REFERENCES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
   - MDL Forum: Forced in-place upgrade against offline OS
   - Win-Raid: Windows repair install from WinPE discussion
   - This method is used by advanced users in recovery scenarios
@@ -4761,20 +4761,20 @@ function Open-ChatGPTHelp {
     $result.Message = "Browser not available. Use command-line method below."
     
     $instructions = @"
-═══════════════════════════════════════════════════════════════
+===============================================================
 CHATGPT HELP - COMMAND-LINE METHOD
-═══════════════════════════════════════════════════════════════
+===============================================================
 
 Browser is not available in this environment. Use one of these methods:
 
 METHOD 1: Use Another Device
-───────────────────────────────────────────────────────────────
+---------------------------------------------------------------
 1. On your phone or another computer, open: https://chat.openai.com
 2. Ask: "My Windows installation failed. How do I check setup logs?"
 3. Share the error codes you find in the logs
 
 METHOD 2: Use curl (if available)
-───────────────────────────────────────────────────────────────
+---------------------------------------------------------------
 curl -X POST https://api.openai.com/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -H "Authorization: Bearer YOUR_API_KEY" ^
@@ -4783,7 +4783,7 @@ curl -X POST https://api.openai.com/v1/chat/completions ^
 Note: Requires OpenAI API key (not free)
 
 METHOD 3: Manual URL
-───────────────────────────────────────────────────────────────
+---------------------------------------------------------------
 Write down this URL and open it on another device:
 $chatGPTUrl
 
@@ -4792,7 +4792,7 @@ Suggested questions to ask:
 - "Windows installation failed with error code [your code]"
 - "How to fix Windows boot issues in recovery environment?"
 
-═══════════════════════════════════════════════════════════════
+===============================================================
 "@
     
     $result.Instructions = $instructions
@@ -4943,9 +4943,9 @@ function Show-CommandWarning {
     $riskLevel = Get-CommandRiskLevel -CommandKey $CommandKey
     
     $warningText = @"
-═══════════════════════════════════════════════════════════════
+===============================================================
 ⚠️  $($warning.Title)
-═══════════════════════════════════════════════════════════════
+===============================================================
 
 COMMAND: $Command
 DESCRIPTION: $Description
@@ -4961,7 +4961,7 @@ $($warning.Impact)
 RECOVERY OPTIONS:
 $($warning.Recovery)
 
-═══════════════════════════════════════════════════════════════
+===============================================================
 "@
     
     if ($IsGUI) {
@@ -7807,14 +7807,14 @@ function Get-MissingDriversForPorting {
     # Generate instructions
     $instructions = @"
 DRIVER PORTING COMPLETE
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 Output Folder: $OutputFolder
 Drivers Ported: $($result.PortedDrivers.Count)
 Missing Drivers Detected: $($result.MissingDrivers.Count)
 
 HOW TO USE THESE DRIVERS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 1. IN WINPE/WINRE:
    - Copy this folder to a USB drive or network location
@@ -7836,7 +7836,7 @@ HOW TO USE THESE DRIVERS:
    - Or inject before starting setup
 
 DRIVER FILES INCLUDED:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 "@
     
     foreach ($driver in $result.PortedDrivers) {
@@ -7860,17 +7860,17 @@ function Generate-SaveMeTxt {
     )
     
     $content = @"
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
                     SAVE_ME.TXT - Windows Recovery Guide
                     Generated by Miracle Boot v7.2.0
                     Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 ⚠️  IMPORTANT: If you're stuck, ask ChatGPT or search online for specific error messages!
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 1: COMMON BOOT REPAIR COMMANDS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 1. REBUILD BCD (Boot Configuration Data)
    Command: bcdboot C:\Windows
@@ -7908,18 +7908,18 @@ SECTION 1: COMMON BOOT REPAIR COMMANDS
    When to use: Disk errors, file system corruption, bad sectors
    Warning: /r can take hours! Use /f for quick fix first.
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 2: DISKPART - DISK MANAGEMENT VIA COMMAND LINE
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 HOW TO USE DISKPART:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 1. Type: diskpart
 2. Type commands one at a time
 3. Type: exit when done
 
 FINDING YOUR DRIVES AND VOLUMES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 Step 1: List all disks
    Command: list disk
@@ -7944,7 +7944,7 @@ Step 4: Find volume label
    Look for the "Label" column - that's your volume label!
 
 COMMON DISKPART COMMANDS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 
 Assign drive letter:
    select volume 0
@@ -7971,12 +7971,12 @@ Clean disk (WARNING: DELETES ALL PARTITIONS!):
    select disk 0
    clean
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 3: IN-PLACE REPAIR / UPGRADE COMMANDS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 FORCE IN-PLACE UPGRADE (Repair Install):
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 1. Mount Windows ISO or extract to folder
 2. Navigate to sources folder
 3. Run: setup.exe /auto upgrade /quiet /noreboot
@@ -7989,7 +7989,7 @@ DISABLE DYNAMIC UPDATE:
    setup.exe /auto upgrade /DynamicUpdate disable
 
 REGISTRY OVERRIDES (Advanced - Use Miracle Boot's registry tools):
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 If in-place upgrade is blocked, you may need to modify registry:
 - SetupPhase = 0
 - EditionID override
@@ -7997,37 +7997,37 @@ If in-place upgrade is blocked, you may need to modify registry:
 
 Use Miracle Boot's "One-Click Registry Fixes" or "Generate Registry Override Script"
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 4: DRIVER MANAGEMENT
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 LOAD DRIVER IN WINPE/WINRE:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: drvload [path]\driver.inf
 Example: drvload X:\Drivers\iastor.inf
 
 INJECT DRIVERS INTO OFFLINE WINDOWS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: DISM /Image:C:\ /Add-Driver /Driver:"X:\Drivers" /Recurse
 This adds drivers to Windows installation on C: drive from X:\Drivers folder
 
 FIND MISSING DRIVERS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 1. Check boot log: C:\Windows\nbtlog.txt
 2. Look for "Did not load driver" entries
 3. Identify hardware IDs from Device Manager (if accessible)
 4. Use Miracle Boot's "Scan Storage Drivers" feature
 
 PORT DRIVERS FROM WORKING SYSTEM:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Use Miracle Boot's "Get Missing Drivers for Porting" feature to:
 - Identify missing drivers
 - Extract drivers from working system
 - Create portable driver folder
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 5: COMMON PROBLEMS AND SOLUTIONS
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 PROBLEM: "Boot Configuration Data file is missing"
 SOLUTION:
@@ -8071,27 +8071,27 @@ SOLUTION:
   2. DISM: DISM /Image:C:\ /Cleanup-Image /RestoreHealth
   3. If still failing, try in-place upgrade
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 6: ADVANCED TROUBLESHOOTING
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 VIEW BOOT LOG:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: notepad C:\Windows\nbtlog.txt
 Look for: "Did not load driver", "FAIL", "ERROR"
 
 ANALYZE EVENT LOGS:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: wevtutil qe System /c:100 /rd:true /f:text > C:\events.txt
 Then: notepad C:\events.txt
 
 CHECK DISK HEALTH:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: wmic diskdrive get status,model,size
 Shows: Disk status and model information
 
 CHECK PARTITION LAYOUT:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: diskpart
   list disk
   select disk 0
@@ -8099,21 +8099,21 @@ Command: diskpart
   list volume
 
 BACKUP BCD BEFORE CHANGES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: bcdedit /export C:\BCD_Backup_$(Get-Date -Format 'yyyyMMdd').txt
 Always backup before making BCD changes!
 
 VIEW SYSTEM INFORMATION:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Command: systeminfo
 Shows: OS version, hardware, system details
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 7: GETTING HELP
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 IF YOU'RE STUCK:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 1. Use ChatGPT or search online for your specific error message
 2. Check Windows Event Viewer for detailed error codes
 3. Review boot log (nbtlog.txt) for driver failures
@@ -8124,7 +8124,7 @@ IF YOU'RE STUCK:
    - In-Place Upgrade Readiness
 
 COMMON ERROR CODES:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 - 0xc000000e: BCD error, boot files missing
 - 0xc000000f: Boot file not found
 - 0xc0000225: Boot configuration data missing
@@ -8133,15 +8133,15 @@ COMMON ERROR CODES:
 - 0x80070003: Path not found
 
 SEARCH FOR HELP:
-───────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------
 Copy the exact error message and search:
 - Google: "[your error message]"
 - ChatGPT: "Windows boot error [error code]"
 - Microsoft Support: support.microsoft.com
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 SECTION 8: QUICK REFERENCE - COMMAND CHEAT SHEET
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 BOOT REPAIR:
   bcdboot C:\Windows                    - Rebuild BCD
@@ -8175,9 +8175,9 @@ IN-PLACE UPGRADE:
   setup.exe /auto upgrade                - Start upgrade
   setup.exe /auto upgrade /compat IgnoreWarning  - Skip checks
 
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 END OF SAVE_ME.TXT
-═══════════════════════════════════════════════════════════════════════════════
+===================================================================================
 
 Remember: When in doubt, ask ChatGPT or search online for your specific error!
 
@@ -8210,9 +8210,9 @@ function Start-DiskManagementHelper {
     )
     
     if ($Interactive) {
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===============================================================" -ForegroundColor Cyan
         Write-Host "  DISK MANAGEMENT HELPER" -ForegroundColor Cyan
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===============================================================" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "This helper will guide you through diskpart operations." -ForegroundColor Yellow
         Write-Host ""
@@ -8246,7 +8246,7 @@ function Start-DiskManagementHelper {
                 Write-Host ""
                 $volumes = Get-Volume | Where-Object { $_.DriveLetter }
                 Write-Host "VOLUME LABELS:" -ForegroundColor Cyan
-                Write-Host "─────────────────────────────────────────────────────" -ForegroundColor Gray
+                Write-Host "---------------------------------------------------------" -ForegroundColor Gray
                 foreach ($vol in $volumes) {
                     Write-Host "Drive: $($vol.DriveLetter):" -ForegroundColor White
                     Write-Host "  Label: $($vol.FileSystemLabel)" -ForegroundColor Yellow
