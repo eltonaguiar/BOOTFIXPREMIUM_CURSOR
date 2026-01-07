@@ -161,9 +161,9 @@ $envType = Get-EnvironmentType
 
 # Load core functions
 try {
-    . "$PSScriptRoot\WinRepairCore.ps1"
+    . "$PSScriptRoot\Helper\WinRepairCore.ps1"
 } catch {
-    Write-Host "Error loading WinRepairCore.ps1: $_" -ForegroundColor Red
+    Write-Host "Error loading Helper\WinRepairCore.ps1: $_" -ForegroundColor Red
     Write-Host "Current directory: $(Get-Location)" -ForegroundColor Yellow
     Write-Host "Script root: $PSScriptRoot" -ForegroundColor Yellow
     Write-Host "Press any key to exit..."
@@ -197,13 +197,13 @@ if ($envType -eq 'FullOS') {
     } catch {
         Write-Host "WARNING: WPF assemblies not available: $_" -ForegroundColor Yellow
         Write-Host "Falling back to MS-DOS Style mode..." -ForegroundColor Yellow
-        . "$PSScriptRoot\WinRepairTUI.ps1"
+        . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
         Start-TUI
         exit
     }
     
     try {
-        . "$PSScriptRoot\WinRepairGUI.ps1"
+        . "$PSScriptRoot\Helper\WinRepairGUI.ps1"
         if (Get-Command Start-GUI -ErrorAction SilentlyContinue) {
             Start-GUI
         } else {
@@ -214,12 +214,12 @@ if ($envType -eq 'FullOS') {
         Write-Host "Error: $_" -ForegroundColor Red
         Write-Host "`nPress any key to continue with TUI mode..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        . "$PSScriptRoot\WinRepairTUI.ps1"
+        . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
         Start-TUI
     }
 } else {
     # WinRE or WinPE - use MS-DOS Style mode
     Write-Host "Running in $envType environment - using MS-DOS Style mode." -ForegroundColor Yellow
-    . "$PSScriptRoot\WinRepairTUI.ps1"
+    . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
     Start-TUI
 }

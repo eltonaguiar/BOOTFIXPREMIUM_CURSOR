@@ -28,7 +28,7 @@ if errorlevel 1 (
     echo.
     echo Launching CMD-based Miracle Boot...
     echo.
-    call "%SCRIPT_DIR%WinRepairCore.cmd"
+    call "%SCRIPT_DIR%Helper\WinRepairCore.cmd"
     exit /b %errorlevel%
 )
 

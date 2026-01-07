@@ -38,19 +38,20 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Load core files first (shared across all tests)
-$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
+# Go up one level from Test folder to root, then access Helper
+$scriptRoot = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { Split-Path (Get-Location) -Parent }
 Write-Host "Loading core files from: $scriptRoot" -ForegroundColor Gray
 Write-Host ""
 
 try {
-    . "$scriptRoot\WinRepairCore.ps1"
-    Write-Host "WinRepairCore.ps1 loaded successfully" -ForegroundColor Green
+    . "$scriptRoot\Helper\WinRepairCore.ps1"
+    Write-Host "Helper\WinRepairCore.ps1 loaded successfully" -ForegroundColor Green
 } catch {
-    Write-Host "ERROR: Failed to load WinRepairCore.ps1: $_" -ForegroundColor Red
+    Write-Host "ERROR: Failed to load Helper\WinRepairCore.ps1: $_" -ForegroundColor Red
     exit 1
 }
 
-# Test 1: Verify WinRepairCore.ps1 loaded
+# Test 1: Verify Helper\WinRepairCore.ps1 loaded
 Test-Function "Verify WinRepairCore.ps1 Loaded" {
     if (-not (Get-Command Get-WindowsVolumes -ErrorAction SilentlyContinue)) {
         throw "Core functions not loaded"
@@ -201,10 +202,10 @@ Test-Function "Environment Detection Functions" {
 # Test 9: Syntax check - Load TUI
 Test-Function "Load WinRepairTUI.ps1" {
     $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
-    if (-not (Test-Path "$scriptRoot\WinRepairTUI.ps1")) {
-        throw "WinRepairTUI.ps1 not found at $scriptRoot"
+    if (-not (Test-Path "$scriptRoot\Helper\WinRepairTUI.ps1")) {
+        throw "Helper\WinRepairTUI.ps1 not found at $scriptRoot"
     }
-    . "$scriptRoot\WinRepairTUI.ps1"
+    . "$scriptRoot\Helper\WinRepairTUI.ps1"
     if (-not (Get-Command Start-TUI -ErrorAction SilentlyContinue)) {
         throw "Start-TUI function not found"
     }
@@ -213,11 +214,11 @@ Test-Function "Load WinRepairTUI.ps1" {
 # Test 10: Syntax check - Load GUI (may fail if WPF not available, but syntax should be valid)
 Test-Function "Load WinRepairGUI.ps1 (Syntax Check)" {
     $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
-    if (-not (Test-Path "$scriptRoot\WinRepairGUI.ps1")) {
-        throw "WinRepairGUI.ps1 not found at $scriptRoot"
+    if (-not (Test-Path "$scriptRoot\Helper\WinRepairGUI.ps1")) {
+        throw "Helper\WinRepairGUI.ps1 not found at $scriptRoot"
     }
     try {
-        . "$scriptRoot\WinRepairGUI.ps1" -ErrorAction Stop
+        . "$scriptRoot\Helper\WinRepairGUI.ps1" -ErrorAction Stop
         if (-not (Get-Command Start-GUI -ErrorAction SilentlyContinue)) {
             throw "Start-GUI function not found"
         }

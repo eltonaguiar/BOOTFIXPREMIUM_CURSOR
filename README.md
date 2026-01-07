@@ -312,14 +312,26 @@ RunMiracleBoot.cmd
 
 ---
 
-## 📦 Files Included
+## 📦 Project Structure
 
-- `MiracleBoot.ps1` - Main launcher script (detects environment, loads appropriate interface)
-- `WinRepairGUI.ps1` - GUI interface (WPF) for FullOS
-- `WinRepairTUI.ps1` - Text-based interface for WinPE/WinRE
-- `WinRepairCore.ps1` - Core functions and repair operations
-- `RunMiracleBoot.cmd` - Batch launcher (compatible with all environments)
-- `FixWinRepairCore.ps1` - Additional repair functions
+```
+MiracleBoot_v7_1_1/
+├── MiracleBoot.ps1          # Main launcher script (detects environment, loads appropriate interface)
+├── RunMiracleBoot.cmd        # Batch launcher (compatible with all environments)
+├── README.md                 # This file
+├── Helper/                   # Helper scripts and modules
+│   ├── WinRepairCore.ps1    # Core functions and repair operations
+│   ├── WinRepairGUI.ps1     # GUI interface (WPF) for FullOS
+│   ├── WinRepairTUI.ps1     # Text-based interface for WinPE/WinRE
+│   ├── WinRepairCore.cmd    # CMD fallback functions
+│   └── FixWinRepairCore.ps1 # Additional repair functions
+├── Test/                     # Testing scripts and documentation
+│   ├── Test-MiracleBoot.ps1
+│   ├── test_new_features.ps1
+│   └── TESTING_SUMMARY.md
+└── workspace/                # Workspace configuration files
+    └── MiracleBoot_v7_1_1.code-workspace
+```
 
 ---
 

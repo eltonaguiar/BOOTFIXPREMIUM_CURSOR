@@ -9,12 +9,12 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Load the core module
-Write-Host "Loading WinRepairCore.ps1..." -ForegroundColor Yellow
+Write-Host "Loading Helper\WinRepairCore.ps1..." -ForegroundColor Yellow
 try {
-    . .\WinRepairCore.ps1 -ErrorAction Stop
-    Write-Host "[OK] WinRepairCore.ps1 loaded successfully" -ForegroundColor Green
+    . ..\Helper\WinRepairCore.ps1 -ErrorAction Stop
+    Write-Host "[OK] Helper\WinRepairCore.ps1 loaded successfully" -ForegroundColor Green
 } catch {
-    Write-Host "[ERROR] Failed to load WinRepairCore.ps1: $_" -ForegroundColor Red
+    Write-Host "[ERROR] Failed to load Helper\WinRepairCore.ps1: $_" -ForegroundColor Red
     exit 1
 }
 Write-Host ""
