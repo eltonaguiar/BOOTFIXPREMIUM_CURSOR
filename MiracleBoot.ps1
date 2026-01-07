@@ -1,3 +1,62 @@
+<#
+    MIRACLE BOOT – ENTRY ORCHESTRATOR
+    =================================
+
+    This script is the **single entry point** for Miracle Boot when launched from
+    `RunMiracleBoot.cmd` or directly via PowerShell. It detects the environment,
+    loads the core engine, and chooses the correct experience (GUI vs TUI vs CMD).
+
+    TABLE OF CONTENTS
+    -----------------
+    1. Environment Detection
+       - `Get-EnvironmentType`
+       - `Test-PowerShellAvailability`
+       - `Test-NetworkAvailability`
+       - `Test-BrowserAvailability`
+    2. Core Engine Bootstrap
+       - Location resolution (`$PSScriptRoot`)
+       - Dot-sourcing `Helper\WinRepairCore.ps1`
+    3. Experience Selection
+       - FullOS + WPF available  → `Start-GUI` (WPF UI)
+       - WinRE / WinPE / limited PowerShell → `Start-TUI` (console UI)
+       - No PowerShell (handled by `RunMiracleBoot.cmd`) → `WinRepairCore.cmd`
+    4. Safety & Diagnostics
+       - Console banner and environment summary
+       - Basic error handling when loading core modules
+
+    ENVIRONMENT MAPPING & FLOW
+    --------------------------
+    - **FullOS (Windows 10/11 desktop)**
+        1. `Get-EnvironmentType` returns `FullOS`.
+        2. Script dot-sources `Helper\WinRepairCore.ps1`.
+        3. If WPF assemblies load successfully, `Helper\WinRepairGUI.ps1` is loaded
+           and `Start-GUI` is invoked → full graphical experience.
+        4. If WPF is not available, falls back to `Helper\WinRepairTUI.ps1` → TUI.
+
+    - **WinRE / Shift+F10 setup console**
+        1. `Get-EnvironmentType` usually returns `WinRE`.
+        2. Script dot-sources `Helper\WinRepairCore.ps1` and `Helper\WinRepairTUI.ps1`.
+        3. Always launches `Start-TUI` → safe console experience designed for
+           recovery consoles and limited shells.
+
+    - **WinPE (USB / recovery media)**
+        1. `Get-EnvironmentType` returns `WinPE`.
+        2. Flow is identical to WinRE, but additional WinPE-only options may
+           appear in the TUI (e.g. browser installation).
+
+    - **No / Broken PowerShell**
+        - `RunMiracleBoot.cmd` detects this case **before** calling this script and
+          falls back to `WinRepairCore.cmd` (pure CMD menu).
+
+    QUICK REFERENCE
+    ---------------
+    - Use **this file** to understand *where* the user will land (GUI vs TUI vs CMD)
+      based on their environment.
+    - Use `Helper\WinRepairCore.ps1` for the **engine** (what work gets done).
+    - Use `Helper\WinRepairTUI.ps1` for the **console menus** in WinRE/WinPE.
+    - Use `Helper\WinRepairGUI.ps1` for the **WPF desktop UI** in FullOS.
+#>
+
 # Set execution policy for this session (needed in WinRE/WinPE)
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 

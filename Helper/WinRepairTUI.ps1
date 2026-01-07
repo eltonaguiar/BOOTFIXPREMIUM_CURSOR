@@ -1,3 +1,84 @@
+<#
+    MIRACLE BOOT – TEXT USER INTERFACE (TUI)
+    ========================================
+
+    This module implements the **console menu experience** used when the GUI
+    cannot or should not be used (WinRE / WinPE / Shift+F10). It is a thin UI
+    layer over the core engine in `Helper\WinRepairCore.ps1`.
+
+    TABLE OF CONTENTS (HIGH‑LEVEL)
+    ------------------------------
+    1. Environment Banner & Main Loop
+       - `Start-TUI` (environment detection + main menu)
+    2. Core Menus
+       - Volumes & Health (A–G style options)
+       - Boot repair & diagnostics
+       - System file and disk repair
+       - Complete system repair pipelines
+    3. Advanced Tools
+       - In-place upgrade readiness
+       - Boot chain / boot log analysis
+       - Network diagnostics & driver management
+       - Driver porting and SAVE_ME.txt generator
+       - Disk Management Helper
+       - System Restore Point Management
+       - Keyboard Symbol Helper
+    4. Safety / Warning Flows
+       - Confirmation prompts before destructive actions
+       - Integration with command risk / warning system in core
+
+    ENVIRONMENT MAPPING – WHEN THIS TUI RUNS
+    ----------------------------------------
+    - **WinRE / Shift+F10 setup console**
+        - Launched by `MiracleBoot.ps1` when `Get-EnvironmentType` reports `WinRE`.
+        - Optimized for:
+            - X: RAM disk system drive
+            - Offline Windows installations mounted on other letters (C:, D:, etc.).
+
+    - **WinPE (USB / rescue media)**
+        - Also launched by `MiracleBoot.ps1` when `Get-EnvironmentType` reports `WinPE`.
+        - Enables WinPE‑specific options (e.g. browser installation).
+
+    - **FullOS (fallback)**
+        - Can be launched from a full Windows desktop if WPF is unavailable or the
+          user explicitly wants a console‑only workflow.
+
+    FLOW MAPPING – HOW REQUESTS MOVE THROUGH THE SYSTEM
+    ---------------------------------------------------
+    1. `Start-TUI`
+         - Detects environment (FullOS vs WinRE vs WinPE) **for display only**.
+         - Enters a `do { ... } while` menu loop.
+
+    2. User selects a menu option (e.g. Disk Repair, Boot Repair, Readiness Check).
+
+    3. The corresponding case in the main `switch ($c)`:
+         - Gathers parameters (target drive, confirmation, etc.).
+         - Calls into **core engine functions** in `WinRepairCore.ps1`, such as:
+             - `Start-SystemFileRepair`
+             - `Start-DiskRepair`
+             - `Start-RepairInstallReadiness`
+             - `Get-BootChainAnalysis`, `Get-BootLogAnalysis`
+             - `Create-SystemRestorePoint`, `Get-SystemRestorePoints`, `Restore-FromSystemRestorePoint`
+
+    4. Any progress reporting from the engine is surfaced via:
+         - `ProgressCallback` scriptblocks passed into core functions.
+         - Console messages and simple ASCII progress indicators.
+
+    QUICK ORIENTATION
+    -----------------
+    - **Want to know what the user can do in WinRE/WinPE?**  
+        → Read the `Start-TUI` menu definitions; each option maps to one or more
+          core engine calls.
+
+    - **Adding a new menu option?**  
+        → Add the UI shell here (prompting, menu text) and call into a new or
+          existing function in `WinRepairCore.ps1`.
+
+    - **Need to adjust environment‑specific availability?**  
+        → Use the `$envDisplay` logic at the top of `Start-TUI` and gate menu
+          entries (e.g. WinPE‑only options) based on that value.
+#>
+
 function Start-TUI {
     # Detect environment for display (matching main script logic)
     $envDisplay = "FullOS"

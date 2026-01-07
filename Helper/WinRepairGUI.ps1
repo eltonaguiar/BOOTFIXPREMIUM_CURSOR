@@ -1,3 +1,93 @@
+<#
+    MIRACLE BOOT – WPF GRAPHICAL USER INTERFACE (GUI)
+    ==================================================
+
+    This module defines the **WPF desktop UI** for Miracle Boot. It is only
+    available when running in a full Windows desktop with WPF/.NET available.
+    All heavy lifting is delegated to the core engine in `Helper\WinRepairCore.ps1`.
+
+    TABLE OF CONTENTS (HIGH‑LEVEL)
+    ------------------------------
+    1. WPF Window Definition (XAML)
+       - Toolbar: utilities, network, ChatGPT help, environment indicators
+       - Tabs:
+           • Volumes & Health
+           • BCD Editor
+           • Boot Repair & Diagnostics
+           • System File / Disk Repair
+           • Drivers & Porting
+           • In-Place Upgrade / Readiness
+           • Logs & Install Failure Analysis
+    2. Code‑Behind Wiring (`Start-GUI`)
+       - XAML loading and window creation
+       - Control lookups (`FindName`) and event wiring
+       - Status bar and progress updates
+    3. Command Handlers (By Area)
+       - Volume refresh, BCD actions, boot repair commands
+       - SFC/DISM/CHKDSK repair flows with progress callbacks
+       - Driver export/porting/injection
+       - Install failure analysis and log viewers
+       - Repair-Install Readiness UX
+       - Network enablement, diagnostics, and ChatGPT help
+       - System restore point creation/listing
+       - Keyboard symbol helper integration
+
+    ENVIRONMENT MAPPING – WHEN THIS GUI RUNS
+    ----------------------------------------
+    - **FullOS (Windows 10/11 desktop) ONLY**
+        - Launched by `MiracleBoot.ps1` when:
+            • `Get-EnvironmentType` returns `FullOS`, and
+            • WPF assemblies (`PresentationFramework`) load successfully.
+        - Assumes:
+            • A logged‑in interactive user session.
+            • Sufficient .NET / WPF support.
+
+    - **NOT USED in WinRE / WinPE / Shift+F10**
+        - In those environments, `MiracleBoot.ps1` falls back to `Start-TUI`.
+
+    FLOW MAPPING – HOW USER ACTIONS REACH THE ENGINE
+    ------------------------------------------------
+    1. `MiracleBoot.ps1` detects `FullOS` and dot‑sources:
+         - `Helper\WinRepairCore.ps1`  → core engine
+         - `Helper\WinRepairGUI.ps1`   → this file
+
+    2. `Start-GUI` is invoked:
+         - Loads XAML into a `Window`.
+         - Looks up key UI elements (buttons, text boxes, list views).
+         - Attaches event handlers for each button/menu item.
+
+    3. Event handlers call into **engine functions** in `WinRepairCore.ps1`, e.g.:
+         - `Get-WindowsVolumes`, `Get-BCDEntries*`
+         - `Start-SystemFileRepair`, `Start-DiskRepair`, `Start-CompleteSystemRepair`
+         - `Start-RepairInstallReadiness`
+         - `Get-BootChainAnalysis`, `Get-BootLogAnalysis`
+         - `Generate-SaveMeTxt`, driver export/porting helpers
+         - `Create-SystemRestorePoint`, `Get-SystemRestorePoints`
+         - Network diagnostics and ChatGPT helpers
+
+    4. Real‑time progress is surfaced by:
+         - Passing `ProgressCallback` scriptblocks into engine functions.
+         - Updating:
+             • Status bar text
+             • Progress bar controls
+             • Rich text / log output panes
+
+    QUICK ORIENTATION
+    -----------------
+    - **New to the project?**  
+        → Skim this file to see which **buttons and tabs** exist and then jump
+          into `WinRepairCore.ps1` to see what work each action performs.
+
+    - **Adding a new GUI feature?**  
+        1. Extend the XAML (new button/tab/section).
+        2. Wire up an event handler in `Start-GUI`.
+        3. Call into an existing or new core function in `WinRepairCore.ps1`.
+
+    - **Need environment‑specific behavior?**  
+        → Use the environment status labels (`EnvStatus`, `NetworkStatus`) and
+          gate actions if certain capabilities are missing (e.g. network, browser).
+#>
+
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic

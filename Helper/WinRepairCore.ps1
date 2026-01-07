@@ -1,3 +1,100 @@
+<#
+    MIRACLE BOOT – CORE ENGINE
+    ==========================
+
+    This module contains **all core logic** used by both the GUI (`Start-GUI`)
+    and TUI (`Start-TUI`) front‑ends. It is designed to be environment‑agnostic
+    and safe to dot‑source from:
+      - `MiracleBoot.ps1` (FullOS / WinRE / WinPE)
+      - Shift+F10 / WinRE consoles
+      - WinPE recovery media
+
+    TABLE OF CONTENTS (HIGH‑LEVEL)
+    ------------------------------
+    1. Environment & Volume Helpers
+       - `Get-EnvironmentType`
+       - `Get-WindowsVolumes`, `Get-BCDEntries*`
+    2. Boot & BCD Repair
+       - BCD parsing / editing helpers
+       - Boot chain analysis (`Get-BootChainAnalysis`, `Get-BootLogAnalysis`)
+       - Boot probability / health scoring
+    3. System Repair Pipelines
+       - `Start-SystemFileRepair` (SFC + DISM)
+       - `Start-DiskRepair` (CHKDSK)
+       - `Start-CompleteSystemRepair`
+    4. Progress Tracking Infrastructure
+       - `Get-OperationProgress`
+       - `Start-OperationWithProgress`
+       - Shared `ProgressCallback` patterns used by GUI/TUI
+    5. Restore Point Management
+       - `Create-SystemRestorePoint`
+       - `Get-SystemRestorePoints`
+       - `Restore-FromSystemRestorePoint`
+       - `Manage-SystemRestorePoints`
+    6. Repair-Install Readiness Engine
+       - `Test-RepairInstallEligibility`
+       - `Clear-CBSBlockers`, `Normalize-SetupState`
+       - `Repair-WinREForSetup`
+       - `Start-RepairInstallReadiness`
+    7. Driver & Network Tooling
+       - Driver harvesting / export / injection
+       - Network adapter and connectivity helpers
+    8. Diagnostics, Logging & Utilities
+       - Log analysis helpers
+       - SAVE_ME.txt generator
+       - Utility helpers shared across UI layers
+
+    ENVIRONMENT MAPPING – WHERE THIS MODULE RUNS
+    --------------------------------------------
+    - **FullOS (Windows 10/11 desktop)**
+        - Called by `MiracleBoot.ps1` before `Start-GUI` or `Start-TUI`.
+        - Most functions can target the *online* OS (current C:).
+
+    - **WinRE / Shift+F10**
+        - Called by `MiracleBoot.ps1` before launching `Start-TUI`.
+        - Most operations run **offline** against a selected Windows volume
+          (typically `C:` from the user's machine, not the X: WinRE RAM drive).
+
+    - **WinPE / Recovery Media**
+        - Called by custom WinPE shells or `MiracleBoot.ps1` when `Get-EnvironmentType`
+          returns `WinPE`.
+        - Same offline repair model as WinRE, plus additional driver / browser
+          tooling for portable environments.
+
+    FLOW MAPPING – HOW CALLERS USE THIS MODULE
+    ------------------------------------------
+    1. **MiracleBoot.ps1**
+         - Detects environment (`Get-EnvironmentType` in entry script).
+         - Dot‑sources **this** file to load all engine functions.
+         - Delegates to either GUI (`Start-GUI`) or TUI (`Start-TUI`), both of which
+           *only* call functions defined here.
+
+    2. **Helper\WinRepairTUI.ps1 (TUI)**
+         - Presents menus for boot repair, SFC/DISM/CHKDSK, diagnostics.
+         - For each menu item, calls into the corresponding engine function here
+           (e.g. `Start-SystemFileRepair`, `Start-RepairInstallReadiness`).
+
+    3. **Helper\WinRepairGUI.ps1 (WPF GUI)**
+         - Wires buttons / tabs to the same engine functions.
+         - Uses `ProgressCallback` scriptblocks to surface real‑time progress to the UI.
+
+    QUICK ORIENTATION
+    -----------------
+    - **Need to know “what does Miracle Boot actually do?”**  
+        → Read the function synopsis blocks throughout this file; each major
+          subsystem (boot, repair, drivers, readiness) is self‑documented.
+
+    - **Need to add a new repair pipeline?**  
+        → Add the core logic **here**, then expose it from:
+            - `Start-TUI` (menu item)
+            - `Start-GUI` (button / tab)
+
+    - **Need to understand which environment is targeted?**  
+        → Most functions accept a `-TargetDrive` / `-TargetWindows` parameter and
+          never assume that the current OS drive is the repair target. The caller
+          (GUI/TUI) is responsible for choosing the correct drive.
+#>
+
 function Get-EnvironmentType {
     <#
     .SYNOPSIS
