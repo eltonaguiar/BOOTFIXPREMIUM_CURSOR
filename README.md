@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Miracle Boot v7.2.0 - Advanced Windows Recovery Tool
 
 ## 🎯 Purpose
@@ -351,4 +352,3 @@ For issues, questions, or contributions, please open an issue on the GitHub repo
 ---
 
 **Miracle Boot v7.2.0** - *Your comprehensive Windows recovery solution*
-
