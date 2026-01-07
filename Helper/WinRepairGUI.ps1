@@ -8,16 +8,16 @@
 
     TABLE OF CONTENTS (HIGH‑LEVEL)
     ------------------------------
-    1. WPF Window Definition (XAML)
+   1. WPF Window Definition (XAML)
        - Toolbar: utilities, network, ChatGPT help, environment indicators
        - Tabs:
-           • Volumes & Health
-           • BCD Editor
-           • Boot Repair & Diagnostics
-           • System File / Disk Repair
-           • Drivers & Porting
-           • In-Place Upgrade / Readiness
-           • Logs & Install Failure Analysis
+           - Volumes & Health
+           - BCD Editor
+           - Boot Repair & Diagnostics
+           - System File / Disk Repair
+           - Drivers & Porting
+           - In-Place Upgrade / Readiness
+           - Logs & Install Failure Analysis
     2. Code‑Behind Wiring (`Start-GUI`)
        - XAML loading and window creation
        - Control lookups (`FindName`) and event wiring
@@ -36,11 +36,11 @@
     ----------------------------------------
     - **FullOS (Windows 10/11 desktop) ONLY**
         - Launched by `MiracleBoot.ps1` when:
-            • `Get-EnvironmentType` returns `FullOS`, and
-            • WPF assemblies (`PresentationFramework`) load successfully.
+            - `Get-EnvironmentType` returns `FullOS`, and
+            - WPF assemblies (`PresentationFramework`) load successfully.
         - Assumes:
-            • A logged‑in interactive user session.
-            • Sufficient .NET / WPF support.
+            - A logged‑in interactive user session.
+            - Sufficient .NET / WPF support.
 
     - **NOT USED in WinRE / WinPE / Shift+F10**
         - In those environments, `MiracleBoot.ps1` falls back to `Start-TUI`.
@@ -68,9 +68,9 @@
     4. Real‑time progress is surfaced by:
          - Passing `ProgressCallback` scriptblocks into engine functions.
          - Updating:
-             • Status bar text
-             • Progress bar controls
-             • Rich text / log output panes
+             - Status bar text
+             - Progress bar controls
+             - Rich text / log output panes
 
     QUICK ORIENTATION
     -----------------
@@ -93,6 +93,31 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 function Start-GUI {
+# Helper function to safely get controls with null checking
+function Get-Control {
+    param([string]$Name)
+    $control = $W.FindName($Name)
+    if (-not $control) {
+        # #region agent log
+        try {
+            $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+            $logEntry = @{
+                sessionId = "debug-session"
+                runId = "gui-launch-1"
+                hypothesisId = "C"
+                location = "WinRepairGUI.ps1:Get-Control"
+                message = "Control not found"
+                data = @{ controlName = $Name }
+                timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json -Compress
+            Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+        } catch {}
+        # #endregion agent log
+        Write-Warning "Control '$Name' not found in XAML"
+    }
+    return $control
+}
+
 $XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -466,102 +491,230 @@ $XAML = @"
 </Window>
 "@
 
-$W=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$XAML)))
+# #region agent log
+try {
+    $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
+    $logEntry = @{
+        sessionId = "debug-session"
+        runId = "gui-launch-1"
+        hypothesisId = "A"
+        location = "WinRepairGUI.ps1:469"
+        message = "XAML parsing start"
+        data = @{ xamlLength = $XAML.Length }
+        timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+    } | ConvertTo-Json -Compress
+    Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+} catch {}
+# #endregion agent log
+
+try {
+    $W=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$XAML)))
+    
+    # #region agent log
+    try {
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "gui-launch-1"
+            hypothesisId = "A"
+            location = "WinRepairGUI.ps1:471"
+            message = "XAML parsing success"
+            data = @{ windowType = $W.GetType().FullName }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+} catch {
+    # #region agent log
+    try {
+        $logEntry = @{
+            sessionId = "debug-session"
+            runId = "gui-launch-1"
+            hypothesisId = "A"
+            location = "WinRepairGUI.ps1:471"
+            message = "XAML parsing failed"
+            data = @{ error = $_.Exception.Message }
+            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+        } | ConvertTo-Json -Compress
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {}
+    # #endregion agent log
+    throw "Failed to parse XAML: $_"
+}
 
 # Detect environment
 $envType = "FullOS"
 if (Test-Path 'HKLM:\System\CurrentControlSet\Control\MiniNT') { $envType = "WinRE" }
 if ($env:SystemDrive -eq 'X:') { $envType = "WinRE" }
-$W.FindName("EnvStatus").Text = "Environment: $envType"
 
-# Utility buttons
-$W.FindName("BtnNotepad").Add_Click({
-    try {
-        Start-Process notepad.exe -ErrorAction SilentlyContinue
-    } catch {
-        [System.Windows.MessageBox]::Show("Notepad not available in this environment.", "Warning", "OK", "Warning")
-    }
-})
+# #region agent log
+try {
+    $logEntry = @{
+        sessionId = "debug-session"
+        runId = "gui-launch-1"
+        hypothesisId = "B"
+        location = "WinRepairGUI.ps1:475"
+        message = "Before FindName EnvStatus"
+        data = @{ envType = $envType; windowNotNull = ($W -ne $null) }
+        timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+    } | ConvertTo-Json -Compress
+    Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+} catch {}
+# #endregion agent log
 
-$W.FindName("BtnRegistry").Add_Click({
-    try {
-        Start-Process regedit.exe -ErrorAction SilentlyContinue
-    } catch {
-        [System.Windows.MessageBox]::Show("Registry Editor not available in this environment.", "Warning", "OK", "Warning")
-    }
-})
+$envStatusControl = $W.FindName("EnvStatus")
 
-$W.FindName("BtnPowerShell").Add_Click({
-    try {
-        Start-Process powershell.exe -ErrorAction SilentlyContinue
-    } catch {
-        [System.Windows.MessageBox]::Show("PowerShell not available.", "Error", "OK", "Error")
-    }
-})
+# #region agent log
+try {
+    $logEntry = @{
+        sessionId = "debug-session"
+        runId = "gui-launch-1"
+        hypothesisId = "B"
+        location = "WinRepairGUI.ps1:477"
+        message = "After FindName EnvStatus"
+        data = @{ controlIsNull = ($envStatusControl -eq $null); controlType = if ($envStatusControl) { $envStatusControl.GetType().FullName } else { "null" } }
+        timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+    } | ConvertTo-Json -Compress
+    Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+} catch {}
+# #endregion agent log
 
-$W.FindName("BtnDiskManagement").Add_Click({
-    try {
-        Start-Process diskmgmt.msc -ErrorAction Stop
-    } catch {
-        [System.Windows.MessageBox]::Show("Disk Management not available in this environment.", "Warning", "OK", "Warning")
-    }
-})
+if ($envStatusControl) {
+    $envStatusControl.Text = "Environment: $envType"
+} else {
+    Write-Warning "EnvStatus control not found in XAML"
+}
 
-$W.FindName("BtnRestore").Add_Click({
-    # Switch to Diagnostics tab and run System Restore check
-    try {
-        $grid = $W.Content
-        $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
-        
-        if ($tabControl) {
-            $diagTab = $tabControl.Items | Where-Object { $_.Header -eq "Diagnostics" }
-            if ($diagTab) {
-                $tabControl.SelectedItem = $diagTab
-                # Use dispatcher to ensure UI is updated before triggering button
-                $W.Dispatcher.Invoke([action]{
-                    $W.FindName("BtnCheckRestore").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
-                }, [System.Windows.Threading.DispatcherPriority]::Input)
-            }
+# Utility buttons (with null checks)
+$btnNotepad = $W.FindName("BtnNotepad")
+if ($btnNotepad) {
+    $btnNotepad.Add_Click({
+        try {
+            Start-Process notepad.exe -ErrorAction SilentlyContinue
+        } catch {
+            [System.Windows.MessageBox]::Show("Notepad not available in this environment.", "Warning", "OK", "Warning")
         }
-    } catch {
-        # Fallback: show message directing user to Diagnostics tab
-        [System.Windows.MessageBox]::Show("Please navigate to the Diagnostics tab and click 'Check System Restore' to view restore points.", "Info", "OK", "Information")
-    }
-})
+    })
+} else {
+    Write-Warning "BtnNotepad control not found in XAML"
+}
+
+$btnRegistry = $W.FindName("BtnRegistry")
+if ($btnRegistry) {
+    $btnRegistry.Add_Click({
+        try {
+            Start-Process regedit.exe -ErrorAction SilentlyContinue
+        } catch {
+            [System.Windows.MessageBox]::Show("Registry Editor not available in this environment.", "Warning", "OK", "Warning")
+        }
+    })
+} else {
+    Write-Warning "BtnRegistry control not found in XAML"
+}
+
+$btnPowerShell = $W.FindName("BtnPowerShell")
+if ($btnPowerShell) {
+    $btnPowerShell.Add_Click({
+        try {
+            Start-Process powershell.exe -ErrorAction SilentlyContinue
+        } catch {
+            [System.Windows.MessageBox]::Show("PowerShell not available.", "Error", "OK", "Error")
+        }
+    })
+} else {
+    Write-Warning "BtnPowerShell control not found in XAML"
+}
+
+$btnDiskManagement = $W.FindName("BtnDiskManagement")
+if ($btnDiskManagement) {
+    $btnDiskManagement.Add_Click({
+        try {
+            Start-Process diskmgmt.msc -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Disk Management not available in this environment.", "Warning", "OK", "Warning")
+        }
+    })
+} else {
+    Write-Warning "BtnDiskManagement control not found in XAML"
+}
+
+$btnRestore = $W.FindName("BtnRestore")
+if ($btnRestore) {
+    $btnRestore.Add_Click({
+        # Switch to Diagnostics tab and run System Restore check
+        try {
+            $grid = $W.Content
+            $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+            
+            if ($tabControl) {
+                $diagTab = $tabControl.Items | Where-Object { $_.Header -eq "Diagnostics" }
+                if ($diagTab) {
+                    $tabControl.SelectedItem = $diagTab
+                    # Use dispatcher to ensure UI is updated before triggering button
+                    $W.Dispatcher.Invoke([action]{
+                        $btnCheckRestore = $W.FindName("BtnCheckRestore")
+                        if ($btnCheckRestore) {
+                            $btnCheckRestore.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                        }
+                    }, [System.Windows.Threading.DispatcherPriority]::Input)
+                }
+            }
+        } catch {
+            # Fallback: show message directing user to Diagnostics tab
+            [System.Windows.MessageBox]::Show("Please navigate to the Diagnostics tab and click 'Check System Restore' to view restore points.", "Info", "OK", "Information")
+        }
+    })
+} else {
+    Write-Warning "BtnRestore control not found in XAML"
+}
 
 # Network enablement button
-$W.FindName("BtnEnableNetwork").Add_Click({
-    try {
-        Update-StatusBar -Message "Enabling network adapters..." -ShowProgress
-        $result = Enable-NetworkWinRE
-        
-        if ($result.Success) {
-            $W.FindName("NetworkStatus").Text = "Network: Enabled"
-            $W.FindName("NetworkStatus").Foreground = "Green"
+$btnEnableNetwork = $W.FindName("BtnEnableNetwork")
+if ($btnEnableNetwork) {
+    $btnEnableNetwork.Add_Click({
+        try {
+            Update-StatusBar -Message "Enabling network adapters..." -ShowProgress
+            $result = Enable-NetworkWinRE
             
-            # Test internet connectivity
-            Update-StatusBar -Message "Testing internet connectivity..." -ShowProgress
-            $internetTest = Test-InternetConnectivity
-            
-            if ($internetTest.Connected) {
-                $W.FindName("NetworkStatus").Text = "Network: Connected"
-                [System.Windows.MessageBox]::Show("Network enabled successfully!`n`n$($result.Message)`n`n$($internetTest.Message)", "Network Enabled", "OK", "Information")
+            $networkStatusControl = Get-Control "NetworkStatus"
+            if ($result.Success) {
+                if ($networkStatusControl) {
+                    $networkStatusControl.Text = "Network: Enabled"
+                    $networkStatusControl.Foreground = "Green"
+                }
+                
+                # Test internet connectivity
+                Update-StatusBar -Message "Testing internet connectivity..." -ShowProgress
+                $internetTest = Test-InternetConnectivity
+                
+                if ($internetTest.Connected) {
+                    if ($networkStatusControl) {
+                        $networkStatusControl.Text = "Network: Connected"
+                    }
+                    [System.Windows.MessageBox]::Show("Network enabled successfully!`n`n$($result.Message)`n`n$($internetTest.Message)", "Network Enabled", "OK", "Information")
+                } else {
+                    if ($networkStatusControl) {
+                        $networkStatusControl.Text = "Network: No Internet"
+                        $networkStatusControl.Foreground = "Orange"
+                    }
+                    [System.Windows.MessageBox]::Show("Network adapters enabled, but no internet connectivity detected.`n`n$($result.Message)`n`n$($internetTest.Message)", "Network Enabled (No Internet)", "OK", "Warning")
+                }
             } else {
-                $W.FindName("NetworkStatus").Text = "Network: No Internet"
-                $W.FindName("NetworkStatus").Foreground = "Orange"
-                [System.Windows.MessageBox]::Show("Network adapters enabled, but no internet connectivity detected.`n`n$($result.Message)`n`n$($internetTest.Message)", "Network Enabled (No Internet)", "OK", "Warning")
+                if ($networkStatusControl) {
+                    $networkStatusControl.Text = "Network: Failed"
+                    $networkStatusControl.Foreground = "Red"
+                }
+                [System.Windows.MessageBox]::Show("Failed to enable network:`n`n$($result.Message)", "Network Error", "OK", "Error")
             }
-        } else {
-            $W.FindName("NetworkStatus").Text = "Network: Failed"
-            $W.FindName("NetworkStatus").Foreground = "Red"
-            [System.Windows.MessageBox]::Show("Failed to enable network:`n`n$($result.Message)", "Network Error", "OK", "Error")
+            Update-StatusBar -Message "Network operation complete" -HideProgress
+        } catch {
+            Update-StatusBar -Message "Network operation failed: $_" -HideProgress
+            [System.Windows.MessageBox]::Show("Error enabling network: $_", "Error", "OK", "Error")
         }
-        Update-StatusBar -Message "Network operation complete" -HideProgress
-    } catch {
-        Update-StatusBar -Message "Network operation failed: $_" -HideProgress
-        [System.Windows.MessageBox]::Show("Error enabling network: $_", "Error", "OK", "Error")
-    }
-})
+    })
+} else {
+    Write-Warning "BtnEnableNetwork control not found in XAML"
+}
 
 # ChatGPT Help button
 $W.FindName("BtnNetworkDiagnostics").Add_Click({
@@ -669,59 +822,90 @@ try {
     $W.FindName("NetworkStatus").Foreground = "Gray"
 }
 
-# Populate drive combo
-$volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystemLabel } | Sort-Object DriveLetter
-$W.FindName("DriveCombo").Items.Clear()
-$W.FindName("DriveCombo").Items.Add("Auto-detect")
-foreach ($vol in $volumes) {
-    $W.FindName("DriveCombo").Items.Add("$($vol.DriveLetter): - $($vol.FileSystemLabel)")
-}
-$W.FindName("DriveCombo").SelectedIndex = 0
-
-# Populate log drive combo (for Diagnostics & Logs tab)
-$W.FindName("LogDriveCombo").Items.Clear()
-$W.FindName("LogDriveCombo").Items.Add("C:")
-foreach ($vol in $volumes) {
-    if ($vol.DriveLetter -ne "C") {
-        $W.FindName("LogDriveCombo").Items.Add("$($vol.DriveLetter):")
+# Populate drive combo (with null checks)
+try {
+    $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystemLabel } | Sort-Object DriveLetter
+    $driveCombo = Get-Control "DriveCombo"
+    if ($driveCombo) {
+        $driveCombo.Items.Clear()
+        $driveCombo.Items.Add("Auto-detect")
+        foreach ($vol in $volumes) {
+            $driveCombo.Items.Add("$($vol.DriveLetter): - $($vol.FileSystemLabel)")
+        }
+        $driveCombo.SelectedIndex = 0
     }
-}
-$W.FindName("LogDriveCombo").SelectedIndex = 0
-
-# Populate Diagnostics drive combo
-$W.FindName("DiagDriveCombo").Items.Clear()
-$currentSystemDrive = $env:SystemDrive.TrimEnd(':')
-$W.FindName("DiagDriveCombo").Items.Add("$currentSystemDrive`: (Current OS)")
-foreach ($vol in $volumes) {
-    if ($vol.DriveLetter -ne $currentSystemDrive) {
-        $W.FindName("DiagDriveCombo").Items.Add("$($vol.DriveLetter):")
+    
+    # Populate log drive combo (for Diagnostics & Logs tab)
+    $logDriveCombo = Get-Control "LogDriveCombo"
+    if ($logDriveCombo) {
+        $logDriveCombo.Items.Clear()
+        $logDriveCombo.Items.Add("C:")
+        foreach ($vol in $volumes) {
+            if ($vol.DriveLetter -ne "C") {
+                $logDriveCombo.Items.Add("$($vol.DriveLetter):")
+            }
+        }
+        $logDriveCombo.SelectedIndex = 0
     }
-}
-$W.FindName("DiagDriveCombo").SelectedIndex = 0
-
-# Update current OS label
-function Update-CurrentOSLabel {
-    $selected = $W.FindName("DiagDriveCombo").SelectedItem
-    $drive = $currentSystemDrive
-    if ($selected) {
-        if ($selected -match '^([A-Z]):') {
-            $drive = $matches[1]
+    
+    # Populate Diagnostics drive combo
+    $currentSystemDrive = $env:SystemDrive.TrimEnd(':')
+    $diagDriveCombo = Get-Control "DiagDriveCombo"
+    if ($diagDriveCombo) {
+        $diagDriveCombo.Items.Clear()
+        $diagDriveCombo.Items.Add("$currentSystemDrive`: (Current OS)")
+        foreach ($vol in $volumes) {
+            if ($vol.DriveLetter -ne $currentSystemDrive) {
+                $diagDriveCombo.Items.Add("$($vol.DriveLetter):")
+            }
+        }
+        $diagDriveCombo.SelectedIndex = 0
+    }
+    
+    # Update current OS label
+    function Update-CurrentOSLabel {
+        try {
+            $diagDriveCombo = Get-Control "DiagDriveCombo"
+            if ($diagDriveCombo) {
+                $selected = $diagDriveCombo.SelectedItem
+                $drive = $currentSystemDrive
+                if ($selected) {
+                    if ($selected -match '^([A-Z]):') {
+                        $drive = $matches[1]
+                    }
+                }
+                $currentOSLabel = Get-Control "CurrentOSLabel"
+                if ($currentOSLabel) {
+                    if ($drive -eq $currentSystemDrive) {
+                        $currentOSLabel.Text = "[OK] This is the CURRENT OS (running from $currentSystemDrive`:)"
+                    } else {
+                        $currentOSLabel.Text = "[OFFLINE] This is an OFFLINE OS (not currently running)"
+                    }
+                }
+            }
+        } catch {
+            Write-Warning "Error in Update-CurrentOSLabel: $_"
         }
     }
-    if ($drive -eq $currentSystemDrive) {
-        $W.FindName("CurrentOSLabel").Text = "[OK] This is the CURRENT OS (running from $currentSystemDrive`:)"
-    } else {
-        $W.FindName("CurrentOSLabel").Text = "[OFFLINE] This is an OFFLINE OS (not currently running)"
+    Update-CurrentOSLabel
+    if ($diagDriveCombo) {
+        $diagDriveCombo.Add_SelectionChanged({ Update-CurrentOSLabel })
     }
+    
+    # Logic for Volumes
+    $btnVol = Get-Control "BtnVol"
+    if ($btnVol) {
+        $btnVol.Add_Click({
+            $vols = Get-WindowsVolumes
+            $volList = Get-Control "VolList"
+            if ($volList) {
+                $volList.ItemsSource = $vols
+            }
+        })
+    }
+} catch {
+    Write-Warning "Error initializing drive combo boxes: $_"
 }
-Update-CurrentOSLabel
-$W.FindName("DiagDriveCombo").Add_SelectionChanged({ Update-CurrentOSLabel })
-
-# Logic for Volumes
-$W.FindName("BtnVol").Add_Click({
-    $vols = Get-WindowsVolumes
-    $W.FindName("VolList").ItemsSource = $vols
-})
 
 # Store BCD entries globally for real-time updates
 $script:BCDEntriesCache = $null
@@ -2012,7 +2196,7 @@ $W.FindName("BtnLookupErrorCode").Add_Click({
     
     if ([string]::IsNullOrWhiteSpace($errorCode) -or $errorCode -eq "0x") {
         [System.Windows.MessageBox]::Show(
-            "Please enter an error code to look up.`n`nExamples:`n• 0xc000000e`n• 0x80070002`n• 0x0000007B",
+            "Please enter an error code to look up.`n`nExamples:`n- 0xc000000e`n- 0x80070002`n- 0x0000007B",
             "No Error Code Entered",
             "OK",
             "Warning"
@@ -2105,7 +2289,7 @@ $W.FindName("BtnFullBootDiagnosis").Add_Click({
     if ($diagnosis.HasCriticalIssues) {
         $output += "`n`n"
         $output += "===============================================================`n"
-        $output += "⚠️  CRITICAL ISSUES DETECTED - IMMEDIATE ACTION REQUIRED`n"
+        $output += "[WARN] CRITICAL ISSUES DETECTED - IMMEDIATE ACTION REQUIRED`n"
         $output += "===============================================================`n"
         $output += "Review the issues above and follow the recommended actions.`n"
         $output += "Use the Boot Fixer tab to apply repairs.`n"
@@ -2210,7 +2394,7 @@ $W.FindName("BtnGenRegScript").Add_Click({
     $output += "3. It will modify EditionID to 'Professional' for compatibility`n"
     $output += "4. IMMEDIATELY run setup.exe from your Windows ISO (do NOT reboot)`n"
     $output += "5. To restore original values later, use the backup file`n`n"
-    $output += "⚠️  WARNING: This modifies system registry. Use at your own risk.`n`n"
+    $output += "[WARN] WARNING: This modifies system registry. Use at your own risk.`n`n"
     $output += "===============================================================`n"
     $output += "SCRIPT PREVIEW:`n"
     $output += "===============================================================`n`n"
@@ -2522,9 +2706,9 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
             )
         } else {
             Update-StatusBar -Message "System is NOT ready - $($readiness.Blockers.Count) blocker(s) found" -HideProgress
-            $blockerList = $readiness.Blockers -join "`n  • "
+            $blockerList = $readiness.Blockers -join "`n  - "
             [System.Windows.MessageBox]::Show(
-                "System is NOT ready for in-place upgrade.`n`nBLOCKERS:`n  • $blockerList`n`nReview the detailed report for recommendations.",
+                "System is NOT ready for in-place upgrade.`n`nBLOCKERS:`n  - $blockerList`n`nReview the detailed report for recommendations.",
                 "Blockers Detected",
                 "OK",
                 "Warning"
@@ -2555,10 +2739,10 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
     # Confirm action
     $confirmMsg = "REPAIR-INSTALL READINESS ENGINE`n`n"
     $confirmMsg += "This will:`n"
-    $confirmMsg += "  • Test eligibility for in-place upgrade (Keep apps + files)`n"
-    $confirmMsg += "  • Clear CBS blockers (pending reboots, component store issues)`n"
-    $confirmMsg += "  • Normalize setup state (registry keys, edition compatibility)`n"
-    $confirmMsg += "  • Repair WinRE registration`n`n"
+    $confirmMsg += "  - Test eligibility for in-place upgrade (Keep apps + files)`n"
+    $confirmMsg += "  - Clear CBS blockers (pending reboots, component store issues)`n"
+    $confirmMsg += "  - Normalize setup state (registry keys, edition compatibility)`n"
+    $confirmMsg += "  - Repair WinRE registration`n`n"
     $confirmMsg += "Target Drive: $drive`:`n`n"
     $confirmMsg += "Continue?"
     
@@ -2599,22 +2783,22 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
             $output += "SUMMARY`n"
             $output += "=" * 80 + "`n"
             $output += "Readiness Score: $($readinessResult.ReadinessScore)/100`n"
-            $output += "Eligible: $(if ($readinessResult.Eligible) { 'YES ✅' } else { 'NO ❌' })`n"
+            $output += "Eligible: $(if ($readinessResult.Eligible) { 'YES [OK]' } else { 'NO [X]' })`n"
             $output += "Actions Taken: $($readinessResult.ActionsTaken.Count)`n"
             $output += "Blockers Remaining: $($readinessResult.Blockers.Count)`n"
             $output += "Warnings: $($readinessResult.Warnings.Count)`n`n"
             
             if ($readinessResult.Eligible) {
-                $output += "✅ SYSTEM IS READY FOR REPAIR INSTALL`n`n"
+                $output += "[OK] SYSTEM IS READY FOR REPAIR INSTALL`n`n"
                 $output += "You can now run:`n"
                 $output += "  setup.exe /auto upgrade /quiet`n`n"
                 $output += "Or use Windows Setup GUI and select 'Keep apps + files'`n"
             } else {
-                $output += "❌ SYSTEM IS NOT FULLY READY`n`n"
+                $output += "[X] SYSTEM IS NOT FULLY READY`n`n"
                 if ($readinessResult.Blockers.Count -gt 0) {
                     $output += "Blockers must be resolved:`n"
                     foreach ($blocker in $readinessResult.Blockers) {
-                        $output += "  • $blocker`n"
+                        $output += "  - $blocker`n"
                     }
                 }
             }
@@ -2625,7 +2809,7 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
             # Show result dialog
             if ($readinessResult.Eligible) {
                 [System.Windows.MessageBox]::Show(
-                    "✅ System is ready for repair install!`n`n" +
+                    "System is ready for repair install!`n`n" +
                     "Readiness Score: $($readinessResult.ReadinessScore)/100`n`n" +
                     "You can now run setup.exe with 'Keep apps + files' option.",
                     "Ready for Repair Install",
@@ -2634,7 +2818,7 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
                 )
             } else {
                 [System.Windows.MessageBox]::Show(
-                    "⚠ System may not be fully ready.`n`n" +
+                    "System may not be fully ready.`n`n" +
                     "Readiness Score: $($readinessResult.ReadinessScore)/100`n`n" +
                     "Review the report for blockers and warnings.",
                     "Repair-Install Readiness",
@@ -2777,7 +2961,7 @@ $W.FindName("BtnRepairTemplates").Add_Click({
                 
                 if ($result.Success) {
                     [System.Windows.MessageBox]::Show(
-                        "✅ Template execution completed successfully!`n`n" +
+                        "Template execution completed successfully!`n`n" +
                         "Steps completed: $($result.StepsCompleted.Count)",
                         "Template Complete",
                         "OK",
@@ -2785,7 +2969,7 @@ $W.FindName("BtnRepairTemplates").Add_Click({
                     )
                 } else {
                     [System.Windows.MessageBox]::Show(
-                        "⚠ Template execution completed with warnings.`n`n" +
+                        "Template execution completed with warnings.`n`n" +
                         "Steps completed: $($result.StepsCompleted.Count)`n" +
                         "Steps failed: $($result.StepsFailed.Count)",
                         "Template Complete",
@@ -2926,7 +3110,7 @@ $W.FindName("BtnCheckPrereq").Add_Click({
         $output += "===============================================================`n`n"
         $output += "BLOCKING ISSUES:`n"
         foreach ($issue in $prereq.Issues) {
-            $output += "  ✗ $issue`n"
+            $output += "  - $issue`n"
         }
         $output += "`n"
     }
@@ -2934,7 +3118,7 @@ $W.FindName("BtnCheckPrereq").Add_Click({
     if ($prereq.Warnings.Count -gt 0) {
         $output += "WARNINGS:`n"
         foreach ($warn in $prereq.Warnings) {
-            $output += "  ⚠ $warn`n"
+            $output += "  [WARN] $warn`n"
         }
         $output += "`n"
     }
@@ -2942,7 +3126,7 @@ $W.FindName("BtnCheckPrereq").Add_Click({
     if ($prereq.Recommendations.Count -gt 0) {
         $output += "RECOMMENDATIONS:`n"
         foreach ($rec in $prereq.Recommendations) {
-            $output += "  • $rec`n"
+            $output += "  - $rec`n"
         }
         $output += "`n"
     }
@@ -3026,19 +3210,19 @@ $W.FindName("BtnStartRepair").Add_Click({
     
     if ($isOffline) {
         $confirmMsg += "This will:`n" +
-                      "  • Manipulate offline registry hives`n" +
-                      "  • Launch Windows Setup against offline OS`n" +
-                      "  • Restart and begin repair process`n`n" +
+                      "  - Manipulate offline registry hives`n" +
+                      "  - Launch Windows Setup against offline OS`n" +
+                      "  - Restart and begin repair process`n`n" +
                       "Registry backups saved to:`n"
         foreach ($backup in $repairResult.RegistryBackups) {
-            $confirmMsg += "  • $backup`n"
+            $confirmMsg += "  - $backup`n"
         }
         $confirmMsg += "`n"
     } else {
         $confirmMsg += "This will:`n" +
-                      "  • Launch Windows Setup`n" +
-                      "  • Restart your system`n" +
-                      "  • Begin repair process`n`n"
+                      "  - Launch Windows Setup`n" +
+                      "  - Restart your system`n" +
+                      "  - Begin repair process`n`n"
     }
     
     $confirmMsg += "Monitor progress at: $($repairResult.LogPath)`n`n" +
