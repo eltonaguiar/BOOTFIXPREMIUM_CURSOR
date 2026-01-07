@@ -44,6 +44,19 @@ function Start-TUI {
         Write-Host "F) Comprehensive Diagnostics" -ForegroundColor Cyan
         Write-Host "G) Complete System Repair" -ForegroundColor Yellow
         Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
+        Write-Host "I) Boot Chain Analysis (View Startup/Boot Logs)" -ForegroundColor Cyan
+        Write-Host "J) Utilities Menu (Notepad, Registry, PowerShell, etc.)" -ForegroundColor White
+        if ($envDisplay -eq "WinPE") {
+            Write-Host "K) Install Browser (Chrome/Firefox - WinPE only)" -ForegroundColor Cyan
+        }
+        Write-Host "L) Port Missing Drivers (Extract & Port Drivers)" -ForegroundColor Green
+        Write-Host "M) Generate SAVE_ME.txt (Recovery Commands FAQ)" -ForegroundColor Yellow
+        Write-Host "N) Disk Management Helper (diskpart guide)" -ForegroundColor Cyan
+        Write-Host "O) System Restore Point Management" -ForegroundColor Magenta
+        Write-Host "P) Network Diagnostics & Driver Management" -ForegroundColor Cyan
+        Write-Host "R) Keyboard Symbol Helper (ALT codes, copy symbols)" -ForegroundColor White
+        Write-Host "S) Ensure Repair-Install Ready (Critical for in-place upgrade)" -ForegroundColor Red
+        Write-Host "T) Repair Templates (One-click fixes for common scenarios)" -ForegroundColor Magenta
         Write-Host "Q) Quit" -ForegroundColor Yellow
         Write-Host ""
 
@@ -388,10 +401,16 @@ function Start-TUI {
                 Write-Host "This may take 15-30 minutes..." -ForegroundColor Yellow
                 Write-Host ""
                 
+                # Progress callback for TUI
+                $progressCallback = {
+                    param($message)
+                    Write-Host $message -ForegroundColor Cyan
+                }
+                
                 if ([string]::IsNullOrWhiteSpace($source)) {
-                    $repairResult = Start-SystemFileRepair -TargetDrive $drive
+                    $repairResult = Start-SystemFileRepair -TargetDrive $drive -ProgressCallback $progressCallback
                 } else {
-                    $repairResult = Start-SystemFileRepair -TargetDrive $drive -SourcePath $source
+                    $repairResult = Start-SystemFileRepair -TargetDrive $drive -SourcePath $source -ProgressCallback $progressCallback
                 }
                 
                 Write-Host ""
@@ -419,7 +438,13 @@ function Start-TUI {
                 }
                 Write-Host ""
                 
-                $repairResult = Start-DiskRepair -TargetDrive $drive -FixErrors -RecoverBadSectors:$recoverBadSectors
+                # Progress callback for TUI
+                $progressCallback = {
+                    param($message)
+                    Write-Host $message -ForegroundColor Cyan
+                }
+                
+                $repairResult = Start-DiskRepair -TargetDrive $drive -FixErrors -RecoverBadSectors:$recoverBadSectors -ProgressCallback $progressCallback
                 
                 Write-Host ""
                 Write-Host $repairResult.Report
@@ -590,6 +615,385 @@ function Start-TUI {
             }
             "h" {
                 $c = "H"
+                continue
+            }
+            "I" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nAnalyzing boot chain to identify failure point..." -ForegroundColor Gray
+                Write-Host "This will check all boot stages and identify where Windows is failing..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                $chainAnalysis = Get-BootChainAnalysis -TargetDrive $drive
+                
+                Write-Host ""
+                Write-Host $chainAnalysis.Report
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "i" {
+                $c = "I"
+                continue
+            }
+            "J" {
+                Write-Host "`nUTILITIES MENU" -ForegroundColor Cyan
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "1) Notepad" -ForegroundColor White
+                Write-Host "2) Registry Editor" -ForegroundColor White
+                Write-Host "3) PowerShell" -ForegroundColor White
+                Write-Host "4) System Restore" -ForegroundColor White
+                Write-Host "5) Command Prompt" -ForegroundColor White
+                Write-Host "6) Disk Management" -ForegroundColor White
+                Write-Host "7) Event Viewer" -ForegroundColor White
+                Write-Host "B) Back to main menu" -ForegroundColor Yellow
+                Write-Host ""
+                
+                $utilChoice = Read-Host "Select utility"
+                
+                switch ($utilChoice) {
+                    "1" {
+                        $result = Start-UtilitiesMenu -Utility "Notepad"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "2" {
+                        $result = Start-UtilitiesMenu -Utility "Registry"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "3" {
+                        $result = Start-UtilitiesMenu -Utility "PowerShell"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "4" {
+                        $result = Start-UtilitiesMenu -Utility "SystemRestore"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "5" {
+                        $result = Start-UtilitiesMenu -Utility "CommandPrompt"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "6" {
+                        $result = Start-UtilitiesMenu -Utility "DiskManagement"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "7" {
+                        $result = Start-UtilitiesMenu -Utility "EventViewer"
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "B" { continue }
+                    "b" { continue }
+                    default {
+                        Write-Host "Invalid selection." -ForegroundColor Red
+                    }
+                }
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "j" {
+                $c = "J"
+                continue
+            }
+            "K" {
+                if ($envDisplay -ne "WinPE") {
+                    Write-Host "`nBrowser installation is only available in WinPE environment." -ForegroundColor Yellow
+                    Write-Host "Current environment: $envDisplay" -ForegroundColor Gray
+                    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    continue
+                }
+                
+                Write-Host "`nBROWSER INSTALLATION (WinPE Only)" -ForegroundColor Cyan
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "1) Install Chrome Portable" -ForegroundColor White
+                Write-Host "2) Install Firefox Portable" -ForegroundColor White
+                Write-Host "B) Back to main menu" -ForegroundColor Yellow
+                Write-Host ""
+                
+                $browserChoice = Read-Host "Select browser"
+                
+                switch ($browserChoice) {
+                    "1" {
+                        $result = Install-PortableBrowser -Browser "Chrome"
+                        Write-Host ""
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "2" {
+                        $result = Install-PortableBrowser -Browser "Firefox"
+                        Write-Host ""
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "B" { continue }
+                    "b" { continue }
+                    default {
+                        Write-Host "Invalid selection." -ForegroundColor Red
+                    }
+                }
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "k" {
+                $c = "K"
+                continue
+            }
+            "L" {
+                $sourceDrive = Read-Host "`nSource drive with working Windows (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($sourceDrive)) {
+                    $sourceDrive = "C"
+                }
+                $sourceDrive = $sourceDrive.TrimEnd(':').ToUpper()
+                
+                $outputFolder = Read-Host "Output folder for drivers (press Enter for default: $env:SystemDrive\DriverPort)"
+                if ([string]::IsNullOrWhiteSpace($outputFolder)) {
+                    $outputFolder = "$env:SystemDrive\DriverPort"
+                }
+                
+                Write-Host "`nPorting missing drivers..." -ForegroundColor Gray
+                Write-Host "This will identify missing drivers and extract them from $sourceDrive`:..." -ForegroundColor Yellow
+                Write-Host ""
+                
+                $result = Get-MissingDriversForPorting -SourceDrive $sourceDrive -OutputFolder $outputFolder
+                
+                Write-Host ""
+                Write-Host $result.Instructions
+                Write-Host ""
+                Write-Host "Drivers ported: $($result.PortedDrivers.Count)" -ForegroundColor Green
+                Write-Host "Missing drivers detected: $($result.MissingDrivers.Count)" -ForegroundColor $(if ($result.MissingDrivers.Count -gt 0) { "Yellow" } else { "Green" })
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "l" {
+                $c = "L"
+                continue
+            }
+            "M" {
+                $outputPath = Read-Host "`nOutput path for SAVE_ME.txt (press Enter for default: $env:SystemDrive\SAVE_ME.txt)"
+                if ([string]::IsNullOrWhiteSpace($outputPath)) {
+                    $outputPath = "$env:SystemDrive\SAVE_ME.txt"
+                }
+                
+                Write-Host "`nGenerating SAVE_ME.txt with recovery commands and FAQ..." -ForegroundColor Gray
+                Write-Host ""
+                
+                $result = Generate-SaveMeTxt -OutputPath $outputPath
+                
+                if ($result.Success) {
+                    Write-Host "[SUCCESS] SAVE_ME.txt generated!" -ForegroundColor Green
+                    Write-Host "Location: $($result.Path)" -ForegroundColor Cyan
+                    Write-Host ""
+                    Write-Host "Opening in Notepad..." -ForegroundColor Yellow
+                    Start-Process notepad.exe -ArgumentList $result.Path -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
+                }
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "m" {
+                $c = "M"
+                continue
+            }
+            "N" {
+                Start-DiskManagementHelper -Interactive
+            }
+            "n" {
+                $c = "N"
+                continue
+            }
+            "O" {
+                Write-Host "`nSYSTEM RESTORE POINT MANAGEMENT" -ForegroundColor Cyan
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "1) Create Restore Point" -ForegroundColor White
+                Write-Host "2) List Restore Points" -ForegroundColor White
+                Write-Host "3) Restore from Restore Point" -ForegroundColor Yellow
+                Write-Host "4) Manage Restore Points (Cleanup, Health Check)" -ForegroundColor White
+                Write-Host "B) Back to main menu" -ForegroundColor Yellow
+                Write-Host ""
+                
+                $restoreChoice = Read-Host "Select option"
+                
+                switch ($restoreChoice) {
+                    "1" {
+                        $description = Read-Host "Restore point description (press Enter for default)"
+                        if ([string]::IsNullOrWhiteSpace($description)) {
+                            $description = "Miracle Boot Manual Restore Point"
+                        }
+                        
+                        Write-Host "`nCreating restore point..." -ForegroundColor Gray
+                        $result = Create-SystemRestorePoint -Description $description -OperationType "Manual"
+                        
+                        if ($result.Success) {
+                            Write-Host "[SUCCESS] $($result.Message)" -ForegroundColor Green
+                            if ($result.RestorePointID) {
+                                Write-Host "Restore Point ID: $($result.RestorePointID)" -ForegroundColor Cyan
+                            }
+                        } else {
+                            Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
+                        }
+                    }
+                    "2" {
+                        Write-Host "`nRetrieving restore points..." -ForegroundColor Gray
+                        $restorePoints = Get-SystemRestorePoints -Limit 20
+                        
+                        if ($restorePoints.Count -gt 0) {
+                            Write-Host ""
+                            Write-Host "AVAILABLE RESTORE POINTS:" -ForegroundColor Cyan
+                            Write-Host "─────────────────────────────────────────────────────" -ForegroundColor Gray
+                            foreach ($point in $restorePoints) {
+                                Write-Host "ID: $($point.SequenceNumber)" -ForegroundColor White
+                                Write-Host "  Description: $($point.Description)" -ForegroundColor Yellow
+                                Write-Host "  Created: $($point.CreationTime)" -ForegroundColor Gray
+                                Write-Host "  Type: $($point.RestorePointType)" -ForegroundColor Gray
+                                Write-Host ""
+                            }
+                        } else {
+                            Write-Host "[INFO] No restore points found or System Restore is disabled." -ForegroundColor Yellow
+                        }
+                    }
+                    "3" {
+                        Write-Host "`nWARNING: This will restore your system to a previous state!" -ForegroundColor Red
+                        Write-Host "All changes made after the restore point will be lost." -ForegroundColor Yellow
+                        Write-Host ""
+                        $confirm = Read-Host "Are you absolutely sure? Type 'YES' to confirm"
+                        
+                        if ($confirm -eq "YES") {
+                            $restorePoints = Get-SystemRestorePoints -Limit 20
+                            if ($restorePoints.Count -gt 0) {
+                                Write-Host ""
+                                Write-Host "Available restore points:" -ForegroundColor Cyan
+                                foreach ($point in $restorePoints) {
+                                    Write-Host "  $($point.SequenceNumber): $($point.Description) - $($point.CreationTime)" -ForegroundColor Gray
+                                }
+                                Write-Host ""
+                                $pointId = Read-Host "Enter restore point ID"
+                                
+                                $result = Restore-FromSystemRestorePoint -RestorePointID ([int]$pointId) -Confirm
+                                if ($result.Success) {
+                                    Write-Host "[SUCCESS] $($result.Message)" -ForegroundColor Green
+                                    Write-Host "System will restart to complete restore." -ForegroundColor Yellow
+                                } else {
+                                    Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
+                                }
+                            } else {
+                                Write-Host "[ERROR] No restore points available." -ForegroundColor Red
+                            }
+                        } else {
+                            Write-Host "Restore cancelled." -ForegroundColor Yellow
+                        }
+                    }
+                    "4" {
+                        Write-Host "`nManaging restore points..." -ForegroundColor Gray
+                        $result = Manage-SystemRestorePoints -HealthCheck -CleanupOld -KeepDays 30
+                        
+                        Write-Host ""
+                        Write-Host "HEALTH STATUS: $($result.HealthStatus)" -ForegroundColor $(if ($result.HealthStatus -eq "Healthy") { "Green" } else { "Yellow" })
+                        Write-Host "Restore Points Deleted: $($result.RestorePointsDeleted)" -ForegroundColor Cyan
+                        Write-Host ""
+                        Write-Host "Actions Taken:" -ForegroundColor Cyan
+                        foreach ($action in $result.ActionsTaken) {
+                            Write-Host "  - $action" -ForegroundColor Gray
+                        }
+                        Write-Host ""
+                        Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "B" { continue }
+                    "b" { continue }
+                    default {
+                        Write-Host "Invalid selection." -ForegroundColor Red
+                    }
+                }
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "o" {
+                $c = "O"
+                continue
+            }
+            "P" {
+                if (Get-Command Invoke-NetworkDiagnostics -ErrorAction SilentlyContinue) {
+                    Write-Host "`nNETWORK DIAGNOSTICS & DRIVER MANAGEMENT" -ForegroundColor Cyan
+                    Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                    Write-Host ""
+                    $result = Invoke-NetworkDiagnostics
+                    Write-Host $result.Report
+                } else {
+                    Write-Host "`nNetwork Diagnostics module not available." -ForegroundColor Yellow
+                    Write-Host "This feature requires NetworkDiagnostics.ps1 to be loaded." -ForegroundColor Gray
+                }
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "p" {
+                $c = "P"
+                continue
+            }
+            "R" {
+                if (Get-Command Show-SymbolHelper -ErrorAction SilentlyContinue) {
+                    Show-SymbolHelper
+                } else {
+                    Write-Host "`nKeyboard Symbol Helper not available." -ForegroundColor Yellow
+                    Write-Host "This feature requires KeyboardSymbols.ps1 to be loaded." -ForegroundColor Gray
+                }
+            }
+            "r" {
+                $c = "R"
+                continue
+            }
+            "S" {
+                $drive = Read-Host "`nTarget Windows drive letter (e.g. C, or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nREPAIR-INSTALL READINESS ENGINE" -ForegroundColor Red
+                Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "This will ensure Windows is ready for in-place upgrade (Keep apps + files)" -ForegroundColor Yellow
+                Write-Host ""
+                
+                $fix = Read-Host "Automatically fix blockers? (Y/N, default: Y)"
+                $fixBlockers = ($fix -ne "N" -and $fix -ne "n")
+                
+                Write-Host ""
+                Write-Host "Running repair-install readiness check..." -ForegroundColor Cyan
+                Write-Host ""
+                
+                # Progress callback
+                $progressCallback = {
+                    param($message)
+                    Write-Host $message -ForegroundColor Gray
+                }
+                
+                $result = Start-RepairInstallReadiness -TargetDrive $drive -FixBlockers:$fixBlockers -ProgressCallback $progressCallback
+                
+                Write-Host ""
+                Write-Host $result.Report
+                Write-Host ""
+                
+                if ($result.Eligible) {
+                    Write-Host "[SUCCESS] System is ready for repair install!" -ForegroundColor Green
+                    Write-Host "You can now run: setup.exe /auto upgrade /quiet" -ForegroundColor Cyan
+                } else {
+                    Write-Host "[WARNING] System is not fully ready. Review blockers above." -ForegroundColor Yellow
+                }
+                
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "s" {
+                $c = "S"
                 continue
             }
             "Q" { 

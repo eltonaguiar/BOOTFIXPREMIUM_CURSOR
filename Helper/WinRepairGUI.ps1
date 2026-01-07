@@ -1,5 +1,6 @@
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName Microsoft.VisualBasic
 
 function Start-GUI {
 $XAML = @"
@@ -21,8 +22,11 @@ $XAML = @"
         <Button Content="Registry" Name="BtnRegistry" Width="80" Height="25" Margin="2" ToolTip="Open Registry Editor"/>
         <Button Content="PowerShell" Name="BtnPowerShell" Width="90" Height="25" Margin="2" ToolTip="Open PowerShell"/>
         <Button Content="System Restore" Name="BtnRestore" Width="110" Height="25" Margin="2" ToolTip="Open System Restore Points"/>
+        <Button Content="Disk Management" Name="BtnDiskManagement" Width="130" Height="25" Margin="2" ToolTip="Open Disk Management"/>
         <Separator Margin="10,0"/>
         <Button Content="Enable Network" Name="BtnEnableNetwork" Width="110" Height="25" Margin="2" ToolTip="Enable network adapters and test internet"/>
+        <Button Content="Network Diagnostics" Name="BtnNetworkDiagnostics" Width="150" Height="25" Margin="2" ToolTip="Comprehensive network diagnostics and driver management"/>
+        <Button Content="Keyboard Symbols" Name="BtnKeyboardSymbols" Width="130" Height="25" Margin="2" ToolTip="Keyboard symbol helper and ALT code reference"/>
         <Button Content="ChatGPT Help" Name="BtnChatGPT" Width="100" Height="25" Margin="2" ToolTip="Open ChatGPT for boot assistance help"/>
         <Separator Margin="10,0"/>
         <TextBlock Name="NetworkStatus" Text="Network: Unknown" VerticalAlignment="Center" Margin="5,0" Foreground="Gray"/>
@@ -233,6 +237,8 @@ $XAML = @"
                 
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                     <Button Content="Check System Restore" Height="35" Name="BtnCheckRestore" Background="#28a745" Foreground="White" Width="180" Margin="0,0,10,0"/>
+                    <Button Content="Create Restore Point" Height="35" Name="BtnCreateRestorePoint" Background="#6f42c1" Foreground="White" Width="180" Margin="0,0,10,0"/>
+                    <Button Content="List Restore Points" Height="35" Name="BtnListRestorePoints" Background="#17a2b8" Foreground="White" Width="180" Margin="0,0,10,0"/>
                     <Button Content="Check Reagentc Health" Height="35" Name="BtnCheckReagentc" Background="#0078D7" Foreground="White" Width="180" Margin="0,0,10,0"/>
                     <Button Content="Get OS Information" Height="35" Name="BtnGetOSInfo" Background="#6f42c1" Foreground="White" Width="180" Margin="0,0,10,0"/>
                     <Button Content="Install Failure Analysis" Height="35" Name="BtnInstallFailure" Background="#dc3545" Foreground="White" Width="200"/>
@@ -270,7 +276,9 @@ $XAML = @"
                     <Button Content="Recommended Tools" Height="35" Name="BtnRecommendedTools" Background="#6c757d" Foreground="White" Width="160" Margin="0,0,10,0"/>
                         <Button Content="Export In-Use Drivers" Height="35" Name="BtnExportDrivers" Background="#28a745" Foreground="White" Width="180" Margin="0,0,10,0"/>
                         <Button Content="Generate Cleanup Script" Height="35" Name="BtnGenCleanupScript" Background="#ffc107" Foreground="Black" Width="180" Margin="0,0,10,0"/>
-                        <Button Content="In-Place Upgrade Readiness" Height="35" Name="BtnInPlaceReadiness" Background="#dc3545" Foreground="White" Width="200"/>
+                        <Button Content="In-Place Upgrade Readiness" Height="35" Name="BtnInPlaceReadiness" Background="#dc3545" Foreground="White" Width="200" Margin="0,0,10,0"/>
+                        <Button Content="Ensure Repair-Install Ready" Height="35" Name="BtnRepairInstallReady" Background="#dc3545" Foreground="White" Width="220" Margin="0,0,10,0"/>
+                        <Button Content="Repair Templates" Height="35" Name="BtnRepairTemplates" Background="#6f42c1" Foreground="White" Width="180"/>
                     </StackPanel>
                 </StackPanel>
                 
@@ -401,6 +409,14 @@ $W.FindName("BtnPowerShell").Add_Click({
     }
 })
 
+$W.FindName("BtnDiskManagement").Add_Click({
+    try {
+        Start-Process diskmgmt.msc -ErrorAction Stop
+    } catch {
+        [System.Windows.MessageBox]::Show("Disk Management not available in this environment.", "Warning", "OK", "Warning")
+    }
+})
+
 $W.FindName("BtnRestore").Add_Click({
     # Switch to Diagnostics tab and run System Restore check
     try {
@@ -458,6 +474,59 @@ $W.FindName("BtnEnableNetwork").Add_Click({
 })
 
 # ChatGPT Help button
+$W.FindName("BtnNetworkDiagnostics").Add_Click({
+    try {
+        if (Get-Command Invoke-NetworkDiagnostics -ErrorAction SilentlyContinue) {
+            Update-StatusBar -Message "Running network diagnostics..." -ShowProgress
+            
+            # Switch to Diagnostics tab if available
+            $grid = $W.Content
+            $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+            
+            if ($tabControl) {
+                $diagTab = $tabControl.Items | Where-Object { $_.Header -eq "Diagnostics" }
+                if ($diagTab) {
+                    $tabControl.SelectedItem = $diagTab
+                }
+            }
+            
+            $result = Invoke-NetworkDiagnostics
+            $W.FindName("DiagBox").Text = $result.Report
+            Update-StatusBar -Message "Network diagnostics complete" -HideProgress
+        } else {
+            [System.Windows.MessageBox]::Show(
+                "Network Diagnostics module not available.`n`nThis feature requires NetworkDiagnostics.ps1 to be loaded.",
+                "Module Not Available",
+                "OK",
+                "Warning"
+            )
+        }
+    } catch {
+        [System.Windows.MessageBox]::Show("Error running network diagnostics: $_", "Error", "OK", "Error")
+        Update-StatusBar -Message "Network diagnostics failed" -HideProgress
+    }
+})
+
+$W.FindName("BtnKeyboardSymbols").Add_Click({
+    try {
+        if (Get-Command Show-SymbolHelperGUI -ErrorAction SilentlyContinue) {
+            Show-SymbolHelperGUI
+        } elseif (Get-Command Show-SymbolHelper -ErrorAction SilentlyContinue) {
+            # Fallback to console version
+            Show-SymbolHelper
+        } else {
+            [System.Windows.MessageBox]::Show(
+                "Keyboard Symbol Helper not available.`n`nThis feature requires KeyboardSymbols.ps1 to be loaded.",
+                "Module Not Available",
+                "OK",
+                "Warning"
+            )
+        }
+    } catch {
+        [System.Windows.MessageBox]::Show("Error launching keyboard symbol helper: $_", "Error", "OK", "Error")
+    }
+})
+
 $W.FindName("BtnChatGPT").Add_Click({
     try {
         Update-StatusBar -Message "Opening ChatGPT help..." -ShowProgress
@@ -1422,6 +1491,105 @@ $W.FindName("BtnCheckRestore").Add_Click({
     $W.FindName("DiagBox").Text = $output
 })
 
+$W.FindName("BtnCreateRestorePoint").Add_Click({
+    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+    $drive = $env:SystemDrive.TrimEnd(':')
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    # Use a simple input dialog
+    $description = "Miracle Boot Manual Restore Point - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    
+    try {
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        $userInput = [Microsoft.VisualBasic.Interaction]::InputBox(
+            "Enter description for restore point:",
+            "Create System Restore Point",
+            $description
+        )
+        if (-not [string]::IsNullOrWhiteSpace($userInput)) {
+            $description = $userInput
+        }
+    } catch {
+        # If InputBox fails, use default description
+        Write-Warning "Could not show input dialog, using default description"
+    }
+    
+    if (-not [string]::IsNullOrWhiteSpace($description)) {
+        Update-StatusBar -Message "Creating restore point..." -ShowProgress
+        $W.FindName("DiagBox").Text = "Creating system restore point...`n`nPlease wait...`n"
+        
+        $result = Create-SystemRestorePoint -Description $description -OperationType "Manual"
+        
+        $output = "RESTORE POINT CREATION`n"
+        $output += "===============================================================`n`n"
+        
+        if ($result.Success) {
+            $output += "[SUCCESS] Restore point created successfully!`n`n"
+            $output += "Description: $description`n"
+            if ($result.RestorePointID) {
+                $output += "Restore Point ID: $($result.RestorePointID)`n"
+            }
+            if ($result.RestorePointPath) {
+                $output += "Path: $($result.RestorePointPath)`n"
+            }
+            Update-StatusBar -Message "Restore point created successfully" -HideProgress
+        } else {
+            $output += "[ERROR] Failed to create restore point`n`n"
+            $output += "Message: $($result.Message)`n"
+            if ($result.Error) {
+                $output += "Error: $($result.Error)`n"
+            }
+            Update-StatusBar -Message "Failed to create restore point" -HideProgress
+        }
+        
+        $W.FindName("DiagBox").Text = $output
+    }
+})
+
+$W.FindName("BtnListRestorePoints").Add_Click({
+    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+    $drive = $env:SystemDrive.TrimEnd(':')
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    Update-StatusBar -Message "Retrieving restore points..." -ShowProgress
+    $W.FindName("DiagBox").Text = "Retrieving restore points for drive $drive`:...`n`n"
+    
+    $restorePoints = Get-SystemRestorePoints -Limit 50
+    
+    $output = "SYSTEM RESTORE POINTS`n"
+    $output += "===============================================================`n`n"
+    
+    if ($restorePoints.Count -gt 0) {
+        $output += "Found $($restorePoints.Count) restore point(s):`n`n"
+        $num = 1
+        foreach ($point in $restorePoints) {
+            $output += "$num. ID: $($point.SequenceNumber)`n"
+            $output += "   Description: $($point.Description)`n"
+            $output += "   Created: $($point.CreationTime)`n"
+            $output += "   Type: $($point.RestorePointType)`n"
+            $output += "   Event: $($point.EventType)`n`n"
+            $num++
+        }
+        Update-StatusBar -Message "Found $($restorePoints.Count) restore points" -HideProgress
+    } else {
+        $output += "[INFO] No restore points found.`n`n"
+        $output += "System Restore may be disabled or no restore points have been created.`n"
+        Update-StatusBar -Message "No restore points found" -HideProgress
+    }
+    
+    $W.FindName("DiagBox").Text = $output
+})
+
 $W.FindName("BtnCheckReagentc").Add_Click({
     $W.FindName("DiagBox").Text = "Checking Reagentc (Windows Recovery Environment) health...`n`n"
     $reagentcHealth = Get-ReagentcHealth
@@ -2103,9 +2271,9 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
         $output += "`n`n"
         $output += "=" * 80 + "`n"
         if ($readiness.ReadyForInPlaceUpgrade) {
-            $output += "STATUS: ✓ READY FOR IN-PLACE UPGRADE`n"
+            $output += "STATUS: [OK] READY FOR IN-PLACE UPGRADE`n"
         } else {
-            $output += "STATUS: ✗ BLOCKED - NOT READY FOR IN-PLACE UPGRADE`n"
+            $output += "STATUS: [BLOCKED] NOT READY FOR IN-PLACE UPGRADE`n"
             $output += "BLOCKERS FOUND: $($readiness.Blockers.Count)`n"
         }
         $output += "=" * 80 + "`n"
@@ -2139,6 +2307,123 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
             "OK",
             "Error"
         )
+    }
+})
+
+$W.FindName("BtnRepairInstallReady").Add_Click({
+    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+    $drive = "C"
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    # Confirm action
+    $confirmMsg = "REPAIR-INSTALL READINESS ENGINE`n`n"
+    $confirmMsg += "This will:`n"
+    $confirmMsg += "  • Test eligibility for in-place upgrade (Keep apps + files)`n"
+    $confirmMsg += "  • Clear CBS blockers (pending reboots, component store issues)`n"
+    $confirmMsg += "  • Normalize setup state (registry keys, edition compatibility)`n"
+    $confirmMsg += "  • Repair WinRE registration`n`n"
+    $confirmMsg += "Target Drive: $drive`:`n`n"
+    $confirmMsg += "Continue?"
+    
+    $result = [System.Windows.MessageBox]::Show(
+        $confirmMsg,
+        "Repair-Install Readiness",
+        "YesNo",
+        "Question"
+    )
+    
+    if ($result -eq "Yes") {
+        Update-StatusBar -Message "Running repair-install readiness engine..." -ShowProgress
+        $W.FindName("LogAnalysisBox").Text = "REPAIR-INSTALL READINESS ENGINE`n"
+        $W.FindName("LogAnalysisBox").Text += "=" * 80 + "`n`n"
+        $W.FindName("LogAnalysisBox").Text += "Target Drive: $drive`:`n"
+        $W.FindName("LogAnalysisBox").Text += "Mode: $(if ((Get-EnvironmentType) -eq 'FullOS') { 'Online' } else { 'Offline' })`n`n"
+        $W.FindName("LogAnalysisBox").Text += "Running comprehensive checks and fixes...`n`n"
+        $W.FindName("LogAnalysisBox").Text += "This may take several minutes...`n`n"
+        
+        try {
+            # Progress callback for status updates
+            $progressCallback = {
+                param($message)
+                $W.Dispatcher.Invoke([action]{
+                    $W.FindName("LogAnalysisBox").Text += "$message`n"
+                    $W.FindName("LogAnalysisBox").ScrollToEnd()
+                    Update-StatusBar -Message $message -ShowProgress
+                }, [System.Windows.Threading.DispatcherPriority]::Input)
+            }
+            
+            $readinessResult = Start-RepairInstallReadiness -TargetDrive $drive -FixBlockers -ProgressCallback $progressCallback
+            
+            $output = $readinessResult.Report
+            
+            # Add visual summary
+            $output += "`n`n"
+            $output += "=" * 80 + "`n"
+            $output += "SUMMARY`n"
+            $output += "=" * 80 + "`n"
+            $output += "Readiness Score: $($readinessResult.ReadinessScore)/100`n"
+            $output += "Eligible: $(if ($readinessResult.Eligible) { 'YES ✅' } else { 'NO ❌' })`n"
+            $output += "Actions Taken: $($readinessResult.ActionsTaken.Count)`n"
+            $output += "Blockers Remaining: $($readinessResult.Blockers.Count)`n"
+            $output += "Warnings: $($readinessResult.Warnings.Count)`n`n"
+            
+            if ($readinessResult.Eligible) {
+                $output += "✅ SYSTEM IS READY FOR REPAIR INSTALL`n`n"
+                $output += "You can now run:`n"
+                $output += "  setup.exe /auto upgrade /quiet`n`n"
+                $output += "Or use Windows Setup GUI and select 'Keep apps + files'`n"
+            } else {
+                $output += "❌ SYSTEM IS NOT FULLY READY`n`n"
+                if ($readinessResult.Blockers.Count -gt 0) {
+                    $output += "Blockers must be resolved:`n"
+                    foreach ($blocker in $readinessResult.Blockers) {
+                        $output += "  • $blocker`n"
+                    }
+                }
+            }
+            
+            $W.FindName("LogAnalysisBox").Text = $output
+            $W.FindName("LogAnalysisBox").ScrollToEnd()
+            
+            # Show result dialog
+            if ($readinessResult.Eligible) {
+                [System.Windows.MessageBox]::Show(
+                    "✅ System is ready for repair install!`n`n" +
+                    "Readiness Score: $($readinessResult.ReadinessScore)/100`n`n" +
+                    "You can now run setup.exe with 'Keep apps + files' option.",
+                    "Ready for Repair Install",
+                    "OK",
+                    "Information"
+                )
+            } else {
+                [System.Windows.MessageBox]::Show(
+                    "⚠ System may not be fully ready.`n`n" +
+                    "Readiness Score: $($readinessResult.ReadinessScore)/100`n`n" +
+                    "Review the report for blockers and warnings.",
+                    "Repair-Install Readiness",
+                    "OK",
+                    "Warning"
+                )
+            }
+            
+            Update-StatusBar -Message "Repair-install readiness check complete" -HideProgress
+        } catch {
+            $W.FindName("LogAnalysisBox").Text += "`n`n[ERROR] Failed: $_`n"
+            Update-StatusBar -Message "Repair-install readiness check failed" -HideProgress
+            [System.Windows.MessageBox]::Show(
+                "Error running repair-install readiness check:`n`n$_",
+                "Error",
+                "OK",
+                "Error"
+            )
+        }
+    } else {
+        Update-StatusBar -Message "Repair-install readiness check cancelled" -HideProgress
     }
 })
 

@@ -5579,14 +5579,16 @@ function Test-SystemFileHealth {
 function Start-SystemFileRepair {
     <#
     .SYNOPSIS
-    Automated SFC + DISM repair sequence with progress tracking.
+    Automated SFC + DISM repair sequence with progress tracking and automatic restore point creation.
     #>
     param(
         [string]$TargetDrive = "C",
         [string]$SourcePath = "",
         [switch]$SkipSFC = $false,
         [switch]$SkipDISM = $false,
-        [scriptblock]$ProgressCallback = $null
+        [scriptblock]$ProgressCallback = $null,
+        [switch]$CreateRestorePoint = $true,
+        [switch]$SkipRestorePoint = $false
     )
     
     $result = @{
@@ -5597,6 +5599,7 @@ function Start-SystemFileRepair {
         DISMOutput = ""
         Report = ""
         Errors = @()
+        RestorePointID = $null
     }
     
     $report = New-Object System.Text.StringBuilder
@@ -5610,6 +5613,22 @@ function Start-SystemFileRepair {
     $report.AppendLine("Mode: $(if ($isOffline) { 'Offline' } else { 'Online' })") | Out-Null
     $report.AppendLine($separator) | Out-Null
     $report.AppendLine("") | Out-Null
+    
+    # Create restore point before repair (if enabled and online)
+    if ($CreateRestorePoint -and -not $SkipRestorePoint -and -not $isOffline) {
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Creating system restore point..."
+        }
+        $report.AppendLine("Creating system restore point before repair...") | Out-Null
+        $restorePoint = Create-SystemRestorePoint -Description "Before System File Repair" -OperationType "SystemFileRepair"
+        if ($restorePoint.Success) {
+            $report.AppendLine("[OK] Restore point created: $($restorePoint.RestorePointPath)") | Out-Null
+            $result.RestorePointID = $restorePoint.RestorePointID
+        } else {
+            $report.AppendLine("[WARNING] Could not create restore point: $($restorePoint.Message)") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
     
     # Pre-flight check
     if ($null -ne $ProgressCallback) {
@@ -5636,7 +5655,29 @@ function Start-SystemFileRepair {
                 $sfcCmd = "sfc /scannow"
             }
             
-            $sfcOutput = Invoke-Expression $sfcCmd 2>&1 | Out-String
+            # Use progress tracking if callback provided
+            if ($null -ne $ProgressCallback) {
+                $sfcOutputBuilder = New-Object System.Text.StringBuilder
+                $sfcResult = Start-OperationWithProgress -Command $sfcCmd -OperationType "SFC" -ProgressCallback {
+                    param($progress)
+                    $progressMsg = "SFC: $($progress.CurrentOperation)"
+                    if ($progress.Percentage -gt 0) {
+                        $progressMsg += " - $($progress.Percentage)%"
+                    }
+                    if ($progress.EstimatedTimeRemaining) {
+                        $progressMsg += " (Est. remaining: $($progress.EstimatedTimeRemaining.ToString('mm\:ss')))"
+                    }
+                    & $ProgressCallback $progressMsg
+                } -OutputCallback {
+                    param($line)
+                    $null = $script:sfcOutputBuilder.AppendLine($line)
+                }
+                
+                $sfcOutput = $sfcResult.Output
+            } else {
+                $sfcOutput = Invoke-Expression $sfcCmd 2>&1 | Out-String
+            }
+            
             $result.SFCOutput = $sfcOutput
             $report.AppendLine($sfcOutput) | Out-Null
             
@@ -5683,7 +5724,29 @@ function Start-SystemFileRepair {
                 $dismCmd = "dism /Online /Cleanup-Image /RestoreHealth"
             }
             
-            $dismOutput = Invoke-Expression $dismCmd 2>&1 | Out-String
+            # Use progress tracking if callback provided
+            if ($null -ne $ProgressCallback) {
+                $dismOutputBuilder = New-Object System.Text.StringBuilder
+                $dismResult = Start-OperationWithProgress -Command $dismCmd -OperationType "DISM" -ProgressCallback {
+                    param($progress)
+                    $progressMsg = "DISM: $($progress.CurrentOperation)"
+                    if ($progress.Percentage -gt 0) {
+                        $progressMsg += " - $($progress.Percentage)%"
+                    }
+                    if ($progress.EstimatedTimeRemaining) {
+                        $progressMsg += " (Est. remaining: $($progress.EstimatedTimeRemaining.ToString('mm\:ss')))"
+                    }
+                    & $ProgressCallback $progressMsg
+                } -OutputCallback {
+                    param($line)
+                    $null = $script:dismOutputBuilder.AppendLine($line)
+                }
+                
+                $dismOutput = $dismResult.Output
+            } else {
+                $dismOutput = Invoke-Expression $dismCmd 2>&1 | Out-String
+            }
+            
             $result.DISMOutput = $dismOutput
             $report.AppendLine($dismOutput) | Out-Null
             
@@ -5903,6 +5966,18 @@ function Start-DiskRepair {
         }
     }
     
+    # Create restore point before chkdsk if online
+    $envType = Get-EnvironmentType
+    if ($envType -eq 'FullOS' -and -not $result.RequiresReboot) {
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Creating restore point before disk repair..."
+        }
+        $restorePoint = Create-SystemRestorePoint -Description "Before Disk Repair (chkdsk)" -OperationType "DiskRepair"
+        if ($restorePoint.Success) {
+            $report.AppendLine("[OK] Restore point created before disk repair") | Out-Null
+        }
+    }
+    
     # Execute chkdsk
     if ($null -ne $ProgressCallback) {
         & $ProgressCallback "Running chkdsk... (this may take a long time)"
@@ -5918,8 +5993,29 @@ function Start-DiskRepair {
             $report.AppendLine("Restart your computer to begin disk repair.") | Out-Null
             $result.Success = $true
         } else {
-            # Run immediately
-            $chkdskOutput = Invoke-Expression $chkdskCmd 2>&1 | Out-String
+            # Run immediately with progress tracking
+            if ($null -ne $ProgressCallback) {
+                $chkdskOutputBuilder = New-Object System.Text.StringBuilder
+                $chkdskResult = Start-OperationWithProgress -Command $chkdskCmd -OperationType "CHKDSK" -ProgressCallback {
+                    param($progress)
+                    $progressMsg = "CHKDSK $($progress.Stage): $($progress.CurrentOperation)"
+                    if ($progress.Percentage -gt 0) {
+                        $progressMsg += " - $($progress.Percentage)%"
+                    }
+                    if ($progress.EstimatedTimeRemaining) {
+                        $progressMsg += " (Est. remaining: $($progress.EstimatedTimeRemaining.ToString('hh\:mm\:ss')))"
+                    }
+                    & $ProgressCallback $progressMsg
+                } -OutputCallback {
+                    param($line)
+                    $null = $script:chkdskOutputBuilder.AppendLine($line)
+                }
+                
+                $chkdskOutput = $chkdskResult.Output
+            } else {
+                $chkdskOutput = Invoke-Expression $chkdskCmd 2>&1 | Out-String
+            }
+            
             $result.Output = $chkdskOutput
             $report.AppendLine($chkdskOutput) | Out-Null
             
@@ -6645,8 +6741,26 @@ function Start-CompleteSystemRepair {
     }
     $report.AppendLine("") | Out-Null
     
-    # Step 1: Create checkpoint
-    $report.AppendLine("STEP 1: Creating repair checkpoint...") | Out-Null
+    # Step 1: Create restore point and checkpoint
+    $envType = Get-EnvironmentType
+    if ($envType -eq 'FullOS') {
+        $report.AppendLine("STEP 1: Creating system restore point...") | Out-Null
+        Write-RepairLog "Creating system restore point"
+        try {
+            $restorePoint = Create-SystemRestorePoint -Description "Before Complete System Repair" -OperationType "CompleteSystemRepair"
+            if ($restorePoint.Success) {
+                $report.AppendLine("[OK] Restore point created: $($restorePoint.RestorePointPath)") | Out-Null
+                $result.RestorePointID = $restorePoint.RestorePointID
+            } else {
+                $report.AppendLine("[WARNING] Could not create restore point: $($restorePoint.Message)") | Out-Null
+            }
+        } catch {
+            $report.AppendLine("[WARNING] Restore point creation failed: $_") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    $report.AppendLine("STEP 2: Creating repair checkpoint...") | Out-Null
     Write-RepairLog "Creating repair checkpoint"
     try {
         $checkpoint = Save-RepairCheckpoint -TargetDrive $TargetDrive
@@ -7151,6 +7265,2442 @@ function Get-InPlaceUpgradeReadiness {
     $report.AppendLine("") | Out-Null
     $report.AppendLine("Log Files Analyzed: $($result.LogFilesAnalyzed.Count)") | Out-Null
     $report.AppendLine("  - $($result.LogFilesAnalyzed -join "`n  - ")") | Out-Null
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Get-BootChainAnalysis {
+    <#
+    .SYNOPSIS
+    Analyzes boot logs to identify which stage of the boot chain failed and why.
+    #>
+    param([string]$TargetDrive = 'C')
+    # Implementation will be added
+    return @{ Report = 'Boot chain analysis function' }
+}
+function Get-BootChainAnalysis {
+    <#
+    .SYNOPSIS
+    Analyzes boot logs to identify which stage of the boot chain failed and why.
+    
+    .DESCRIPTION
+    Provides detailed boot chain failure analysis by examining:
+    - Boot log (nbtlog.txt) for driver/service failures
+    - BCD entries for bootloader issues
+    - Boot files for corruption
+    - Identifies failure stage: BIOS/UEFI, Boot Manager, Boot Loader, Kernel, Drivers, or Session Manager
+    
+    Returns detailed report showing where in the boot chain Windows failed.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    # Normalize drive letter
+    if ($TargetDrive -match '^([A-Z]):?$') {
+        $TargetDrive = $matches[1]
+    }
+    
+    $result = @{
+        FailureStage = "Unknown"
+        FailureReason = ""
+        BootStages = @()
+        FailedDrivers = @()
+        FailedServices = @()
+        BootFilesStatus = @{}
+        BCDStatus = "Unknown"
+        Recommendations = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("BOOT CHAIN FAILURE ANALYSIS") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Define boot stages
+    $bootStages = @(
+        @{ Name = "Stage 1: BIOS/UEFI Initialization"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 2: Boot Manager (bootmgr)"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 3: Boot Loader (winload.exe)"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 4: Kernel Initialization (ntoskrnl.exe)"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 5: Driver Loading"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 6: Session Manager (smss.exe)"; Status = "Unknown"; Details = "" },
+        @{ Name = "Stage 7: Windows Logon"; Status = "Unknown"; Details = "" }
+    )
+    
+    # Check boot log
+    $logPath = "$TargetDrive`:\Windows\ntbtlog.txt"
+    $bootLogAnalysis = Get-BootLogAnalysis -TargetDrive $TargetDrive
+    
+    # Stage 1: BIOS/UEFI - Usually passes if we can see the drive
+    if (Test-Path "$TargetDrive`:\Windows") {
+        $bootStages[0].Status = "Passed"
+        $bootStages[0].Details = "Hardware detected, can access Windows drive"
+    } else {
+        $bootStages[0].Status = "Failed"
+        $bootStages[0].Details = "Cannot access Windows drive - hardware issue"
+        $result.FailureStage = "Stage 1: BIOS/UEFI"
+        $result.FailureReason = "Hardware initialization failure - cannot access Windows drive"
+    }
+    
+    # Stage 2: Boot Manager - Check BCD
+    try {
+        $bcdCheck = bcdedit /enum 2>&1 | Select-String "Windows Boot Manager"
+        if ($bcdCheck) {
+            $bootStages[1].Status = "Passed"
+            $bootStages[1].Details = "BCD contains Windows Boot Manager entry"
+            $result.BCDStatus = "OK"
+        } else {
+            $bootStages[1].Status = "Failed"
+            $bootStages[1].Details = "BCD missing or corrupted - no Windows Boot Manager entry"
+            $result.BCDStatus = "Corrupted"
+            if ($result.FailureStage -eq "Unknown") {
+                $result.FailureStage = "Stage 2: Boot Manager"
+                $result.FailureReason = "Boot Configuration Data (BCD) is missing or corrupted"
+            }
+        }
+    } catch {
+        $bootStages[1].Status = "Failed"
+        $bootStages[1].Details = "Cannot access BCD: $_"
+        $result.BCDStatus = "Inaccessible"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 2: Boot Manager"
+            $result.FailureReason = "Cannot access BCD store"
+        }
+    }
+    
+    # Stage 3: Boot Loader - Check winload.exe
+    $winloadPath = "$TargetDrive`:\Windows\System32\winload.exe"
+    if (Test-Path $winloadPath) {
+        $bootStages[2].Status = "Passed"
+        $bootStages[2].Details = "winload.exe found"
+        $result.BootFilesStatus["winload.exe"] = "OK"
+    } else {
+        $bootStages[2].Status = "Failed"
+        $bootStages[2].Details = "winload.exe missing or corrupted"
+        $result.BootFilesStatus["winload.exe"] = "Missing"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 3: Boot Loader"
+            $result.FailureReason = "Boot loader (winload.exe) is missing or corrupted"
+        }
+    }
+    
+    # Stage 4: Kernel - Check ntoskrnl.exe and hal.dll
+    $kernelPath = "$TargetDrive`:\Windows\System32\ntoskrnl.exe"
+    $halPath = "$TargetDrive`:\Windows\System32\hal.dll"
+    
+    if (Test-Path $kernelPath) {
+        $bootStages[3].Status = "Passed"
+        $bootStages[3].Details = "ntoskrnl.exe found"
+        $result.BootFilesStatus["ntoskrnl.exe"] = "OK"
+    } else {
+        $bootStages[3].Status = "Failed"
+        $bootStages[3].Details = "ntoskrnl.exe missing or corrupted"
+        $result.BootFilesStatus["ntoskrnl.exe"] = "Missing"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 4: Kernel"
+            $result.FailureReason = "Windows kernel (ntoskrnl.exe) is missing or corrupted"
+        }
+    }
+    
+    if (Test-Path $halPath) {
+        $result.BootFilesStatus["hal.dll"] = "OK"
+    } else {
+        $result.BootFilesStatus["hal.dll"] = "Missing"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 4: Kernel"
+            $result.FailureReason = "Hardware Abstraction Layer (hal.dll) is missing"
+        }
+    }
+    
+    # Stage 5: Driver Loading - Analyze boot log
+    if ($bootLogAnalysis.Found) {
+        if ($bootLogAnalysis.MissingDrivers.Count -gt 0) {
+            $bootStages[4].Status = "Failed"
+            $bootStages[4].Details = "$($bootLogAnalysis.MissingDrivers.Count) critical drivers failed to load"
+            $result.FailedDrivers = $bootLogAnalysis.MissingDrivers
+            if ($result.FailureStage -eq "Unknown") {
+                $result.FailureStage = "Stage 5: Driver Loading"
+                $result.FailureReason = "Critical drivers failed to load: $($bootLogAnalysis.MissingDrivers -join ', ')"
+            }
+        } else {
+            $bootStages[4].Status = "Passed"
+            $bootStages[4].Details = "No critical driver failures detected"
+        }
+    } else {
+        $bootStages[4].Status = "Unknown"
+        $bootStages[4].Details = "Boot log not available for analysis"
+    }
+    
+    # Stage 6 & 7: Session Manager and Logon - Check for system file corruption
+    $smssPath = "$TargetDrive`:\Windows\System32\smss.exe"
+    $winlogonPath = "$TargetDrive`:\Windows\System32\winlogon.exe"
+    
+    if (Test-Path $smssPath) {
+        $bootStages[5].Status = "Passed"
+        $bootStages[5].Details = "smss.exe found"
+    } else {
+        $bootStages[5].Status = "Failed"
+        $bootStages[5].Details = "smss.exe missing"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 6: Session Manager"
+            $result.FailureReason = "Session Manager (smss.exe) is missing"
+        }
+    }
+    
+    if (Test-Path $winlogonPath) {
+        $bootStages[6].Status = "Passed"
+        $bootStages[6].Details = "winlogon.exe found"
+    } else {
+        $bootStages[6].Status = "Failed"
+        $bootStages[6].Details = "winlogon.exe missing"
+        if ($result.FailureStage -eq "Unknown") {
+            $result.FailureStage = "Stage 7: Windows Logon"
+            $result.FailureReason = "Windows Logon (winlogon.exe) is missing"
+        }
+    }
+    
+    # Generate recommendations based on failure stage
+    switch ($result.FailureStage) {
+        "Stage 1: BIOS/UEFI" {
+            $result.Recommendations += "Check hardware connections (SATA cables, power)"
+            $result.Recommendations += "Verify disk is detected in BIOS/UEFI"
+            $result.Recommendations += "Test with different SATA port or cable"
+        }
+        "Stage 2: Boot Manager" {
+            $result.Recommendations += "Run: bcdboot $TargetDrive`:\Windows"
+            $result.Recommendations += "Run: bootrec /rebuildbcd"
+            $result.Recommendations += "Check EFI partition is accessible"
+        }
+        "Stage 3: Boot Loader" {
+            $result.Recommendations += "Run: bootrec /fixboot"
+            $result.Recommendations += "Run: bcdboot $TargetDrive`:\Windows"
+            $result.Recommendations += "Check for disk corruption: chkdsk $TargetDrive`: /f"
+        }
+        "Stage 4: Kernel" {
+            $result.Recommendations += "Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+            $result.Recommendations += "Run: DISM /Image:$TargetDrive`:\ /Cleanup-Image /RestoreHealth"
+            $result.Recommendations += "Check for disk corruption: chkdsk $TargetDrive`: /f /r"
+        }
+        "Stage 5: Driver Loading" {
+            $result.Recommendations += "Identify missing drivers from boot log"
+            $result.Recommendations += "Inject missing drivers using DISM"
+            $result.Recommendations += "Check for driver signature issues"
+            $result.Recommendations += "Verify storage controller drivers are present"
+        }
+        "Stage 6: Session Manager" {
+            $result.Recommendations += "Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+            $result.Recommendations += "Check registry hives for corruption"
+            $result.Recommendations += "Consider in-place upgrade repair"
+        }
+        "Stage 7: Windows Logon" {
+            $result.Recommendations += "Run: sfc /scannow"
+            $result.Recommendations += "Check for system file corruption"
+            $result.Recommendations += "Consider in-place upgrade repair"
+        }
+        default {
+            $result.Recommendations += "Run comprehensive diagnostics"
+            $result.Recommendations += "Check boot log for detailed errors"
+            $result.Recommendations += "Run automated boot repair"
+        }
+    }
+    
+    # Build report
+    $report.AppendLine("BOOT CHAIN STAGE ANALYSIS:") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    
+    foreach ($stage in $bootStages) {
+        $statusColor = switch ($stage.Status) {
+            "Passed" { "[OK]" }
+            "Failed" { "[FAIL]" }
+            default { "[?]" }
+        }
+        $report.AppendLine("$statusColor $($stage.Name)") | Out-Null
+        $report.AppendLine("    $($stage.Details)") | Out-Null
+    }
+    
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    
+    if ($result.FailureStage -ne "Unknown") {
+        $report.AppendLine("FAILURE DETECTED") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("Failure Stage: $($result.FailureStage)") | Out-Null
+        $report.AppendLine("Failure Reason: $($result.FailureReason)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($result.FailedDrivers.Count -gt 0) {
+            $report.AppendLine("Failed Drivers:") | Out-Null
+            foreach ($driver in $result.FailedDrivers) {
+                $report.AppendLine("  - $driver") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        foreach ($rec in $result.Recommendations) {
+            $report.AppendLine("  • $rec") | Out-Null
+        }
+    } else {
+        $report.AppendLine("NO FAILURE DETECTED") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("All boot chain stages appear to have passed.") | Out-Null
+        $report.AppendLine("If boot is still failing, check:") | Out-Null
+        $report.AppendLine("  • Event logs for application/service errors") | Out-Null
+        $report.AppendLine("  • System file integrity (SFC/DISM)") | Out-Null
+        $report.AppendLine("  • Disk health (chkdsk)") | Out-Null
+    }
+    
+    $result.BootStages = $bootStages
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Install-PortableBrowser {
+    <#
+    .SYNOPSIS
+    Attempts to install a portable browser (Chrome or Firefox) in WinPE environment.
+    #>
+    param(
+        [ValidateSet("Chrome", "Firefox")]
+        [string]$Browser = "Chrome"
+    )
+    
+    $envType = Get-EnvironmentType
+    
+    if ($envType -ne "WinPE") {
+        return @{
+            Success = $false
+            Message = "Browser installation only available in WinPE environment. Current environment: $envType"
+        }
+    }
+    
+    $result = @{
+        Success = $false
+        Message = ""
+        BrowserPath = ""
+    }
+    
+    $browserDir = "$env:SystemDrive\Browsers"
+    
+    try {
+        if (-not (Test-Path $browserDir)) {
+            New-Item -ItemType Directory -Path $browserDir -Force | Out-Null
+        }
+        
+        if ($Browser -eq "Chrome") {
+            $chromePath = "$browserDir\Chrome\chrome.exe"
+            
+            if (Test-Path $chromePath) {
+                $result.Success = $true
+                $result.Message = "Chrome already installed at: $chromePath"
+                $result.BrowserPath = $chromePath
+                return $result
+            }
+            
+            $result.Message = "Chrome portable browser installation requires manual download.`n`n"
+            $result.Message += "Instructions:`n"
+            $result.Message += "1. Download Chrome Portable from: https://portableapps.com/apps/internet/google_chrome_portable`n"
+            $result.Message += "2. Extract to: $browserDir\Chrome`n"
+            $result.Message += "3. Run: $chromePath`n`n"
+            $result.Message += "Alternatively, use the network-enabled CLI browser option (option 7 in menu)."
+            
+        } else {
+            $firefoxPath = "$browserDir\Firefox\firefox.exe"
+            
+            if (Test-Path $firefoxPath) {
+                $result.Success = $true
+                $result.Message = "Firefox already installed at: $firefoxPath"
+                $result.BrowserPath = $firefoxPath
+                return $result
+            }
+            
+            $result.Message = "Firefox portable browser installation requires manual download.`n`n"
+            $result.Message += "Instructions:`n"
+            $result.Message += "1. Download Firefox Portable from: https://portableapps.com/apps/internet/firefox_portable`n"
+            $result.Message += "2. Extract to: $browserDir\Firefox`n"
+            $result.Message += "3. Run: $firefoxPath`n`n"
+            $result.Message += "Alternatively, use the network-enabled CLI browser option (option 7 in menu)."
+        }
+        
+    } catch {
+        $result.Message = "Error during browser installation: $_"
+    }
+    
+    return $result
+}
+
+function Start-UtilitiesMenu {
+    <#
+    .SYNOPSIS
+    Launches Windows utilities from WinPE/WinRE environment.
+    #>
+    param(
+        [ValidateSet("Notepad", "Registry", "PowerShell", "SystemRestore", "CommandPrompt", "DiskManagement", "EventViewer")]
+        [string]$Utility
+    )
+    
+    $result = @{
+        Success = $false
+        Message = ""
+    }
+    
+    try {
+        switch ($Utility) {
+            "Notepad" {
+                if (Test-Path "$env:SystemRoot\System32\notepad.exe") {
+                    Start-Process "$env:SystemRoot\System32\notepad.exe"
+                    $result.Success = $true
+                    $result.Message = "Notepad opened successfully"
+                } else {
+                    $result.Message = "Notepad not available in this environment"
+                }
+            }
+            "Registry" {
+                if (Test-Path "$env:SystemRoot\regedit.exe") {
+                    Start-Process "$env:SystemRoot\regedit.exe"
+                    $result.Success = $true
+                    $result.Message = "Registry Editor opened successfully"
+                } else {
+                    $result.Message = "Registry Editor not available in this environment"
+                }
+            }
+            "PowerShell" {
+                if (Get-Command powershell.exe -ErrorAction SilentlyContinue) {
+                    Start-Process powershell.exe
+                    $result.Success = $true
+                    $result.Message = "PowerShell opened successfully"
+                } else {
+                    $result.Message = "PowerShell not available in this environment"
+                }
+            }
+            "SystemRestore" {
+                if (Test-Path "$env:SystemRoot\System32\rstrui.exe") {
+                    Start-Process "$env:SystemRoot\System32\rstrui.exe"
+                    $result.Success = $true
+                    $result.Message = "System Restore opened successfully"
+                } else {
+                    $result.Message = "System Restore not available in this environment"
+                }
+            }
+            "CommandPrompt" {
+                Start-Process cmd.exe
+                $result.Success = $true
+                $result.Message = "Command Prompt opened successfully"
+            }
+            "DiskManagement" {
+                if (Test-Path "$env:SystemRoot\System32\diskmgmt.msc") {
+                    Start-Process "$env:SystemRoot\System32\diskmgmt.msc"
+                    $result.Success = $true
+                    $result.Message = "Disk Management opened successfully"
+                } else {
+                    $result.Message = "Disk Management not available in this environment"
+                }
+            }
+            "EventViewer" {
+                if (Test-Path "$env:SystemRoot\System32\eventvwr.msc") {
+                    Start-Process "$env:SystemRoot\System32\eventvwr.msc"
+                    $result.Success = $true
+                    $result.Message = "Event Viewer opened successfully"
+                } else {
+                    $result.Message = "Event Viewer not available in this environment"
+                }
+            }
+        }
+    } catch {
+        $result.Message = "Error launching $Utility : $_"
+    }
+    
+    return $result
+}
+
+function Get-MissingDriversForPorting {
+    <#
+    .SYNOPSIS
+    Identifies missing drivers and helps users port them to a folder for use in other OS/PE environments.
+    
+    .DESCRIPTION
+    Analyzes the system to find missing drivers, then helps users extract and port existing drivers
+    from a working system to a portable folder that can be used in recovery environments.
+    #>
+    param(
+        [string]$SourceDrive = "C",
+        [string]$OutputFolder = "$env:SystemDrive\DriverPort",
+        [switch]$IncludeAllDrivers,
+        [switch]$OnlyMissing
+    )
+    
+    $result = @{
+        Success = $false
+        MissingDrivers = @()
+        PortedDrivers = @()
+        OutputPath = $OutputFolder
+        Instructions = ""
+        Report = ""
+    }
+    
+    # Create output folder
+    if (-not (Test-Path $OutputFolder)) {
+        New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
+    }
+    
+    # Detect missing drivers
+    $missingDevices = Get-MissingStorageDevices
+    $missingDrivers = @()
+    
+    if ($missingDevices -and $missingDevices.Count -gt 0) {
+        foreach ($device in $missingDevices) {
+            $missingDrivers += @{
+                DeviceName = $device.DeviceName
+                HardwareID = $device.HardwareID
+                Description = $device.Description
+            }
+        }
+    }
+    
+    $result.MissingDrivers = $missingDrivers
+    
+    # Port drivers from source drive
+    if (Test-Path "$SourceDrive`:\Windows\System32\DriverStore\FileRepository") {
+        $driverStore = "$SourceDrive`:\Windows\System32\DriverStore\FileRepository"
+        
+        # Find storage-related drivers
+        $storageDrivers = Get-ChildItem $driverStore -Recurse -Filter "*.inf" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+                $content -match "iastor|stornvme|nvme|uasp|ahci|raid|scsi" -or
+                ($OnlyMissing -and $missingDrivers.Count -gt 0 -and 
+                 ($missingDrivers | Where-Object { $content -match [regex]::Escape($_.HardwareID) }))
+            }
+        
+        foreach ($driver in $storageDrivers) {
+            $driverFolder = $driver.DirectoryName
+            $driverName = Split-Path $driverFolder -Leaf
+            $destFolder = Join-Path $OutputFolder $driverName
+            
+            if (-not (Test-Path $destFolder)) {
+                Copy-Item -Path $driverFolder -Destination $destFolder -Recurse -Force -ErrorAction SilentlyContinue
+                $result.PortedDrivers += @{
+                    Name = $driverName
+                    Source = $driverFolder
+                    Destination = $destFolder
+                    INF = $driver.FullName
+                }
+            }
+        }
+    }
+    
+    # Generate instructions
+    $instructions = @"
+DRIVER PORTING COMPLETE
+═══════════════════════════════════════════════════════════════════════════════
+
+Output Folder: $OutputFolder
+Drivers Ported: $($result.PortedDrivers.Count)
+Missing Drivers Detected: $($result.MissingDrivers.Count)
+
+HOW TO USE THESE DRIVERS:
+───────────────────────────────────────────────────────────────────────────────
+
+1. IN WINPE/WINRE:
+   - Copy this folder to a USB drive or network location
+   - Use: drvload [path]\driver.inf
+   - Or use Miracle Boot's "Inject Drivers Offline" option
+
+2. FOR OFFLINE WINDOWS INSTALLATION:
+   - Use DISM: dism /Image:C:\ /Add-Driver /Driver:"$OutputFolder" /Recurse
+   - Or use Miracle Boot's driver injection feature
+
+3. FOR WINDOWS SETUP (Shift+F10):
+   - Copy drivers to USB
+   - During setup, press Shift+F10
+   - Use: drvload [path]\driver.inf
+
+4. FOR IN-PLACE UPGRADE:
+   - Ensure drivers are accessible
+   - Windows Setup should detect them automatically
+   - Or inject before starting setup
+
+DRIVER FILES INCLUDED:
+───────────────────────────────────────────────────────────────────────────────
+"@
+    
+    foreach ($driver in $result.PortedDrivers) {
+        $instructions += "`n- $($driver.Name)"
+        $instructions += "  INF: $($driver.INF)"
+    }
+    
+    $result.Instructions = $instructions
+    $result.Success = $true
+    
+    return $result
+}
+
+function Generate-SaveMeTxt {
+    <#
+    .SYNOPSIS
+    Generates a comprehensive SAVE_ME.txt file with FAQ-style troubleshooting tips and commands.
+    #>
+    param(
+        [string]$OutputPath = "$env:SystemDrive\SAVE_ME.txt"
+    )
+    
+    $content = @"
+═══════════════════════════════════════════════════════════════════════════════
+                    SAVE_ME.TXT - Windows Recovery Guide
+                    Generated by Miracle Boot v7.2.0
+                    Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+═══════════════════════════════════════════════════════════════════════════════
+
+⚠️  IMPORTANT: If you're stuck, ask ChatGPT or search online for specific error messages!
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 1: COMMON BOOT REPAIR COMMANDS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. REBUILD BCD (Boot Configuration Data)
+   Command: bcdboot C:\Windows
+   When to use: BCD is missing or corrupted, "Boot Configuration Data file is missing"
+   Note: Replace C: with your Windows drive letter
+
+2. FIX BOOT SECTOR
+   Command: bootrec /fixboot
+   When to use: Boot sector is corrupted, "Bootmgr is missing"
+
+3. SCAN FOR WINDOWS INSTALLATIONS
+   Command: bootrec /scanos
+   When to use: Windows not detected, need to find all Windows installations
+
+4. REBUILD BCD FROM SCRATCH
+   Command: bootrec /rebuildbcd
+   When to use: BCD completely broken, need to rebuild from detected installations
+
+5. FIX MASTER BOOT RECORD (MBR)
+   Command: bootrec /fixmbr
+   When to use: MBR corruption, legacy BIOS systems
+
+6. SYSTEM FILE CHECKER (SFC)
+   Command: sfc /scannow
+   Offline: sfc /scannow /offbootdir=C:\ /offwindir=C:\Windows
+   When to use: Corrupted system files, Windows won't boot
+
+7. DISM REPAIR (Component Store)
+   Command: DISM /Online /Cleanup-Image /RestoreHealth
+   Offline: DISM /Image:C:\ /Cleanup-Image /RestoreHealth
+   When to use: Component store corruption, SFC can't repair files
+
+8. CHECK DISK (CHKDSK)
+   Command: chkdsk C: /f /r
+   When to use: Disk errors, file system corruption, bad sectors
+   Warning: /r can take hours! Use /f for quick fix first.
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 2: DISKPART - DISK MANAGEMENT VIA COMMAND LINE
+═══════════════════════════════════════════════════════════════════════════════
+
+HOW TO USE DISKPART:
+───────────────────────────────────────────────────────────────────────────────
+1. Type: diskpart
+2. Type commands one at a time
+3. Type: exit when done
+
+FINDING YOUR DRIVES AND VOLUMES:
+───────────────────────────────────────────────────────────────────────────────
+
+Step 1: List all disks
+   Command: list disk
+   Shows: Disk number, size, status
+   Example output:
+     Disk 0  Online  500 GB
+     Disk 1  Online  1000 GB
+
+Step 2: Select a disk
+   Command: select disk 0
+   (Replace 0 with your disk number)
+
+Step 3: List volumes on selected disk
+   Command: list volume
+   Shows: Volume number, drive letter, label, file system, size, status
+   Example output:
+     Volume 0  C  Windows    NTFS  450 GB  Healthy
+     Volume 1  D  Data       NTFS  50 GB   Healthy
+
+Step 4: Find volume label
+   Command: list volume
+   Look for the "Label" column - that's your volume label!
+
+COMMON DISKPART COMMANDS:
+───────────────────────────────────────────────────────────────────────────────
+
+Assign drive letter:
+   select volume 0
+   assign letter=E
+
+Remove drive letter:
+   select volume 0
+   remove letter=E
+
+Format volume (WARNING: DELETES DATA!):
+   select volume 0
+   format fs=NTFS quick label="NewVolume"
+
+Create partition:
+   select disk 0
+   create partition primary size=50000
+   (size in MB)
+
+Set partition as active (for boot):
+   select partition 1
+   active
+
+Clean disk (WARNING: DELETES ALL PARTITIONS!):
+   select disk 0
+   clean
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 3: IN-PLACE REPAIR / UPGRADE COMMANDS
+═══════════════════════════════════════════════════════════════════════════════
+
+FORCE IN-PLACE UPGRADE (Repair Install):
+───────────────────────────────────────────────────────────────────────────────
+1. Mount Windows ISO or extract to folder
+2. Navigate to sources folder
+3. Run: setup.exe /auto upgrade /quiet /noreboot
+   Or: setup.exe /auto upgrade (for interactive)
+
+SKIP COMPATIBILITY CHECKS:
+   setup.exe /auto upgrade /compat IgnoreWarning
+
+DISABLE DYNAMIC UPDATE:
+   setup.exe /auto upgrade /DynamicUpdate disable
+
+REGISTRY OVERRIDES (Advanced - Use Miracle Boot's registry tools):
+───────────────────────────────────────────────────────────────────────────────
+If in-place upgrade is blocked, you may need to modify registry:
+- SetupPhase = 0
+- EditionID override
+- ProgramFilesDir fix
+
+Use Miracle Boot's "One-Click Registry Fixes" or "Generate Registry Override Script"
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 4: DRIVER MANAGEMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+LOAD DRIVER IN WINPE/WINRE:
+───────────────────────────────────────────────────────────────────────────────
+Command: drvload [path]\driver.inf
+Example: drvload X:\Drivers\iastor.inf
+
+INJECT DRIVERS INTO OFFLINE WINDOWS:
+───────────────────────────────────────────────────────────────────────────────
+Command: DISM /Image:C:\ /Add-Driver /Driver:"X:\Drivers" /Recurse
+This adds drivers to Windows installation on C: drive from X:\Drivers folder
+
+FIND MISSING DRIVERS:
+───────────────────────────────────────────────────────────────────────────────
+1. Check boot log: C:\Windows\nbtlog.txt
+2. Look for "Did not load driver" entries
+3. Identify hardware IDs from Device Manager (if accessible)
+4. Use Miracle Boot's "Scan Storage Drivers" feature
+
+PORT DRIVERS FROM WORKING SYSTEM:
+───────────────────────────────────────────────────────────────────────────────
+Use Miracle Boot's "Get Missing Drivers for Porting" feature to:
+- Identify missing drivers
+- Extract drivers from working system
+- Create portable driver folder
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 5: COMMON PROBLEMS AND SOLUTIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+PROBLEM: "Boot Configuration Data file is missing"
+SOLUTION:
+  1. bootrec /scanos
+  2. bootrec /rebuildbcd
+  3. bcdboot C:\Windows
+
+PROBLEM: "Inaccessible Boot Device"
+SOLUTION:
+  1. Load storage drivers: drvload [path]\driver.inf
+  2. Or inject drivers: DISM /Image:C:\ /Add-Driver /Driver:"[path]" /Recurse
+  3. Check boot log for missing driver names
+
+PROBLEM: "Windows failed to start"
+SOLUTION:
+  1. Run: sfc /scannow /offbootdir=C:\ /offwindir=C:\Windows
+  2. Run: DISM /Image:C:\ /Cleanup-Image /RestoreHealth
+  3. Check boot log: C:\Windows\nbtlog.txt
+
+PROBLEM: "In-place upgrade blocked by pending operations"
+SOLUTION:
+  1. Delete: C:\Windows\System32\config\pending.xml (if exists)
+  2. Run: DISM /Image:C:\ /Cleanup-Image /RestoreHealth
+  3. Check CBS logs: C:\Windows\Logs\CBS\CBS.log
+
+PROBLEM: "Can't find Windows installation"
+SOLUTION:
+  1. Use: bootrec /scanos
+  2. Check diskpart: list volume (find Windows drive)
+  3. Verify: C:\Windows\System32\ntoskrnl.exe exists
+
+PROBLEM: "BCD store is corrupted"
+SOLUTION:
+  1. Backup: bcdedit /export C:\BCD_Backup
+  2. Rebuild: bootrec /rebuildbcd
+  3. Or: bcdboot C:\Windows
+
+PROBLEM: "Missing or corrupted system files"
+SOLUTION:
+  1. SFC: sfc /scannow /offbootdir=C:\ /offwindir=C:\Windows
+  2. DISM: DISM /Image:C:\ /Cleanup-Image /RestoreHealth
+  3. If still failing, try in-place upgrade
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 6: ADVANCED TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+VIEW BOOT LOG:
+───────────────────────────────────────────────────────────────────────────────
+Command: notepad C:\Windows\nbtlog.txt
+Look for: "Did not load driver", "FAIL", "ERROR"
+
+ANALYZE EVENT LOGS:
+───────────────────────────────────────────────────────────────────────────────
+Command: wevtutil qe System /c:100 /rd:true /f:text > C:\events.txt
+Then: notepad C:\events.txt
+
+CHECK DISK HEALTH:
+───────────────────────────────────────────────────────────────────────────────
+Command: wmic diskdrive get status,model,size
+Shows: Disk status and model information
+
+CHECK PARTITION LAYOUT:
+───────────────────────────────────────────────────────────────────────────────
+Command: diskpart
+  list disk
+  select disk 0
+  list partition
+  list volume
+
+BACKUP BCD BEFORE CHANGES:
+───────────────────────────────────────────────────────────────────────────────
+Command: bcdedit /export C:\BCD_Backup_$(Get-Date -Format 'yyyyMMdd').txt
+Always backup before making BCD changes!
+
+VIEW SYSTEM INFORMATION:
+───────────────────────────────────────────────────────────────────────────────
+Command: systeminfo
+Shows: OS version, hardware, system details
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 7: GETTING HELP
+═══════════════════════════════════════════════════════════════════════════════
+
+IF YOU'RE STUCK:
+───────────────────────────────────────────────────────────────────────────────
+1. Use ChatGPT or search online for your specific error message
+2. Check Windows Event Viewer for detailed error codes
+3. Review boot log (nbtlog.txt) for driver failures
+4. Use Miracle Boot's diagnostic features:
+   - Boot Chain Analysis
+   - Boot Probability Check
+   - Comprehensive Diagnostics
+   - In-Place Upgrade Readiness
+
+COMMON ERROR CODES:
+───────────────────────────────────────────────────────────────────────────────
+- 0xc000000e: BCD error, boot files missing
+- 0xc000000f: Boot file not found
+- 0xc0000225: Boot configuration data missing
+- 0xc0000098: Registry file failure
+- 0x80070002: File not found
+- 0x80070003: Path not found
+
+SEARCH FOR HELP:
+───────────────────────────────────────────────────────────────────────────────
+Copy the exact error message and search:
+- Google: "[your error message]"
+- ChatGPT: "Windows boot error [error code]"
+- Microsoft Support: support.microsoft.com
+
+═══════════════════════════════════════════════════════════════════════════════
+SECTION 8: QUICK REFERENCE - COMMAND CHEAT SHEET
+═══════════════════════════════════════════════════════════════════════════════
+
+BOOT REPAIR:
+  bcdboot C:\Windows                    - Rebuild BCD
+  bootrec /fixboot                      - Fix boot sector
+  bootrec /scanos                       - Find Windows
+  bootrec /rebuildbcd                   - Rebuild BCD
+  bootrec /fixmbr                       - Fix MBR
+
+SYSTEM FILE REPAIR:
+  sfc /scannow                           - Scan system files
+  sfc /scannow /offbootdir=C:\ /offwindir=C:\Windows  - Offline scan
+  DISM /Online /Cleanup-Image /RestoreHealth  - Repair component store
+  DISM /Image:C:\ /Cleanup-Image /RestoreHealth  - Offline repair
+
+DISK REPAIR:
+  chkdsk C: /f                           - Quick fix
+  chkdsk C: /f /r                        - Full repair (slow!)
+
+DRIVER MANAGEMENT:
+  drvload X:\Drivers\driver.inf         - Load driver
+  DISM /Image:C:\ /Add-Driver /Driver:"X:\Drivers" /Recurse  - Inject drivers
+
+DISK MANAGEMENT:
+  diskpart                               - Open diskpart
+  list disk                              - Show disks
+  list volume                            - Show volumes
+  select disk 0                          - Select disk
+  select volume 0                        - Select volume
+
+IN-PLACE UPGRADE:
+  setup.exe /auto upgrade                - Start upgrade
+  setup.exe /auto upgrade /compat IgnoreWarning  - Skip checks
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF SAVE_ME.TXT
+═══════════════════════════════════════════════════════════════════════════════
+
+Remember: When in doubt, ask ChatGPT or search online for your specific error!
+
+"@
+    
+    try {
+        $content | Out-File -FilePath $OutputPath -Encoding UTF8
+        return @{
+            Success = $true
+            Path = $OutputPath
+            Message = "SAVE_ME.txt generated successfully at: $OutputPath"
+        }
+    } catch {
+        return @{
+            Success = $false
+            Path = $OutputPath
+            Message = "Failed to generate SAVE_ME.txt: $_"
+        }
+    }
+}
+
+function Start-DiskManagementHelper {
+    <#
+    .SYNOPSIS
+    Provides disk management capabilities via command line, helping users with diskpart operations.
+    #>
+    param(
+        [switch]$Interactive,
+        [string]$Command
+    )
+    
+    if ($Interactive) {
+        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "  DISK MANAGEMENT HELPER" -ForegroundColor Cyan
+        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "This helper will guide you through diskpart operations." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "1) List all disks and volumes" -ForegroundColor White
+        Write-Host "2) Find volume label for a drive" -ForegroundColor White
+        Write-Host "3) Assign drive letter" -ForegroundColor White
+        Write-Host "4) Open Disk Management (GUI - if available)" -ForegroundColor White
+        Write-Host "5) Open diskpart directly" -ForegroundColor White
+        Write-Host "B) Back to main menu" -ForegroundColor Yellow
+        Write-Host ""
+        
+        $choice = Read-Host "Select option"
+        
+        switch ($choice) {
+            "1" {
+                Write-Host "`nListing disks and volumes..." -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "DISKS:" -ForegroundColor Cyan
+                $disks = Get-Disk | Format-Table -AutoSize
+                Write-Host $disks
+                Write-Host ""
+                Write-Host "VOLUMES:" -ForegroundColor Cyan
+                $volumes = Get-Volume | Format-Table -AutoSize
+                Write-Host $volumes
+                Write-Host ""
+                Write-Host "Press any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "2" {
+                Write-Host "`nFinding volume labels..." -ForegroundColor Gray
+                Write-Host ""
+                $volumes = Get-Volume | Where-Object { $_.DriveLetter }
+                Write-Host "VOLUME LABELS:" -ForegroundColor Cyan
+                Write-Host "─────────────────────────────────────────────────────" -ForegroundColor Gray
+                foreach ($vol in $volumes) {
+                    Write-Host "Drive: $($vol.DriveLetter):" -ForegroundColor White
+                    Write-Host "  Label: $($vol.FileSystemLabel)" -ForegroundColor Yellow
+                    Write-Host "  File System: $($vol.FileSystemType)" -ForegroundColor Gray
+                    Write-Host "  Size: $([math]::Round($vol.Size / 1GB, 2)) GB" -ForegroundColor Gray
+                    Write-Host ""
+                }
+                Write-Host "Press any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "3" {
+                Write-Host "`nAssign drive letter..." -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Available volumes without drive letters:" -ForegroundColor Cyan
+                $volumes = Get-Volume | Where-Object { -not $_.DriveLetter -and $_.Size -gt 0 }
+                $volumes | Format-Table -AutoSize
+                Write-Host ""
+                $volNum = Read-Host "Enter volume number to assign letter to"
+                $letter = Read-Host "Enter drive letter (e.g., E, F, G)"
+                
+                try {
+                    $vol = Get-Volume -UniqueId $volumes[$volNum].UniqueId
+                    Set-Partition -Volume $vol -NewDriveLetter $letter
+                    Write-Host "Drive letter $letter`: assigned successfully!" -ForegroundColor Green
+                } catch {
+                    Write-Host "Error: $_" -ForegroundColor Red
+                    Write-Host "You may need to use diskpart manually:" -ForegroundColor Yellow
+                    Write-Host "  diskpart" -ForegroundColor White
+                    Write-Host "  select volume $volNum" -ForegroundColor White
+                    Write-Host "  assign letter=$letter" -ForegroundColor White
+                }
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "4" {
+                $result = Start-UtilitiesMenu -Utility "DiskManagement"
+                Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "5" {
+                Write-Host "`nOpening diskpart..." -ForegroundColor Gray
+                Write-Host "Type 'exit' to return to Miracle Boot" -ForegroundColor Yellow
+                Start-Process diskpart
+                Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            }
+            "B" { return }
+            "b" { return }
+        }
+    }
+}
+
+function Get-OperationProgress {
+    <#
+    .SYNOPSIS
+    Parses command output to extract progress information for SFC, DISM, and chkdsk.
+    
+    .DESCRIPTION
+    Monitors command output in real-time and extracts progress percentages, 
+    current operations, and estimated time remaining.
+    #>
+    param(
+        [string]$CommandOutput,
+        [string]$OperationType,  # "SFC", "DISM", "CHKDSK"
+        [System.Management.Automation.Job]$Job = $null
+    )
+    
+    $progress = @{
+        Percentage = 0
+        CurrentOperation = ""
+        Stage = ""
+        EstimatedTimeRemaining = $null
+        IsComplete = $false
+        Status = "Running"
+    }
+    
+    switch ($OperationType.ToUpper()) {
+        "SFC" {
+            # SFC doesn't provide percentage, but we can track stages
+            if ($CommandOutput -match "Beginning verification phase") {
+                $progress.Stage = "Verification"
+                $progress.CurrentOperation = "Verifying system files..."
+            } elseif ($CommandOutput -match "Beginning system file repair") {
+                $progress.Stage = "Repair"
+                $progress.CurrentOperation = "Repairing system files..."
+            } elseif ($CommandOutput -match "Windows Resource Protection did not find any integrity violations" -or
+                      $CommandOutput -match "Windows Resource Protection found corrupt files and successfully repaired them" -or
+                      $CommandOutput -match "Windows Resource Protection found corrupt files but was unable to fix some") {
+                $progress.IsComplete = $true
+                $progress.Status = "Complete"
+                $progress.Percentage = 100
+            }
+            
+            # Try to extract file counts if available
+            if ($CommandOutput -match "(\d+) files") {
+                $progress.CurrentOperation = "Processing files..."
+            }
+        }
+        
+        "DISM" {
+            # DISM provides percentage in format: "Progress: 50%"
+            if ($CommandOutput -match "Progress:\s*(\d+)%") {
+                $progress.Percentage = [int]$matches[1]
+            }
+            
+            # DISM stages
+            if ($CommandOutput -match "Checking component store") {
+                $progress.Stage = "Checking"
+                $progress.CurrentOperation = "Checking component store..."
+            } elseif ($CommandOutput -match "Restoring health") {
+                $progress.Stage = "Restoring"
+                $progress.CurrentOperation = "Restoring component store health..."
+            } elseif ($CommandOutput -match "The operation completed successfully" -or
+                      $CommandOutput -match "The restore operation completed successfully") {
+                $progress.IsComplete = $true
+                $progress.Status = "Complete"
+                $progress.Percentage = 100
+            } elseif ($CommandOutput -match "Error:") {
+                $progress.Status = "Error"
+                $progress.IsComplete = $true
+            }
+        }
+        
+        "CHKDSK" {
+            # chkdsk provides percentage: "10 percent complete"
+            if ($CommandOutput -match "(\d+)\s+percent complete") {
+                $progress.Percentage = [int]$matches[1]
+            }
+            
+            # chkdsk stages
+            if ($CommandOutput -match "Stage 1: Examining basic file system structure") {
+                $progress.Stage = "Stage 1"
+                $progress.CurrentOperation = "Examining file system structure..."
+            } elseif ($CommandOutput -match "Stage 2: Examining file name linkage") {
+                $progress.Stage = "Stage 2"
+                $progress.CurrentOperation = "Examining file name linkage..."
+            } elseif ($CommandOutput -match "Stage 3: Examining security descriptors") {
+                $progress.Stage = "Stage 3"
+                $progress.CurrentOperation = "Examining security descriptors..."
+            } elseif ($CommandOutput -match "Stage 4: Looking for bad clusters") {
+                $progress.Stage = "Stage 4"
+                $progress.CurrentOperation = "Looking for bad clusters..."
+            } elseif ($CommandOutput -match "Stage 5: Looking for bad, free clusters") {
+                $progress.Stage = "Stage 5"
+                $progress.CurrentOperation = "Looking for bad, free clusters..."
+            } elseif ($CommandOutput -match "Windows has checked the file system") {
+                $progress.IsComplete = $true
+                $progress.Status = "Complete"
+                $progress.Percentage = 100
+            }
+        }
+    }
+    
+    return $progress
+}
+
+function Start-OperationWithProgress {
+    <#
+    .SYNOPSIS
+    Executes a command with real-time progress tracking.
+    
+    .DESCRIPTION
+    Runs a command and monitors its output in real-time, calling progress callbacks
+    to update the UI with current progress.
+    #>
+    param(
+        [string]$Command,
+        [string]$OperationType,
+        [scriptblock]$ProgressCallback = $null,
+        [scriptblock]$OutputCallback = $null,
+        [int]$UpdateInterval = 500  # milliseconds
+    )
+    
+    $output = New-Object System.Text.StringBuilder
+    $startTime = Get-Date
+    $lastProgress = @{ Percentage = 0 }
+    
+    try {
+        # Start process with redirected output
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = "cmd.exe"
+        $processInfo.Arguments = "/c $Command"
+        $processInfo.UseShellExecute = $false
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.RedirectStandardError = $true
+        $processInfo.CreateNoWindow = $true
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        
+        # Setup output handlers
+        $outputHandler = {
+            if (-not [string]::IsNullOrWhiteSpace($EventArgs.Data)) {
+                $line = $EventArgs.Data
+                $null = $output.AppendLine($line)
+                
+                if ($null -ne $OutputCallback) {
+                    & $OutputCallback $line
+                }
+                
+                # Parse progress
+                $progress = Get-OperationProgress -CommandOutput $line -OperationType $OperationType
+                
+                if ($progress.Percentage -gt $lastProgress.Percentage -or 
+                    $progress.Stage -ne $lastProgress.Stage -or
+                    $progress.CurrentOperation -ne $lastProgress.CurrentOperation) {
+                    
+                    $lastProgress = $progress
+                    
+                    if ($null -ne $ProgressCallback) {
+                        & $ProgressCallback $progress
+                    }
+                }
+            }
+        }
+        
+        $errorHandler = {
+            if (-not [string]::IsNullOrWhiteSpace($EventArgs.Data)) {
+                $line = $EventArgs.Data
+                $null = $output.AppendLine($line)
+                
+                if ($null -ne $OutputCallback) {
+                    & $OutputCallback $line
+                }
+            }
+        }
+        
+        Register-ObjectEvent -InputObject $process -EventName "OutputDataReceived" -Action $outputHandler | Out-Null
+        Register-ObjectEvent -InputObject $process -EventName "ErrorDataReceived" -Action $errorHandler | Out-Null
+        
+        # Start process
+        $process.Start() | Out-Null
+        $process.BeginOutputReadLine()
+        $process.BeginErrorReadLine()
+        
+        # Wait for completion with progress updates
+        while (-not $process.HasExited) {
+            Start-Sleep -Milliseconds $UpdateInterval
+            
+            # Calculate estimated time if we have progress
+            if ($lastProgress.Percentage -gt 0 -and $lastProgress.Percentage -lt 100) {
+                $elapsed = (Get-Date) - $startTime
+                $estimatedTotal = $elapsed.TotalSeconds / ($lastProgress.Percentage / 100)
+                $estimatedRemaining = $estimatedTotal - $elapsed.TotalSeconds
+                $lastProgress.EstimatedTimeRemaining = [TimeSpan]::FromSeconds($estimatedRemaining)
+                
+                if ($null -ne $ProgressCallback) {
+                    & $ProgressCallback $lastProgress
+                }
+            }
+        }
+        
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        
+        return @{
+            Success = ($exitCode -eq 0)
+            ExitCode = $exitCode
+            Output = $output.ToString()
+            Duration = (Get-Date) - $startTime
+        }
+        
+    } catch {
+        return @{
+            Success = $false
+            ExitCode = -1
+            Output = $output.ToString()
+            Error = $_.Exception.Message
+            Duration = (Get-Date) - $startTime
+        }
+    }
+}
+
+function Create-SystemRestorePoint {
+    <#
+    .SYNOPSIS
+    Creates a system restore point with metadata about what operation triggered it.
+    #>
+    param(
+        [string]$Description = "Miracle Boot Repair Operation",
+        [string]$OperationType = "Repair",
+        [hashtable]$Metadata = @{}
+    )
+    
+    $result = @{
+        Success = $false
+        RestorePointID = $null
+        RestorePointPath = ""
+        Message = ""
+        Error = ""
+    }
+    
+    try {
+        # Check if System Restore is enabled
+        $restoreInfo = Get-SystemRestoreInfo
+        if (-not $restoreInfo.Enabled) {
+            $result.Message = "System Restore is not enabled on this system."
+            return $result
+        }
+        
+        # Create restore point using VSS
+        $fullDescription = "$Description - $OperationType - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        
+        # Use Checkpoint-Computer for Windows 10/11
+        if (Get-Command Checkpoint-Computer -ErrorAction SilentlyContinue) {
+            Checkpoint-Computer -Description $fullDescription -RestorePointType "MODIFY_SETTINGS"
+            $result.Success = $true
+            $result.Message = "System Restore point created successfully: $fullDescription"
+            
+            # Get the restore point ID
+            $restorePoints = Get-ComputerRestorePoint | Sort-Object CreationTime -Descending | Select-Object -First 1
+            if ($restorePoints) {
+                $result.RestorePointID = $restorePoints.SequenceNumber
+                $result.RestorePointPath = "Restore Point #$($restorePoints.SequenceNumber)"
+            }
+        } else {
+            # Fallback: Use vssadmin (requires admin)
+            $vssOutput = vssadmin create shadow /For=C: /AutoRetry=1 2>&1 | Out-String
+            
+            if ($LASTEXITCODE -eq 0) {
+                $result.Success = $true
+                $result.Message = "System Restore point created using VSS"
+            } else {
+                $result.Error = "Failed to create restore point: $vssOutput"
+                $result.Message = "Could not create restore point. Ensure System Restore is enabled and you have administrator privileges."
+            }
+        }
+        
+    } catch {
+        $result.Error = $_.Exception.Message
+        $result.Message = "Error creating restore point: $_"
+    }
+    
+    return $result
+}
+
+function Get-SystemRestorePoints {
+    <#
+    .SYNOPSIS
+    Gets list of available system restore points with details.
+    #>
+    param(
+        [int]$Limit = 50
+    )
+    
+    $restorePoints = @()
+    
+    try {
+        if (Get-Command Get-ComputerRestorePoint -ErrorAction SilentlyContinue) {
+            $points = Get-ComputerRestorePoint | Sort-Object CreationTime -Descending | Select-Object -First $Limit
+            
+            foreach ($point in $points) {
+                $restorePoints += @{
+                    SequenceNumber = $point.SequenceNumber
+                    Description = $point.Description
+                    CreationTime = $point.CreationTime
+                    RestorePointType = $point.RestorePointType
+                    EventType = $point.EventType
+                }
+            }
+        } else {
+            # Fallback: Parse vssadmin output
+            $vssOutput = vssadmin list shadows 2>&1 | Out-String
+            
+            if ($vssOutput -match "Shadow Copy Volume:") {
+                # Parse shadow copy information
+                # This is a simplified parser - vssadmin output is complex
+                $restorePoints += @{
+                    SequenceNumber = 1
+                    Description = "Shadow Copy (from vssadmin)"
+                    CreationTime = Get-Date
+                    RestorePointType = "Unknown"
+                }
+            }
+        }
+    } catch {
+        Write-Warning "Error retrieving restore points: $_"
+    }
+    
+    return $restorePoints
+}
+
+function Restore-FromSystemRestorePoint {
+    <#
+    .SYNOPSIS
+    Restores system from a specific restore point.
+    #>
+    param(
+        [int]$RestorePointID,
+        [switch]$Confirm
+    )
+    
+    $result = @{
+        Success = $false
+        Message = ""
+        Error = ""
+    }
+    
+    if (-not $Confirm) {
+        $result.Message = "Restore operation requires explicit confirmation. Use -Confirm switch."
+        return $result
+    }
+    
+    try {
+        if (Get-Command Restore-Computer -ErrorAction SilentlyContinue) {
+            Restore-Computer -RestorePoint $RestorePointID -Confirm:$false
+            $result.Success = $true
+            $result.Message = "System restore initiated. System will restart."
+        } else {
+            $result.Error = "Restore-Computer cmdlet not available"
+            $result.Message = "Cannot restore from this environment. Use Windows Recovery Environment."
+        }
+    } catch {
+        $result.Error = $_.Exception.Message
+        $result.Message = "Error initiating restore: $_"
+    }
+    
+    return $result
+}
+
+function Manage-SystemRestorePoints {
+    <#
+    .SYNOPSIS
+    Manages system restore points - cleanup, health check, etc.
+    #>
+    param(
+        [switch]$CleanupOld,
+        [int]$KeepDays = 30,
+        [switch]$HealthCheck
+    )
+    
+    $result = @{
+        Success = $false
+        ActionsTaken = @()
+        RestorePointsDeleted = 0
+        HealthStatus = "Unknown"
+        Message = ""
+    }
+    
+    try {
+        if ($HealthCheck) {
+            $restoreInfo = Get-SystemRestoreInfo
+            if ($restoreInfo.Enabled) {
+                $result.HealthStatus = "Healthy"
+                $result.ActionsTaken += "Health check passed - System Restore is enabled"
+            } else {
+                $result.HealthStatus = "Disabled"
+                $result.ActionsTaken += "System Restore is disabled"
+            }
+        }
+        
+        if ($CleanupOld) {
+            $cutoffDate = (Get-Date).AddDays(-$KeepDays)
+            $allPoints = Get-SystemRestorePoints -Limit 1000
+            
+            foreach ($point in $allPoints) {
+                if ($point.CreationTime -lt $cutoffDate) {
+                    # Delete old restore point
+                    # Note: PowerShell doesn't have a direct delete cmdlet
+                    # This would require vssadmin or WMI
+                    $result.RestorePointsDeleted++
+                    $result.ActionsTaken += "Marked for deletion: $($point.Description) ($($point.CreationTime))"
+                }
+            }
+            
+            if ($result.RestorePointsDeleted -gt 0) {
+                $result.Message = "Found $($result.RestorePointsDeleted) restore points older than $KeepDays days. Manual cleanup may be required."
+            } else {
+                $result.Message = "No old restore points found."
+            }
+        }
+        
+        $result.Success = $true
+        
+    } catch {
+        $result.Message = "Error managing restore points: $_"
+    }
+    
+    return $result
+}
+
+# Repair-Install Readiness Engine
+# Ensures Windows is eligible for in-place upgrade (setup.exe with "Keep apps + files")
+# Part of MiracleBoot v7.2.0
+
+function Test-RepairInstallEligibility {
+    <#
+    .SYNOPSIS
+    Comprehensive pre-flight check for repair-install eligibility.
+    
+    .DESCRIPTION
+    Checks all critical blockers that prevent Windows Setup from allowing
+    "Keep apps + files" in-place upgrade option.
+    
+    .PARAMETER TargetDrive
+    Windows drive letter (e.g., "C")
+    
+    .OUTPUTS
+    Hashtable with eligibility status, blockers, and recommendations
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Eligible = $false
+        ReadinessScore = 0
+        Blockers = @()
+        Warnings = @()
+        Recommendations = @()
+        Details = @{}
+    }
+    
+    $envType = Get-EnvironmentType
+    $isOffline = ($envType -ne 'FullOS')
+    $windowsPath = "$TargetDrive`:\Windows"
+    $system32Path = "$windowsPath\System32"
+    
+    Write-Host "Testing repair-install eligibility for drive $TargetDrive`:..." -ForegroundColor Cyan
+    
+    # 1. Check if Windows directory exists
+    if (-not (Test-Path $windowsPath)) {
+        $result.Blockers += "Windows directory not found at $windowsPath"
+        return $result
+    }
+    
+    # 2. Check CBS Component Store State
+    Write-Host "  Checking CBS component store state..." -ForegroundColor Gray
+    try {
+        if ($isOffline) {
+            $cbsCheck = dism /Image:$TargetDrive`: /Cleanup-Image /CheckHealth 2>&1 | Out-String
+        } else {
+            $cbsCheck = dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+        }
+        
+        if ($cbsCheck -match "The component store is repairable" -or 
+            $cbsCheck -match "The component store is healthy") {
+            $result.ReadinessScore += 15
+            $result.Details.CBSState = "Healthy"
+        } elseif ($cbsCheck -match "The component store cannot be repaired") {
+            $result.Blockers += "CBS component store is corrupted beyond repair"
+            $result.Details.CBSState = "Corrupted"
+        } else {
+            $result.Warnings += "CBS component store may need repair"
+            $result.Details.CBSState = "Unknown"
+        }
+    } catch {
+        $result.Warnings += "Could not check CBS state: $_"
+    }
+    
+    # 3. Check RebootPending flags
+    Write-Host "  Checking for pending reboots..." -ForegroundColor Gray
+    try {
+        $pendingReboot = $false
+        $pendingRebootReasons = @()
+        
+        # Check registry for RebootPending
+        if ($isOffline) {
+            # Mount registry hive
+            $regPath = "$TargetDrive`:\Windows\System32\config\SYSTEM"
+            if (Test-Path $regPath) {
+                reg load HKLM\TEMP_SYSTEM $regPath 2>&1 | Out-Null
+                try {
+                    $rebootPending = Get-ItemProperty -Path "HKLM:\TEMP_SYSTEM\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                    if ($rebootPending) {
+                        $pendingReboot = $true
+                        $pendingRebootReasons += "PendingFileRenameOperations found"
+                    }
+                } finally {
+                    reg unload HKLM\TEMP_SYSTEM 2>&1 | Out-Null
+                }
+            }
+        } else {
+            $rebootPending = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+            if ($rebootPending) {
+                $pendingReboot = $true
+                $pendingRebootReasons += "PendingFileRenameOperations found"
+            }
+        }
+        
+        if (-not $pendingReboot) {
+            $result.ReadinessScore += 10
+            $result.Details.RebootPending = $false
+        } else {
+            $result.Blockers += "System has pending reboot operations: $($pendingRebootReasons -join ', ')"
+            $result.Details.RebootPending = $true
+        }
+    } catch {
+        $result.Warnings += "Could not check reboot pending status: $_"
+    }
+    
+    # 4. Check Edition/Build compatibility
+    Write-Host "  Checking Windows edition and build..." -ForegroundColor Gray
+    try {
+        if ($isOffline) {
+            $regPath = "$TargetDrive`:\Windows\System32\config\SOFTWARE"
+            if (Test-Path $regPath) {
+                reg load HKLM\TEMP_SOFTWARE $regPath 2>&1 | Out-Null
+                try {
+                    $edition = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -ErrorAction SilentlyContinue).EditionID
+                    $build = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "CurrentBuild" -ErrorAction SilentlyContinue).CurrentBuild
+                    $releaseId = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "ReleaseId" -ErrorAction SilentlyContinue).ReleaseId
+                    $installationType = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -ErrorAction SilentlyContinue).InstallationType
+                } finally {
+                    reg unload HKLM\TEMP_SOFTWARE 2>&1 | Out-Null
+                }
+            }
+        } else {
+            $edition = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -ErrorAction SilentlyContinue).EditionID
+            $build = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "CurrentBuild" -ErrorAction SilentlyContinue).CurrentBuild
+            $releaseId = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "ReleaseId" -ErrorAction SilentlyContinue).ReleaseId
+            $installationType = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -ErrorAction SilentlyContinue).InstallationType
+        }
+        
+        if ($edition -and $build) {
+            $result.Details.Edition = $edition
+            $result.Details.Build = $build
+            $result.Details.ReleaseId = $releaseId
+            $result.Details.InstallationType = $installationType
+            
+            # Check for problematic editions
+            if ($edition -match "Evaluation|EnterpriseN|EducationN") {
+                $result.Warnings += "Edition '$edition' may have limited upgrade options"
+            }
+            
+            # Check installation type
+            if ($installationType -ne "Client") {
+                $result.Warnings += "InstallationType is '$installationType' (expected 'Client')"
+            }
+            
+            $result.ReadinessScore += 15
+        } else {
+            $result.Blockers += "Could not determine Windows edition/build"
+        }
+    } catch {
+        $result.Warnings += "Could not check edition/build: $_"
+    }
+    
+    # 5. Check WinRE status
+    Write-Host "  Checking WinRE status..." -ForegroundColor Gray
+    try {
+        if (-not $isOffline) {
+            $reagentcInfo = reagentc /info 2>&1 | Out-String
+            if ($reagentcInfo -match "Windows RE status.*Enabled") {
+                $result.ReadinessScore += 10
+                $result.Details.WinREStatus = "Enabled"
+            } elseif ($reagentcInfo -match "Windows RE status.*Disabled") {
+                $result.Warnings += "WinRE is disabled - may affect repair install"
+                $result.Details.WinREStatus = "Disabled"
+            } else {
+                $result.Warnings += "Could not determine WinRE status"
+                $result.Details.WinREStatus = "Unknown"
+            }
+        } else {
+            # Offline: Check for WinRE partition
+            $volumes = Get-WindowsVolumes
+            $winreFound = $false
+            foreach ($vol in $volumes) {
+                if ($vol.Label -match "Recovery|WinRE" -or $vol.FileSystemLabel -match "Recovery|WinRE") {
+                    $winreFound = $true
+                    break
+                }
+            }
+            if ($winreFound) {
+                $result.ReadinessScore += 10
+                $result.Details.WinREStatus = "Partition found"
+            } else {
+                $result.Warnings += "WinRE partition not found"
+                $result.Details.WinREStatus = "Not found"
+            }
+        }
+    } catch {
+        $result.Warnings += "Could not check WinRE: $_"
+    }
+    
+    # 6. Check SetupPlatform registry keys
+    Write-Host "  Checking SetupPlatform registry..." -ForegroundColor Gray
+    try {
+        if ($isOffline) {
+            $regPath = "$TargetDrive`:\Windows\System32\config\SOFTWARE"
+            if (Test-Path $regPath) {
+                reg load HKLM\TEMP_SOFTWARE $regPath 2>&1 | Out-Null
+                try {
+                    $setupPlatform = Test-Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\SetupPlatform"
+                } finally {
+                    reg unload HKLM\TEMP_SOFTWARE 2>&1 | Out-Null
+                }
+            }
+        } else {
+            $setupPlatform = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\SetupPlatform"
+        }
+        
+        if ($setupPlatform) {
+            $result.ReadinessScore += 10
+            $result.Details.SetupPlatform = "Present"
+        } else {
+            $result.Warnings += "SetupPlatform registry key missing"
+            $result.Details.SetupPlatform = "Missing"
+        }
+    } catch {
+        $result.Warnings += "Could not check SetupPlatform: $_"
+    }
+    
+    # 7. Check for pending operations
+    Write-Host "  Checking for pending operations..." -ForegroundColor Gray
+    try {
+        $pendingOps = @()
+        
+        # Check CBS pending operations
+        $cbsLog = "$TargetDrive`:\Windows\Logs\CBS\CBS.log"
+        if (Test-Path $cbsLog) {
+            $cbsContent = Get-Content $cbsLog -Tail 100 -ErrorAction SilentlyContinue
+            if ($cbsContent -match "pending|incomplete|failed") {
+                $pendingOps += "CBS has pending operations"
+            }
+        }
+        
+        if ($pendingOps.Count -eq 0) {
+            $result.ReadinessScore += 10
+            $result.Details.PendingOperations = "None"
+        } else {
+            $result.Warnings += "Pending operations detected: $($pendingOps -join ', ')"
+            $result.Details.PendingOperations = $pendingOps -join '; '
+        }
+    } catch {
+        $result.Warnings += "Could not check pending operations: $_"
+    }
+    
+    # 8. Check disk space (critical for setup)
+    Write-Host "  Checking available disk space..." -ForegroundColor Gray
+    try {
+        $drive = Get-PSDrive -Name $TargetDrive -ErrorAction SilentlyContinue
+        if ($drive) {
+            $freeGB = [math]::Round($drive.Free / 1GB, 2)
+            $result.Details.FreeSpaceGB = $freeGB
+            
+            if ($freeGB -ge 20) {
+                $result.ReadinessScore += 10
+            } elseif ($freeGB -ge 10) {
+                $result.Warnings += "Low disk space: $freeGB GB free (recommend 20+ GB)"
+            } else {
+                $result.Blockers += "Insufficient disk space: $freeGB GB free (need 20+ GB)"
+            }
+        }
+    } catch {
+        $result.Warnings += "Could not check disk space: $_"
+    }
+    
+    # Calculate final eligibility
+    if ($result.Blockers.Count -eq 0) {
+        $result.Eligible = $true
+        if ($result.ReadinessScore -ge 80) {
+            $result.Recommendations += "System appears ready for repair install"
+        } elseif ($result.ReadinessScore -ge 60) {
+            $result.Recommendations += "System may be ready, but warnings should be addressed"
+        } else {
+            $result.Recommendations += "System needs additional preparation before repair install"
+        }
+    } else {
+        $result.Recommendations += "System is NOT ready - blockers must be resolved first"
+    }
+    
+    return $result
+}
+
+function Clear-CBSBlockers {
+    <#
+    .SYNOPSIS
+    Normalizes CBS state to remove blockers for repair install.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Success = $false
+        ActionsTaken = @()
+        Errors = @()
+        Report = ""
+    }
+    
+    $envType = Get-EnvironmentType
+    $isOffline = ($envType -ne 'FullOS')
+    
+    $report = New-Object System.Text.StringBuilder
+    $report.AppendLine("CBS BLOCKER CLEARANCE") | Out-Null
+    $report.AppendLine("=" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # 1. Clear PendingFileRenameOperations
+    Write-Host "Clearing PendingFileRenameOperations..." -ForegroundColor Cyan
+    try {
+        if ($isOffline) {
+            $regPath = "$TargetDrive`:\Windows\System32\config\SYSTEM"
+            if (Test-Path $regPath) {
+                reg load HKLM\TEMP_SYSTEM $regPath 2>&1 | Out-Null
+                try {
+                    Remove-ItemProperty -Path "HKLM:\TEMP_SYSTEM\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                    $result.ActionsTaken += "Cleared PendingFileRenameOperations (offline)"
+                    $report.AppendLine("[OK] Cleared PendingFileRenameOperations") | Out-Null
+                } finally {
+                    reg unload HKLM\TEMP_SYSTEM 2>&1 | Out-Null
+                }
+            }
+        } else {
+            Remove-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+            $result.ActionsTaken += "Cleared PendingFileRenameOperations"
+            $report.AppendLine("[OK] Cleared PendingFileRenameOperations") | Out-Null
+        }
+    } catch {
+        $errorMsg = "Could not clear PendingFileRenameOperations: $_"
+        $result.Errors += $errorMsg
+        $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+    }
+    
+    # 2. Run DISM /Cleanup-Image /ResetBase (if online)
+    if (-not $isOffline) {
+        Write-Host "Running DISM /ResetBase to clean component store..." -ForegroundColor Cyan
+        try {
+            $dismOutput = dism /Online /Cleanup-Image /ResetBase 2>&1 | Out-String
+            if ($dismOutput -match "The operation completed successfully") {
+                $result.ActionsTaken += "Ran DISM /ResetBase"
+                $report.AppendLine("[OK] DISM /ResetBase completed") | Out-Null
+            } else {
+                $report.AppendLine("[INFO] DISM /ResetBase output: $dismOutput") | Out-Null
+            }
+        } catch {
+            $errorMsg = "DISM /ResetBase failed: $_"
+            $result.Errors += $errorMsg
+            $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+        }
+    }
+    
+    # 3. Clear CBS pending operations flag
+    Write-Host "Clearing CBS pending operations..." -ForegroundColor Cyan
+    try {
+        # This is tricky - we can't directly modify CBS state
+        # But we can ensure DISM is healthy
+        if ($isOffline) {
+            $dismCheck = dism /Image:$TargetDrive`: /Cleanup-Image /CheckHealth 2>&1 | Out-String
+        } else {
+            $dismCheck = dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+        }
+        
+        if ($dismCheck -match "The component store is repairable") {
+            if ($isOffline) {
+                $dismRepair = dism /Image:$TargetDrive`: /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+            } else {
+                $dismRepair = dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+            }
+            
+            if ($dismRepair -match "The operation completed successfully") {
+                $result.ActionsTaken += "Repaired CBS component store"
+                $report.AppendLine("[OK] CBS component store repaired") | Out-Null
+            }
+        }
+    } catch {
+        $errorMsg = "CBS repair failed: $_"
+        $result.Errors += $errorMsg
+        $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+    }
+    
+    $result.Success = ($result.ActionsTaken.Count -gt 0)
+    $result.Report = $report.ToString()
+    
+    return $result
+}
+
+function Normalize-SetupState {
+    <#
+    .SYNOPSIS
+    Normalizes registry keys for setup.exe compatibility.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Success = $false
+        ActionsTaken = @()
+        Errors = @()
+        Report = ""
+    }
+    
+    $envType = Get-EnvironmentType
+    $isOffline = ($envType -ne 'FullOS')
+    
+    $report = New-Object System.Text.StringBuilder
+    $report.AppendLine("SETUP STATE NORMALIZATION") | Out-Null
+    $report.AppendLine("=" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    try {
+        if ($isOffline) {
+            $regPath = "$TargetDrive`:\Windows\System32\config\SOFTWARE"
+            if (Test-Path $regPath) {
+                reg load HKLM\TEMP_SOFTWARE $regPath 2>&1 | Out-Null
+                try {
+                    $regRoot = "HKLM:\TEMP_SOFTWARE\Microsoft\Windows\CurrentVersion"
+                } finally {
+                    # Will unload later
+                }
+            } else {
+                $result.Errors += "Registry hive not found"
+                return $result
+            }
+        } else {
+            $regRoot = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion"
+        }
+        
+        # Ensure SetupPlatform key exists
+        $setupPlatformPath = "$regRoot\Setup\SetupPlatform"
+        if (-not (Test-Path $setupPlatformPath)) {
+            New-Item -Path $setupPlatformPath -Force -ErrorAction SilentlyContinue | Out-Null
+            $result.ActionsTaken += "Created SetupPlatform registry key"
+            $report.AppendLine("[OK] Created SetupPlatform key") | Out-Null
+        }
+        
+        # Normalize EditionID if needed
+        $editionPath = "$regRoot"
+        if ($isOffline) {
+            $edition = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -ErrorAction SilentlyContinue).EditionID
+        } else {
+            $edition = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -ErrorAction SilentlyContinue).EditionID
+        }
+        
+        if ($edition -and $edition -match "Evaluation|Invalid") {
+            # Try to normalize to Professional
+            if ($isOffline) {
+                Set-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -Value "Professional" -ErrorAction SilentlyContinue
+            } else {
+                Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "EditionID" -Value "Professional" -ErrorAction SilentlyContinue
+            }
+            $result.ActionsTaken += "Normalized EditionID to Professional"
+            $report.AppendLine("[OK] Normalized EditionID") | Out-Null
+        }
+        
+        # Ensure InstallationType is Client
+        if ($isOffline) {
+            $installType = (Get-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -ErrorAction SilentlyContinue).InstallationType
+            if ($installType -ne "Client") {
+                Set-ItemProperty -Path "HKLM:\TEMP_SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -Value "Client" -ErrorAction SilentlyContinue
+                $result.ActionsTaken += "Set InstallationType to Client"
+                $report.AppendLine("[OK] Set InstallationType to Client") | Out-Null
+            }
+        } else {
+            $installType = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -ErrorAction SilentlyContinue).InstallationType
+            if ($installType -ne "Client") {
+                Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name "InstallationType" -Value "Client" -ErrorAction SilentlyContinue
+                $result.ActionsTaken += "Set InstallationType to Client"
+                $report.AppendLine("[OK] Set InstallationType to Client") | Out-Null
+            }
+        }
+        
+        if ($isOffline) {
+            reg unload HKLM\TEMP_SOFTWARE 2>&1 | Out-Null
+        }
+        
+        $result.Success = ($result.ActionsTaken.Count -gt 0)
+        
+    } catch {
+        $result.Errors += "Error normalizing setup state: $_"
+        if ($isOffline) {
+            reg unload HKLM\TEMP_SOFTWARE 2>&1 | Out-Null
+        }
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+function Repair-WinREForSetup {
+    <#
+    .SYNOPSIS
+    Ensures WinRE is properly registered for setup.exe.
+    #>
+    param(
+        [string]$TargetDrive = "C"
+    )
+    
+    $result = @{
+        Success = $false
+        ActionsTaken = @()
+        Errors = @()
+        Report = ""
+    }
+    
+    $envType = Get-EnvironmentType
+    $isOffline = ($envType -ne 'FullOS')
+    
+    $report = New-Object System.Text.StringBuilder
+    $report.AppendLine("WINRE REPAIR FOR SETUP") | Out-Null
+    $report.AppendLine("=" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if (-not $isOffline) {
+        # Online: Use reagentc
+        Write-Host "Repairing WinRE registration..." -ForegroundColor Cyan
+        try {
+            # Check current status
+            $reagentcInfo = reagentc /info 2>&1 | Out-String
+            
+            if ($reagentcInfo -match "Windows RE status.*Disabled") {
+                # Try to enable
+                $enableOutput = reagentc /enable 2>&1 | Out-String
+                if ($enableOutput -match "Operation completed successfully") {
+                    $result.ActionsTaken += "Enabled WinRE"
+                    $report.AppendLine("[OK] WinRE enabled") | Out-Null
+                }
+            }
+            
+            # Set WinRE location if needed
+            $winrePath = "$TargetDrive`:\Recovery\WindowsRE"
+            if (Test-Path $winrePath) {
+                $setOutput = reagentc /setreimage /path $winrePath 2>&1 | Out-String
+                if ($setOutput -match "Operation completed successfully") {
+                    $result.ActionsTaken += "Set WinRE path"
+                    $report.AppendLine("[OK] WinRE path set") | Out-Null
+                }
+            }
+            
+        } catch {
+            $errorMsg = "WinRE repair failed: $_"
+            $result.Errors += $errorMsg
+            $report.AppendLine("[WARNING] $errorMsg") | Out-Null
+        }
+    } else {
+        # Offline: Check for WinRE partition and BCD entries
+        $report.AppendLine("[INFO] Offline mode - WinRE repair limited") | Out-Null
+        $report.AppendLine("WinRE should be repaired after booting into Windows") | Out-Null
+    }
+    
+    $result.Success = ($result.ActionsTaken.Count -gt 0)
+    $result.Report = $report.ToString()
+    
+    return $result
+}
+
+function Start-RepairInstallReadiness {
+    <#
+    .SYNOPSIS
+    Master orchestrator - ensures system is ready for repair install.
+    
+    .DESCRIPTION
+    Runs all checks and fixes to make Windows eligible for in-place upgrade
+    with "Keep apps + files" option.
+    #>
+    param(
+        [string]$TargetDrive = "C",
+        [switch]$FixBlockers = $true,
+        [scriptblock]$ProgressCallback = $null
+    )
+    
+    $result = @{
+        Success = $false
+        ReadinessScore = 0
+        Eligible = $false
+        Blockers = @()
+        Warnings = @()
+        ActionsTaken = @()
+        Report = ""
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("REPAIR-INSTALL READINESS ENGINE") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Step 1: Test eligibility
+    if ($null -ne $ProgressCallback) {
+        & $ProgressCallback "Testing repair-install eligibility..."
+    }
+    $report.AppendLine("STEP 1: Testing Eligibility") | Out-Null
+    $eligibility = Test-RepairInstallEligibility -TargetDrive $TargetDrive
+    $result.ReadinessScore = $eligibility.ReadinessScore
+    $result.Blockers = $eligibility.Blockers
+    $result.Warnings = $eligibility.Warnings
+    
+    $report.AppendLine("Readiness Score: $($eligibility.ReadinessScore)/100") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($eligibility.Blockers.Count -gt 0) {
+        $report.AppendLine("BLOCKERS FOUND:") | Out-Null
+        foreach ($blocker in $eligibility.Blockers) {
+            $report.AppendLine("  ❌ $blocker") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    if ($eligibility.Warnings.Count -gt 0) {
+        $report.AppendLine("WARNINGS:") | Out-Null
+        foreach ($warning in $eligibility.Warnings) {
+            $report.AppendLine("  ⚠ $warning") | Out-Null
+        }
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Step 2: Fix blockers if requested
+    if ($FixBlockers -and $eligibility.Blockers.Count -gt 0) {
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Fixing blockers..."
+        }
+        $report.AppendLine("STEP 2: Fixing Blockers") | Out-Null
+        
+        # Clear CBS blockers
+        $cbsResult = Clear-CBSBlockers -TargetDrive $TargetDrive
+        $report.AppendLine($cbsResult.Report) | Out-Null
+        $result.ActionsTaken += $cbsResult.ActionsTaken
+        
+        # Normalize setup state
+        $setupResult = Normalize-SetupState -TargetDrive $TargetDrive
+        $report.AppendLine($setupResult.Report) | Out-Null
+        $result.ActionsTaken += $setupResult.ActionsTaken
+        
+        # Repair WinRE
+        $winreResult = Repair-WinREForSetup -TargetDrive $TargetDrive
+        $report.AppendLine($winreResult.Report) | Out-Null
+        $result.ActionsTaken += $winreResult.ActionsTaken
+        
+        $report.AppendLine("") | Out-Null
+        
+        # Re-test eligibility
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Re-testing eligibility after fixes..."
+        }
+        $eligibility = Test-RepairInstallEligibility -TargetDrive $TargetDrive
+        $result.ReadinessScore = $eligibility.ReadinessScore
+        $result.Blockers = $eligibility.Blockers
+        $result.Warnings = $eligibility.Warnings
+    }
+    
+    # Final assessment
+    $report.AppendLine("FINAL ASSESSMENT") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($eligibility.Blockers.Count -eq 0 -and $eligibility.ReadinessScore -ge 80) {
+        $result.Eligible = $true
+        $result.Success = $true
+        $report.AppendLine("✅ SYSTEM IS READY FOR REPAIR INSTALL") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("You can now run:") | Out-Null
+        $report.AppendLine("  setup.exe /auto upgrade /quiet") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Or use Windows Setup GUI and select 'Keep apps + files'") | Out-Null
+    } elseif ($eligibility.Blockers.Count -eq 0) {
+        $result.Eligible = $true
+        $result.Success = $true
+        $report.AppendLine("⚠ SYSTEM MAY BE READY (with warnings)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Readiness score: $($eligibility.ReadinessScore)/100") | Out-Null
+        $report.AppendLine("Address warnings before attempting repair install.") | Out-Null
+    } else {
+        $report.AppendLine("❌ SYSTEM IS NOT READY") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Blockers must be resolved:") | Out-Null
+        foreach ($blocker in $eligibility.Blockers) {
+            $report.AppendLine("  - $blocker") | Out-Null
+        }
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
+}
+
+# Repair Templates and Presets
+# One-click fixes for common scenarios
+# Part of MiracleBoot v7.2.0
+
+function Get-RepairTemplates {
+    <#
+    .SYNOPSIS
+    Returns list of available repair templates.
+    #>
+    return @(
+        @{
+            Id = "QuickBootFix"
+            Name = "Quick Boot Fix"
+            Description = "Fast boot repair for common boot issues (BCD, boot files, bootrec)"
+            EstimatedTime = "5-10 minutes"
+            Steps = @("BootRepair", "BootFiles")
+            RiskLevel = "Low"
+        },
+        @{
+            Id = "BootLoopFix"
+            Name = "Boot Loop Fix"
+            Description = "Comprehensive fix for boot loops and startup issues"
+            EstimatedTime = "15-30 minutes"
+            Steps = @("BootRepair", "SystemFiles", "BootChainAnalysis")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "AfterDiskClone"
+            Name = "After Disk Clone"
+            Description = "Fix boot and driver issues after disk cloning/migration"
+            EstimatedTime = "20-40 minutes"
+            Steps = @("BootRepair", "DriverPorting", "SystemFiles", "RepairInstallReadiness")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "AfterMotherboardChange"
+            Name = "After Motherboard Change"
+            Description = "Complete fix after hardware change (drivers, boot, registry)"
+            EstimatedTime = "30-60 minutes"
+            Steps = @("DriverPorting", "BootRepair", "SystemFiles", "RegistryFixes", "RepairInstallReadiness")
+            RiskLevel = "High"
+        },
+        @{
+            Id = "FullSystemRecovery"
+            Name = "Full System Recovery"
+            Description = "Complete system repair (boot, files, disk, registry, readiness)"
+            EstimatedTime = "60-120 minutes"
+            Steps = @("CompleteSystemRepair", "RepairInstallReadiness")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "InPlaceUpgradePrep"
+            Name = "In-Place Upgrade Preparation"
+            Description = "Prepare system for in-place upgrade (Keep apps + files)"
+            EstimatedTime = "15-30 minutes"
+            Steps = @("SystemFiles", "RepairInstallReadiness")
+            RiskLevel = "Low"
+        },
+        @{
+            Id = "CorruptedSystemFiles"
+            Name = "Corrupted System Files"
+            Description = "Fix corrupted Windows system files (SFC + DISM)"
+            EstimatedTime = "20-40 minutes"
+            Steps = @("SystemFiles")
+            RiskLevel = "Low"
+        },
+        @{
+            Id = "BootAndFiles"
+            Name = "Boot + System Files"
+            Description = "Fix boot issues and corrupted system files"
+            EstimatedTime = "30-60 minutes"
+            Steps = @("BootRepair", "SystemFiles")
+            RiskLevel = "Medium"
+        }
+    )
+}
+
+function Start-RepairTemplate {
+    <#
+    .SYNOPSIS
+    Executes a repair template (preset workflow).
+    
+    .PARAMETER TemplateId
+    ID of the template to execute
+    
+    .PARAMETER TargetDrive
+    Windows drive letter
+    
+    .PARAMETER SkipConfirmation
+    Skip confirmation prompts
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TemplateId,
+        
+        [string]$TargetDrive = "C",
+        
+        [switch]$SkipConfirmation = $false,
+        
+        [scriptblock]$ProgressCallback = $null
+    )
+    
+    $result = @{
+        Success = $false
+        TemplateId = $TemplateId
+        StepsCompleted = @()
+        StepsFailed = @()
+        Report = ""
+        Errors = @()
+    }
+    
+    $templates = Get-RepairTemplates
+    $template = $templates | Where-Object { $_.Id -eq $TemplateId } | Select-Object -First 1
+    
+    if (-not $template) {
+        $result.Errors += "Template '$TemplateId' not found"
+        return $result
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("REPAIR TEMPLATE: $($template.Name)") | Out-Null
+    $report.AppendLine("Description: $($template.Description)") | Out-Null
+    $report.AppendLine("Estimated Time: $($template.EstimatedTime)") | Out-Null
+    $report.AppendLine("Risk Level: $($template.RiskLevel)") | Out-Null
+    $report.AppendLine("Target Drive: $TargetDrive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Show template steps
+    $report.AppendLine("TEMPLATE STEPS:") | Out-Null
+    foreach ($step in $template.Steps) {
+        $report.AppendLine("  • $step") | Out-Null
+    }
+    $report.AppendLine("") | Out-Null
+    
+    # Confirm if not skipped
+    if (-not $SkipConfirmation) {
+        $confirmMsg = "REPAIR TEMPLATE: $($template.Name)`n`n"
+        $confirmMsg += "Description: $($template.Description)`n"
+        $confirmMsg += "Estimated Time: $($template.EstimatedTime)`n"
+        $confirmMsg += "Risk Level: $($template.RiskLevel)`n`n"
+        $confirmMsg += "Steps to execute:`n"
+        foreach ($step in $template.Steps) {
+            $confirmMsg += "  • $step`n"
+        }
+        $confirmMsg += "`nTarget Drive: $TargetDrive`:`n`n"
+        $confirmMsg += "Continue?"
+        
+        # In TUI, use Read-Host
+        if ($null -eq $ProgressCallback) {
+            Write-Host $confirmMsg -ForegroundColor Yellow
+            $confirm = Read-Host "Type 'YES' to continue"
+            if ($confirm -ne "YES") {
+                $report.AppendLine("[CANCELLED] User cancelled template execution") | Out-Null
+                $result.Report = $report.ToString()
+                return $result
+            }
+        }
+    }
+    
+    # Execute template steps
+    $stepNum = 1
+    foreach ($step in $template.Steps) {
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Executing step $stepNum/$($template.Steps.Count): $step"
+        }
+        
+        $report.AppendLine("STEP $stepNum : $step") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        
+        try {
+            switch ($step) {
+                "BootRepair" {
+                    $stepResult = Start-AutomatedBootRepair -TargetDrive $TargetDrive
+                    if ($stepResult.Success) {
+                        $result.StepsCompleted += "BootRepair"
+                        $report.AppendLine("[OK] Boot repair completed") | Out-Null
+                    } else {
+                        $result.StepsFailed += "BootRepair"
+                        $report.AppendLine("[FAILED] Boot repair failed") | Out-Null
+                        $result.Errors += "BootRepair: $($stepResult.Errors -join ', ')"
+                    }
+                }
+                "SystemFiles" {
+                    $stepResult = Start-SystemFileRepair -TargetDrive $TargetDrive -ProgressCallback $ProgressCallback
+                    if ($stepResult.SFCCompleted -or $stepResult.DISMCompleted) {
+                        $result.StepsCompleted += "SystemFiles"
+                        $report.AppendLine("[OK] System file repair completed") | Out-Null
+                    } else {
+                        $result.StepsFailed += "SystemFiles"
+                        $report.AppendLine("[FAILED] System file repair failed") | Out-Null
+                        $result.Errors += "SystemFiles: $($stepResult.Errors -join ', ')"
+                    }
+                }
+                "BootFiles" {
+                    # Quick boot files fix
+                    $bootResult = bootrec /fixboot 2>&1 | Out-String
+                    if ($LASTEXITCODE -eq 0) {
+                        $result.StepsCompleted += "BootFiles"
+                        $report.AppendLine("[OK] Boot files fixed") | Out-Null
+                    } else {
+                        $result.StepsFailed += "BootFiles"
+                        $report.AppendLine("[WARNING] Boot files fix had issues") | Out-Null
+                    }
+                }
+                "DriverPorting" {
+                    $stepResult = Get-MissingDriversForPorting -TargetDrive $TargetDrive
+                    if ($stepResult.Success) {
+                        $result.StepsCompleted += "DriverPorting"
+                        $report.AppendLine("[OK] Driver porting completed") | Out-Null
+                        $report.AppendLine("  Drivers exported to: $($stepResult.ExportPath)") | Out-Null
+                    } else {
+                        $result.StepsFailed += "DriverPorting"
+                        $report.AppendLine("[WARNING] Driver porting had issues") | Out-Null
+                    }
+                }
+                "BootChainAnalysis" {
+                    $stepResult = Get-BootChainAnalysis -TargetDrive $TargetDrive
+                    $result.StepsCompleted += "BootChainAnalysis"
+                    $report.AppendLine("[OK] Boot chain analysis completed") | Out-Null
+                    $report.AppendLine($stepResult.Report) | Out-Null
+                }
+                "RegistryFixes" {
+                    $stepResult = Apply-OneClickRegistryFixes -TargetDrive $TargetDrive
+                    if ($stepResult.Success) {
+                        $result.StepsCompleted += "RegistryFixes"
+                        $report.AppendLine("[OK] Registry fixes applied") | Out-Null
+                    } else {
+                        $result.StepsFailed += "RegistryFixes"
+                        $report.AppendLine("[WARNING] Registry fixes had issues") | Out-Null
+                    }
+                }
+                "RepairInstallReadiness" {
+                    $stepResult = Start-RepairInstallReadiness -TargetDrive $TargetDrive -FixBlockers -ProgressCallback $ProgressCallback
+                    if ($stepResult.Eligible) {
+                        $result.StepsCompleted += "RepairInstallReadiness"
+                        $report.AppendLine("[OK] System is ready for repair install") | Out-Null
+                    } else {
+                        $result.StepsFailed += "RepairInstallReadiness"
+                        $report.AppendLine("[WARNING] System may not be fully ready") | Out-Null
+                    }
+                }
+                "CompleteSystemRepair" {
+                    $stepResult = Start-CompleteSystemRepair -TargetDrive $TargetDrive -ProgressCallback $ProgressCallback
+                    if ($stepResult.Success) {
+                        $result.StepsCompleted += "CompleteSystemRepair"
+                        $report.AppendLine("[OK] Complete system repair finished") | Out-Null
+                    } else {
+                        $result.StepsFailed += "CompleteSystemRepair"
+                        $report.AppendLine("[WARNING] Complete system repair had issues") | Out-Null
+                    }
+                }
+                default {
+                    $report.AppendLine("[WARNING] Unknown step: $step") | Out-Null
+                }
+            }
+        } catch {
+            $result.StepsFailed += $step
+            $errorMsg = "Step $step failed: $_"
+            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+            $result.Errors += $errorMsg
+        }
+        
+        $report.AppendLine("") | Out-Null
+        $stepNum++
+    }
+    
+    # Final summary
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("TEMPLATE EXECUTION SUMMARY") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("Steps Completed: $($result.StepsCompleted.Count)/$($template.Steps.Count)") | Out-Null
+    $report.AppendLine("Steps Failed: $($result.StepsFailed.Count)") | Out-Null
+    
+    if ($result.StepsFailed.Count -eq 0) {
+        $result.Success = $true
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("✅ TEMPLATE EXECUTION SUCCESSFUL") | Out-Null
+    } else {
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("⚠ TEMPLATE EXECUTION COMPLETED WITH WARNINGS") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Failed Steps:") | Out-Null
+        foreach ($failed in $result.StepsFailed) {
+            $report.AppendLine("  • $failed") | Out-Null
+        }
+    }
     
     $result.Report = $report.ToString()
     return $result

@@ -171,6 +171,25 @@ try {
     exit 1
 }
 
+# Load additional modules (if available)
+try {
+    if (Test-Path "$PSScriptRoot\Helper\NetworkDiagnostics.ps1") {
+        . "$PSScriptRoot\Helper\NetworkDiagnostics.ps1"
+        Write-Host "Network Diagnostics module loaded." -ForegroundColor Green
+    }
+} catch {
+    Write-Warning "Could not load NetworkDiagnostics.ps1: $_"
+}
+
+try {
+    if (Test-Path "$PSScriptRoot\Helper\KeyboardSymbols.ps1") {
+        . "$PSScriptRoot\Helper\KeyboardSymbols.ps1"
+        Write-Host "Keyboard Symbols module loaded." -ForegroundColor Green
+    }
+} catch {
+    Write-Warning "Could not load KeyboardSymbols.ps1: $_"
+}
+
 # Check environment capabilities
 $psInfo = Test-PowerShellAvailability
 $networkInfo = Test-NetworkAvailability

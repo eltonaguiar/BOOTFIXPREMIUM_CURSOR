@@ -1,250 +1,191 @@
-<<<<<<< HEAD
 # Miracle Boot v7.2.0 - Advanced Windows Recovery Tool
 
-## 🎯 Purpose
+## 🎯 What is Miracle Boot?
 
-**Miracle Boot** is a comprehensive Windows boot repair and recovery tool designed to diagnose and fix boot issues, repair system files, manage boot configurations, and perform advanced recovery operations. It provides both a modern GUI interface (for FullOS) and a text-based TUI interface (for WinPE/WinRE environments).
+**Miracle Boot** is a comprehensive Windows boot repair and recovery tool designed to fix broken Windows operating systems. Whether your Windows won't boot, needs repair, or requires an in-place upgrade, Miracle Boot provides the tools and diagnostics needed to get your system back up and running.
 
-### Key Capabilities:
-- **Boot Repair**: Rebuild BCD, fix boot files, scan for Windows installations
-- **System Diagnostics**: Comprehensive health checks, boot probability analysis, failure reason detection
-- **Driver Management**: Detect missing drivers, inject drivers offline, perform driver forensics
-- **BCD Management**: Visual BCD editor with advanced property editing
-- **System File Repair**: SFC and DISM integration for offline repair
-- **Disk Repair**: CHKDSK integration with bad sector recovery
-- **In-Place Upgrade**: Force repair-only Windows installation from ISO
-- **Network Support**: Enable network/internet in WinRE/WinPE environments
+### Primary Goals:
+- **Fix broken Windows operating systems** - Repair corrupted system files, boot configurations, and registry issues
+- **Enable in-place repairs** - Prepare your system for Windows repair installations that preserve your apps and data
+- **Fix Windows boot issues** - Diagnose and repair boot failures, missing boot files, and BCD corruption
 
 ---
 
-## 🖥️ Supported Environments
+## 🖥️ Where Can You Use Miracle Boot?
 
-Miracle Boot is designed to run in multiple Windows environments:
+Miracle Boot works in **multiple Windows environments**, automatically detecting your environment and providing the appropriate interface:
 
-### ✅ **Windows 11/10 (FullOS)**
-- **Launch**: Run `RunMiracleBoot.cmd` or `MiracleBoot.ps1` directly
-- **Interface**: Modern WPF GUI with full feature set
-- **Use Case**: Repair boot issues, manage BCD, perform diagnostics while Windows is running
+### ✅ **Windows 10/11 (FullOS) - Normal Windows Desktop**
+**When to use:** Your Windows is running but has boot issues, or you want to perform diagnostics and repairs while Windows is operational.
+
+**How to launch:**
+- Double-click `RunMiracleBoot.cmd`
+- Or run: `powershell.exe -ExecutionPolicy Bypass -File MiracleBoot.ps1`
+
+**Interface:** Modern WPF GUI with full visual interface, tabs, buttons, and real-time feedback.
+
+**Best for:**
+- Diagnosing boot problems before they become critical
+- Managing boot configurations (BCD)
+- Performing system health checks
+- Preparing for in-place upgrades
+
+---
 
 ### ✅ **Windows Recovery Environment (WinRE)**
-- **Launch**: Access via **Advanced Startup Options** → **Troubleshoot** → **Command Prompt**
-- **Interface**: MS-DOS Style TUI (Text User Interface)
-- **Use Case**: Repair non-booting systems, recover from boot failures
+**When to use:** Your Windows won't boot normally, but you can access Advanced Startup Options.
+
+**How to access:**
+1. Boot your computer
+2. When Windows fails to start, you'll see "Preparing Automatic Repair"
+3. Go to **Advanced Options** → **Troubleshoot** → **Command Prompt**
+4. Navigate to your Miracle Boot folder
+5. Run: `RunMiracleBoot.cmd`
+
+**Interface:** Text-based menu (MS-DOS Style) - all features available via keyboard navigation.
+
+**Best for:**
+- Repairing non-booting systems
+- Recovering from boot failures
+- Fixing boot configuration issues
+- Accessing system when Windows won't start
+
+---
 
 ### ✅ **Windows Preinstallation Environment (WinPE)**
-- **Launch**: Boot from WinPE media and run `RunMiracleBoot.cmd`
-- **Interface**: MS-DOS Style TUI
-- **Use Case**: Repair systems that won't boot, perform offline repairs
+**When to use:** Your system won't boot at all, or you need to repair from external media.
+
+**How to access:**
+1. Boot from WinPE USB/DVD (Hiren's BootCD PE, Sergei Strelec's WinPE, or custom WinPE)
+2. Navigate to your Miracle Boot folder (on USB or network)
+3. Run: `RunMiracleBoot.cmd`
+
+**Interface:** Text-based menu (MS-DOS Style) - optimized for minimal environments.
+
+**Best for:**
+- Repairing systems that won't boot
+- Offline repairs (when Windows installation is on another drive)
+- Driver injection for missing storage drivers
+- Complete system diagnostics from external media
+
+**Special Features:**
+- Option to install portable Chrome/Firefox browser for web access
+- Network support for downloading drivers and tools
+- Full offline repair capabilities
+
+---
 
 ### ✅ **Windows Installation Environment (Shift+F10)**
-- **Launch**: During Windows installation, press **Shift+F10** to open command prompt, then run `RunMiracleBoot.cmd`
-- **Interface**: MS-DOS Style TUI
-- **Use Case**: Fix installation failures, enable network, diagnose installation issues
+**When to use:** During Windows installation when setup fails or you need to fix installation issues.
+
+**How to access:**
+1. Start Windows installation from USB/DVD
+2. When installation screen appears, press **Shift+F10** to open command prompt
+3. Navigate to your Miracle Boot folder (on USB)
+4. Run: `RunMiracleBoot.cmd`
+
+**Interface:** Text-based menu (MS-DOS Style) - limited environment but full repair capabilities.
+
+**Best for:**
+- Fixing Windows installation failures
+- Enabling network during installation
+- Diagnosing installation issues
+- Preparing system for successful installation
+
+**Note:** Browser installation not available in Shift+F10 environment (limited Windows Setup environment).
 
 ---
 
-## 📋 GUI Interface Overview
+## 🚀 Quick Start Guide
 
-When running in FullOS (Windows 11/10), Miracle Boot launches a modern WPF GUI with the following tabs:
+### Step 1: Download and Extract
+1. Download Miracle Boot
+2. Extract all files to a folder (e.g., `C:\MiracleBoot` or `D:\MiracleBoot`)
+3. **Important:** Keep all `.ps1` and `.cmd` files together in the same folder
 
----
+### Step 2: Choose Your Environment
 
-### 📊 **Tab 1: Volumes & Health**
+#### **If Windows is Running:**
+```cmd
+RunMiracleBoot.cmd
+```
+You'll see a modern GUI with tabs and buttons.
 
-**Purpose**: Display and monitor all Windows volumes with health status
-
-**Features**:
-- **Volume List**: Shows all detected drives with:
-  - Drive letter
-  - File system label
-  - Total size
-  - Health status (Healthy, Warning, Error)
-- **Refresh Button**: Updates volume list in real-time
-- **Health Monitoring**: Visual indicators for volume health
-
-**Use Cases**:
-- Identify which drives contain Windows installations
-- Check disk health before performing repairs
-- Locate system and recovery partitions
+#### **If Windows Won't Boot:**
+1. Boot into WinRE (Advanced Startup Options) or WinPE (bootable USB)
+2. Open Command Prompt
+3. Navigate to Miracle Boot folder
+4. Run: `RunMiracleBoot.cmd`
+5. You'll see a text-based menu - use number/letter keys to navigate
 
 ---
 
-### ⚙️ **Tab 2: BCD Editor**
+## 📋 Key Capabilities
 
-**Purpose**: Visual Boot Configuration Data (BCD) editor with advanced management capabilities
+### 🔧 Boot Repair
+- Rebuild Boot Configuration Data (BCD)
+- Fix boot files and boot sector
+- Scan for Windows installations
+- Repair boot menu entries
+- Fix duplicate boot entries
 
-#### **Sub-tab 2.1: Basic Editor**
-- **BCD Entry List**: Displays all boot entries with:
-  - Entry description/name
-  - GUID identifier
-  - Default boot indicator (highlighted in green)
-- **Edit Selected Entry**:
-  - Modify description/friendly name
-  - Set as default boot entry
-  - Configure boot timeout (seconds)
-- **Quick Actions**:
-  - Load/Refresh BCD entries
-  - Create BCD backup
-  - Fix duplicate entries
-  - Sync BCD to all EFI partitions
-  - Run boot diagnosis
+### 🔍 System Diagnostics
+- **Boot Probability Check** - Assess likelihood of successful boot (0-100%)
+- **Boot Health Analysis** - Identify boot chain failure points
+- **Comprehensive Diagnostics** - Full system health check
+- **In-Place Upgrade Readiness** - Check if system can perform repair installation
+- **Boot Log Analysis** - View startup/boot logs to see where boot chain fails
 
-#### **Sub-tab 2.2: Advanced Properties**
-- **Property Grid**: Edit all BCD properties for selected entry
-- **Direct Editing**: Modify any BCD property value
-- **Save/Reset**: Apply changes or revert to original values
+### 💾 Driver Management
+- Detect missing storage drivers
+- Scan for driver errors
+- Inject drivers offline into Windows installations
+- Driver forensics from system logs
+- Export drivers for backup
 
-**Use Cases**:
-- Fix boot menu entries
-- Remove duplicate boot entries
-- Change default boot OS
-- Modify boot parameters
-- Troubleshoot boot configuration issues
+### 📝 BCD Management
+- Visual BCD editor (GUI) or text-based editor (TUI)
+- Edit boot entry properties
+- Set default boot entry
+- Fix duplicate entries
+- Sync BCD to all EFI partitions
 
----
+### 🛠️ System File Repair
+- **SFC (System File Checker)** - Scan and repair corrupted system files
+- **DISM** - Repair Windows component store
+- Offline repair support (from WinPE/WinRE)
+- Automated repair workflows
 
-### 🖥️ **Tab 3: Boot Menu Simulator**
+### 💿 Disk Repair
+- **CHKDSK** integration
+- Bad sector recovery
+- File system repair
+- Disk health checks
 
-**Purpose**: Visual preview of how the Windows Boot Manager will appear
+### 🔄 In-Place Upgrade
+- Force repair-only Windows installation
+- Preserve apps and data
+- Online and offline modes
+- Registry override for compatibility
 
-**Features**:
-- **Boot Menu Preview**: Shows boot entries as they will appear at startup
-- **Timeout Display**: Shows countdown timer (default: 30 seconds)
-- **Visual Styling**: Matches Windows Boot Manager appearance (blue background, white text)
+### 🌐 Network Support
+- Enable network/internet in WinRE/WinPE
+- WiFi support
+- Internet connectivity testing
+- Browser installation (WinPE only)
 
-**Use Cases**:
-- Preview boot menu before rebooting
-- Verify boot entry names and order
-- Test boot menu appearance
-
----
-
-### 🔧 **Tab 4: Driver Diagnostics**
-
-**Purpose**: Detect, scan, and manage missing or problematic drivers
-
-**Features**:
-- **Scan for Driver Errors**: Identifies drivers with issues
-- **Scan for Missing Drivers**: Detects required but missing drivers
-- **Scan All Drivers**: Comprehensive driver inventory
-- **Driver Installation**: Inject drivers into offline Windows installations
-- **Drive Selection**: Choose target Windows drive for driver operations
-- **Detailed Output**: Shows driver status, INF files, and recommendations
-
-**Use Cases**:
-- Fix "inaccessible boot device" errors
-- Resolve missing storage driver issues
-- Prepare drivers for offline injection
-- Diagnose driver-related boot failures
+### 📊 Log Analysis
+- Boot log (nbtlog.txt) analysis
+- Event log analysis
+- Setup log analysis
+- Driver forensics
+- Failure reason detection
 
 ---
 
-### 🔨 **Tab 5: Boot Fixer**
+## 🛠️ Text-Based Interface (TUI) - MS-DOS Style Mode
 
-**Purpose**: Automated and manual boot repair operations
-
-**Features**:
-- **Test Mode**: Preview commands without executing (enabled by default)
-- **Boot Repair Operations**:
-  1. **Rebuild BCD from Windows Installation** (bcdboot)
-  2. **Fix Boot Files** (bootrec /fixboot)
-  3. **Scan for Windows Installations** (bootrec /scanos)
-  4. **Rebuild BCD** (bootrec /rebuildbcd)
-  5. **Set Default Boot Entry**
-  6. **Boot Diagnosis** (comprehensive analysis)
-- **Command Output**: Real-time display of repair operations
-- **Safety Features**: Test mode prevents accidental changes
-
-**Use Cases**:
-- Fix "Boot Configuration Data file is missing" errors
-- Recover from boot sector corruption
-- Rebuild boot configuration after disk cloning
-- Restore boot functionality after system changes
-
----
-
-### 🔍 **Tab 6: Diagnostics**
-
-**Purpose**: System health checks and diagnostic information
-
-**Features**:
-- **Target Drive Selection**: Choose Windows drive to analyze
-- **Diagnostic Tools**:
-  - **Check System Restore**: View restore points and status
-  - **Check Reagentc Health**: Verify Windows Recovery Environment
-  - **Get OS Information**: Display Windows version, build, edition
-  - **Install Failure Analysis**: Analyze Windows installation failure logs
-- **Output Display**: Detailed diagnostic reports
-
-**Use Cases**:
-- Check if System Restore is available
-- Verify WinRE functionality
-- Identify Windows version and edition
-- Diagnose installation failures
-- Assess system recovery options
-
----
-
-### 📝 **Tab 7: Diagnostics & Logs**
-
-**Purpose**: Advanced log analysis and forensic diagnostics
-
-**Features**:
-- **Log Analysis Tools**:
-  - **Driver Forensics**: Identify missing storage drivers from logs
-  - **Analyze Boot Log**: Parse boot log files for errors
-  - **Analyze Event Logs**: Review Windows Event Logs for issues
-  - **Full Boot Diagnosis**: Comprehensive boot health check
-  - **Hardware Support**: Manufacturer links and driver update alerts
-- **Registry Tools**:
-  - **Generate Registry Override Script**: Create scripts to fix registry issues
-  - **One-Click Registry Fixes**: Apply common registry repairs
-- **Advanced Features**:
-  - **Filter Driver Forensics**: Focused driver analysis
-  - **Export In-Use Drivers**: Extract currently loaded drivers
-  - **Generate Cleanup Script**: Create cleanup automation
-  - **In-Place Upgrade Readiness**: Check if system can perform in-place upgrade
-  - **Recommended Tools**: Suggest third-party repair tools
-  - **Unofficial Repair Tips**: Advanced troubleshooting suggestions
-
-**Use Cases**:
-- Analyze boot failures from logs
-- Identify missing drivers from system logs
-- Fix registry corruption issues
-- Prepare for in-place upgrade
-- Get manufacturer-specific driver links
-- Export drivers for backup/transfer
-
----
-
-### 🔄 **Tab 8: Repair Install Forcer**
-
-**Purpose**: Force Windows to perform a repair-only in-place upgrade
-
-**Features**:
-- **Mode Selection**:
-  - **Online Mode**: Run from within Windows (recommended)
-  - **Offline Mode**: Run from WinPE/WinRE for non-booting systems
-- **ISO Selection**: Browse and select Windows installation ISO
-- **Options**:
-  - Skip compatibility checks
-  - Disable Dynamic Update
-  - Force edition alignment
-- **Prerequisites Check**: Verify system readiness before starting
-- **Instructions**: Step-by-step guidance
-- **Status Output**: Real-time progress and results
-
-**Use Cases**:
-- Repair Windows without losing apps/data
-- Fix system file corruption
-- Restore Windows functionality
-- Perform clean repair installation
-
----
-
-## 🛠️ TUI Interface (MS-DOS Style Mode)
-
-When running in WinPE/WinRE or when GUI is unavailable, Miracle Boot provides a text-based menu:
+When running in WinPE, WinRE, or Shift+F10, you'll see a menu like this:
 
 ```
 ═══════════════════════════════════════════════════════════
@@ -269,46 +210,122 @@ E) Disk Repair (chkdsk)
 F) Comprehensive Diagnostics
 G) Complete System Repair
 H) In-Place Upgrade Readiness Check
+I) Boot Log Analysis (View Startup/Boot Logs)
+J) Utilities Menu (Notepad, Registry, PowerShell, etc.)
 Q) Quit
 ```
 
-**All GUI features are available in TUI mode** with menu-driven navigation.
+**Navigation:**
+- Type the number or letter (e.g., `1`, `B`, `I`) and press Enter
+- Type `Q` to quit
+- Press any key when prompted to continue
+
+**All GUI features are available in TUI mode** - just navigate through menus instead of clicking buttons.
 
 ---
 
-## 🚀 Quick Start
+## 📊 GUI Interface Overview (FullOS Only)
 
-### Installation
-1. Download or clone this repository
-2. Extract all files to a folder (e.g., `C:\MiracleBoot`)
-3. Ensure all `.ps1` and `.cmd` files are in the same directory
+When running in Windows 10/11, Miracle Boot provides a modern GUI with 8 tabs:
 
-### Running in FullOS (Windows 11/10)
-```cmd
-RunMiracleBoot.cmd
-```
-or
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File MiracleBoot.ps1
-```
+### 📊 Tab 1: Volumes & Health
+View all Windows volumes with health status, drive letters, and file systems.
 
-### Running in WinRE/WinPE/Shift+F10
-1. Boot into recovery environment or press Shift+F10 during installation
-2. Navigate to the Miracle Boot folder
-3. Run:
-```cmd
-RunMiracleBoot.cmd
-```
+### ⚙️ Tab 2: BCD Editor
+Visual Boot Configuration Data editor with basic and advanced property editing.
+
+### 🖥️ Tab 3: Boot Menu Simulator
+Preview how your boot menu will appear at startup.
+
+### 🔧 Tab 4: Driver Diagnostics
+Detect, scan, and manage missing or problematic drivers.
+
+### 🔨 Tab 5: Boot Fixer
+Automated and manual boot repair operations with test mode.
+
+### 🔍 Tab 6: Diagnostics
+System health checks, System Restore status, WinRE health, OS information.
+
+### 📝 Tab 7: Diagnostics & Logs
+Advanced log analysis, driver forensics, registry tools, in-place upgrade readiness.
+
+### 🔄 Tab 8: Repair Install Forcer
+Force Windows to perform a repair-only in-place upgrade from ISO.
+
+---
+
+## 🆕 New Features in v7.2.0
+
+### Boot Chain Failure Analysis
+- **View Startup/Boot Logs** - See exactly where in the boot chain Windows is failing
+- **Boot Chain Stage Identification** - Identifies failure at BIOS/UEFI, bootloader, kernel, or driver stage
+- **Detailed Failure Reasons** - Explains why each stage failed
+- **Actionable Recommendations** - Provides specific steps to fix identified issues
+
+### Enhanced WinPE/Shift+F10 Support
+- **Utilities Menu** - Quick access to Notepad, Registry Editor, PowerShell, System Restore
+- **Browser Installation** (WinPE only) - Install portable Chrome or Firefox for web access
+- **Improved Boot Log Analysis** - Better visualization of boot chain failures
+
+### Boot Probability Assessment
+- Calculate boot success probability (0-100%)
+- Identify critical issues preventing boot
+- Health status indicators (Excellent, Good, Fair, Poor, Critical)
+
+### In-Place Upgrade Readiness
+- Comprehensive analysis of system readiness
+- Identifies blockers preventing in-place upgrade
+- Analyzes CBS logs, component store, registry, setup logs
 
 ---
 
 ## ⚠️ Important Notes
 
-- **Administrator Rights**: Most operations require administrator privileges
-- **Backups**: Always backup BCD and important data before making changes
-- **Test Mode**: Boot Fixer tab runs in Test Mode by default - uncheck to apply fixes
-- **BitLocker**: Ensure you have recovery keys if BitLocker is enabled
-- **Data Safety**: Most operations are non-destructive, but always verify target drives
+### Administrator Rights
+Most operations require administrator privileges. Always run as administrator.
+
+### Backups
+- Always backup BCD before making changes
+- Tool can create automatic backups before repairs
+- System Restore points recommended before major repairs
+
+### BitLocker
+If BitLocker is enabled, ensure you have recovery keys before performing repairs.
+
+### Test Mode
+Boot Fixer tab runs in Test Mode by default - uncheck to apply fixes.
+
+### Data Safety
+Most operations are non-destructive, but always verify target drives before proceeding.
+
+---
+
+## 🔍 Understanding Boot Chain Failures
+
+### Windows Boot Process Stages:
+
+1. **BIOS/UEFI Initialization** - Hardware detection and initialization
+2. **Boot Manager** - Windows Boot Manager (bootmgr) loads
+3. **Boot Loader** - winload.exe loads the Windows kernel
+4. **Kernel Initialization** - Windows kernel (ntoskrnl.exe) starts
+5. **Driver Loading** - System drivers load in phases
+6. **Session Manager** - smss.exe starts user sessions
+7. **Windows Logon** - winlogon.exe and services start
+
+### Common Failure Points:
+
+- **Stage 1-2:** Missing or corrupted boot files, BCD corruption
+- **Stage 3:** Corrupted winload.exe or kernel files
+- **Stage 4:** Kernel corruption, missing hal.dll
+- **Stage 5:** Missing storage drivers, driver corruption
+- **Stage 6-7:** Corrupted system files, registry issues
+
+### How Miracle Boot Helps:
+
+- **Boot Log Analysis** - Shows which drivers/services failed to load
+- **Boot Chain Diagnostics** - Identifies exact failure stage
+- **Boot Probability** - Assesses overall boot health
+- **Automated Repair** - Fixes common boot issues automatically
 
 ---
 
@@ -316,7 +333,7 @@ RunMiracleBoot.cmd
 
 ```
 MiracleBoot_v7_1_1/
-├── MiracleBoot.ps1          # Main launcher script (detects environment, loads appropriate interface)
+├── MiracleBoot.ps1          # Main launcher (detects environment, loads interface)
 ├── RunMiracleBoot.cmd        # Batch launcher (compatible with all environments)
 ├── README.md                 # This file
 ├── Helper/                   # Helper scripts and modules
@@ -324,16 +341,8 @@ MiracleBoot_v7_1_1/
 │   ├── WinRepairGUI.ps1     # GUI interface (WPF) for FullOS
 │   ├── WinRepairTUI.ps1     # Text-based interface for WinPE/WinRE
 │   ├── WinRepairCore.cmd    # CMD fallback functions
-│   ├── FixWinRepairCore.ps1 # Additional repair functions
-│   ├── VersionTracker.ps1   # Automatic backup branch creation (every 20 commits)
-│   ├── EnsureMain.ps1      # Main branch synchronization and management
-│   └── README.md            # Helper scripts documentation
-├── Test/                     # Testing scripts and documentation
-│   ├── Test-MiracleBoot.ps1
-│   ├── test_new_features.ps1
-│   └── TESTING_SUMMARY.md
-└── workspace/                # Workspace configuration files
-    └── MiracleBoot_v7_1_1.code-workspace
+│   └── FixWinRepairCore.ps1 # Additional repair functions
+└── Test/                     # Testing scripts and documentation
 ```
 
 ---
