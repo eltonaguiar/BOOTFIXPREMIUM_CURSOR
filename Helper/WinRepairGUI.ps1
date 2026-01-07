@@ -2427,6 +2427,167 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
     }
 })
 
+$W.FindName("BtnRepairTemplates").Add_Click({
+    if (-not (Get-Command Get-RepairTemplates -ErrorAction SilentlyContinue)) {
+        [System.Windows.MessageBox]::Show(
+            "Repair Templates feature not available.`n`nThis feature requires WinRepairCore.ps1 to be loaded.",
+            "Feature Not Available",
+            "OK",
+            "Warning"
+        )
+        return
+    }
+    
+    $templates = Get-RepairTemplates
+    
+    # Create template selection window
+    $templateWindow = New-Object System.Windows.Window
+    $templateWindow.Title = "Repair Templates - One-Click Fixes"
+    $templateWindow.Width = 700
+    $templateWindow.Height = 500
+    $templateWindow.WindowStartupLocation = "CenterScreen"
+    
+    $grid = New-Object System.Windows.Controls.Grid
+    $grid.Margin = "10"
+    
+    # ListBox for templates
+    $listBox = New-Object System.Windows.Controls.ListBox
+    $listBox.Margin = "0,0,0,10"
+    
+    foreach ($template in $templates) {
+        $item = New-Object System.Windows.Controls.ListBoxItem
+        $stackPanel = New-Object System.Windows.Controls.StackPanel
+        $stackPanel.Margin = "5"
+        
+        $nameBlock = New-Object System.Windows.Controls.TextBlock
+        $nameBlock.Text = $template.Name
+        $nameBlock.FontWeight = "Bold"
+        $nameBlock.FontSize = "14"
+        $stackPanel.Children.Add($nameBlock) | Out-Null
+        
+        $descBlock = New-Object System.Windows.Controls.TextBlock
+        $descBlock.Text = $template.Description
+        $descBlock.Foreground = "Gray"
+        $descBlock.Margin = "0,5,0,0"
+        $descBlock.TextWrapping = "Wrap"
+        $stackPanel.Children.Add($descBlock) | Out-Null
+        
+        $infoBlock = New-Object System.Windows.Controls.TextBlock
+        $infoBlock.Text = "Time: $($template.EstimatedTime) | Risk: $($template.RiskLevel)"
+        $infoBlock.Foreground = "DarkOrange"
+        $infoBlock.Margin = "0,5,0,0"
+        $stackPanel.Children.Add($infoBlock) | Out-Null
+        
+        $item.Content = $stackPanel
+        $item.Tag = $template.Id
+        $listBox.Items.Add($item) | Out-Null
+    }
+    
+    # Buttons
+    $buttonPanel = New-Object System.Windows.Controls.StackPanel
+    $buttonPanel.Orientation = "Horizontal"
+    $buttonPanel.HorizontalAlignment = "Right"
+    
+    $executeBtn = New-Object System.Windows.Controls.Button
+    $executeBtn.Content = "Execute Template"
+    $executeBtn.Width = "150"
+    $executeBtn.Height = "30"
+    $executeBtn.Margin = "0,0,10,0"
+    $executeBtn.IsEnabled = $false
+    
+    $cancelBtn = New-Object System.Windows.Controls.Button
+    $cancelBtn.Content = "Cancel"
+    $cancelBtn.Width = "100"
+    $cancelBtn.Height = "30"
+    
+    $buttonPanel.Children.Add($executeBtn) | Out-Null
+    $buttonPanel.Children.Add($cancelBtn) | Out-Null
+    
+    # Enable execute button when template is selected
+    $listBox.Add_SelectionChanged({
+        $executeBtn.IsEnabled = ($listBox.SelectedItem -ne $null)
+    })
+    
+    # Execute button handler
+    $executeBtn.Add_Click({
+        if ($listBox.SelectedItem) {
+            $templateId = $listBox.SelectedItem.Tag
+            $templateWindow.DialogResult = $true
+            $templateWindow.Close()
+            
+            # Get drive
+            $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+            $drive = "C"
+            if ($selectedDrive) {
+                if ($selectedDrive -match '^([A-Z]):') {
+                    $drive = $matches[1]
+                }
+            }
+            
+            # Execute template
+            Update-StatusBar -Message "Executing repair template..." -ShowProgress
+            $W.FindName("LogAnalysisBox").Text = "Executing repair template...`n`n"
+            
+            $progressCallback = {
+                param($message)
+                $W.Dispatcher.Invoke([action]{
+                    $W.FindName("LogAnalysisBox").Text += "$message`n"
+                    $W.FindName("LogAnalysisBox").ScrollToEnd()
+                    Update-StatusBar -Message $message -ShowProgress
+                }, [System.Windows.Threading.DispatcherPriority]::Input)
+            }
+            
+            try {
+                $result = Start-RepairTemplate -TemplateId $templateId -TargetDrive $drive -SkipConfirmation -ProgressCallback $progressCallback
+                
+                $W.FindName("LogAnalysisBox").Text = $result.Report
+                $W.FindName("LogAnalysisBox").ScrollToEnd()
+                
+                if ($result.Success) {
+                    [System.Windows.MessageBox]::Show(
+                        "✅ Template execution completed successfully!`n`n" +
+                        "Steps completed: $($result.StepsCompleted.Count)",
+                        "Template Complete",
+                        "OK",
+                        "Information"
+                    )
+                } else {
+                    [System.Windows.MessageBox]::Show(
+                        "⚠ Template execution completed with warnings.`n`n" +
+                        "Steps completed: $($result.StepsCompleted.Count)`n" +
+                        "Steps failed: $($result.StepsFailed.Count)",
+                        "Template Complete",
+                        "OK",
+                        "Warning"
+                    )
+                }
+                
+                Update-StatusBar -Message "Template execution complete" -HideProgress
+            } catch {
+                $W.FindName("LogAnalysisBox").Text += "`n`n[ERROR] Failed: $_`n"
+                Update-StatusBar -Message "Template execution failed" -HideProgress
+                [System.Windows.MessageBox]::Show(
+                    "Error executing template:`n`n$_",
+                    "Error",
+                    "OK",
+                    "Error"
+                )
+            }
+        }
+    })
+    
+    $cancelBtn.Add_Click({
+        $templateWindow.DialogResult = $false
+        $templateWindow.Close()
+    })
+    
+    $grid.Children.Add($listBox) | Out-Null
+    $grid.Children.Add($buttonPanel) | Out-Null
+    
+    $templateWindow.Content = $grid
+    $templateWindow.ShowDialog() | Out-Null
+})
+
 # Repair Install Forcer Handlers
 # Update mode description when radio buttons change
 $W.FindName("RbOnlineMode").Add_Checked({
