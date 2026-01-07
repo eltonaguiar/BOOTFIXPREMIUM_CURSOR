@@ -79,6 +79,80 @@
           entries (e.g. WinPE‑only options) based on that value.
 #>
 
+# Helper function to create enhanced TUI progress callback with ASCII progress bars
+function New-TUIProgressCallback {
+    <#
+    .SYNOPSIS
+    Creates a progress callback scriptblock for TUI that displays ASCII progress bars and percentage.
+    
+    .DESCRIPTION
+    Returns a scriptblock that can be passed to repair functions. The callback receives
+    either a progress object (hashtable/PSCustomObject) with Percentage, Stage, CurrentOperation,
+    EstimatedTimeRemaining properties, or a simple string message.
+    
+    Uses Write-Progress for in-place updates and also displays ASCII progress bars.
+    #>
+    param(
+        [string]$Activity = "Operation",
+        [string]$Status = "In Progress"
+    )
+    
+    $script:lastProgressId = 1
+    $script:lastPercentage = -1
+    $script:lastStage = ""
+    
+    return {
+        param($progress)
+        
+        # Handle both progress object format and simple string messages
+        if ($progress -is [hashtable] -or $progress -is [PSCustomObject]) {
+            $percentage = if ($progress.Percentage) { $progress.Percentage } else { -1 }
+            $stage = if ($progress.Stage) { $progress.Stage } else { "" }
+            $currentOp = if ($progress.CurrentOperation) { $progress.CurrentOperation } else { $Status }
+            $estimatedTime = if ($progress.EstimatedTimeRemaining) { $progress.EstimatedTimeRemaining } else { $null }
+            
+            # Build status text
+            $statusText = $currentOp
+            if ($stage) {
+                $statusText = "$stage - $currentOp"
+            }
+            
+            # Add estimated time if available
+            if ($estimatedTime -and $estimatedTime.TotalSeconds -gt 0) {
+                $minutes = [math]::Floor($estimatedTime.TotalMinutes)
+                $seconds = [math]::Floor($estimatedTime.TotalSeconds % 60)
+                if ($minutes -gt 0) {
+                    $statusText += " (~${minutes}m ${seconds}s remaining)"
+                } else {
+                    $statusText += " (~${seconds}s remaining)"
+                }
+            }
+            
+            # Use Write-Progress for in-place updates (works in all PowerShell hosts)
+            if ($percentage -ge 0) {
+                Write-Progress -Activity $Activity -Status $statusText -PercentComplete $percentage -Id $script:lastProgressId
+                
+                # Also display ASCII progress bar on a new line (for better visibility)
+                if ($percentage -ne $script:lastPercentage -or $stage -ne $script:lastStage) {
+                    $barWidth = 40
+                    $filled = [math]::Floor($percentage / 100 * $barWidth)
+                    $bar = "[" + ("=" * $filled) + (" " * ($barWidth - $filled)) + "]"
+                    Write-Host "`r$bar $percentage% - $statusText" -NoNewline -ForegroundColor Cyan
+                    $script:lastPercentage = $percentage
+                    $script:lastStage = $stage
+                }
+            } else {
+                Write-Progress -Activity $Activity -Status $statusText -Id $script:lastProgressId
+                Write-Host "`r[$Activity] $statusText" -NoNewline -ForegroundColor Cyan
+            }
+        } else {
+            # Simple string message
+            Write-Progress -Activity $Activity -Status $progress -Id $script:lastProgressId
+            Write-Host "`r[$Activity] $progress" -NoNewline -ForegroundColor Cyan
+        }
+    }
+}
+
 function Start-TUI {
     # Detect environment for display (matching main script logic)
     $envDisplay = "FullOS"
@@ -497,17 +571,18 @@ function Start-TUI {
                 Write-Host "This may take 15-30 minutes..." -ForegroundColor Yellow
                 Write-Host ""
                 
-                # Progress callback for TUI
-                $progressCallback = {
-                    param($message)
-                    Write-Host $message -ForegroundColor Cyan
-                }
+                # Enhanced progress callback for TUI with ASCII progress bars
+                $progressCallback = New-TUIProgressCallback -Activity "System File Repair (SFC + DISM)" -Status "Repairing system files..."
                 
                 if ([string]::IsNullOrWhiteSpace($source)) {
                     $repairResult = Start-SystemFileRepair -TargetDrive $drive -ProgressCallback $progressCallback
                 } else {
                     $repairResult = Start-SystemFileRepair -TargetDrive $drive -SourcePath $source -ProgressCallback $progressCallback
                 }
+                
+                # Clear progress display
+                Write-Progress -Activity "System File Repair" -Completed -Id 1
+                Write-Host "" # New line after progress
                 
                 Write-Host ""
                 Write-Host $repairResult.Report
@@ -535,13 +610,14 @@ function Start-TUI {
                 }
                 Write-Host ""
                 
-                # Progress callback for TUI
-                $progressCallback = {
-                    param($message)
-                    Write-Host $message -ForegroundColor Cyan
-                }
+                # Enhanced progress callback for TUI with ASCII progress bars
+                $progressCallback = New-TUIProgressCallback -Activity "Disk Repair (CHKDSK)" -Status "Checking disk..."
                 
                 $repairResult = Start-DiskRepair -TargetDrive $drive -FixErrors -RecoverBadSectors:$recoverBadSectors -ProgressCallback $progressCallback
+                
+                # Clear progress display
+                Write-Progress -Activity "Disk Repair" -Completed -Id 1
+                Write-Host "" # New line after progress
                 
                 Write-Host ""
                 Write-Host $repairResult.Report
