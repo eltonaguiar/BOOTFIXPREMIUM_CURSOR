@@ -27,10 +27,10 @@ $script:SymbolDatabase = @(
     @{ Symbol = '"'; ALTCode = 34; Description = 'Double Quote'; Category = 'Quotation'; Problematic = $true; Common = $true }
     @{ Symbol = "'"; ALTCode = 39; Description = 'Single Quote/Apostrophe'; Category = 'Quotation'; Problematic = $true; Common = $true }
     @{ Symbol = '`'; ALTCode = 96; Description = 'Backtick/Grave Accent'; Category = 'Quotation'; Problematic = $true; Common = $false }
-    @{ Symbol = '«'; ALTCode = 174; Description = 'Left Double Guillemet'; Category = 'Quotation'; Problematic = $false; Common = $false }
-    @{ Symbol = '»'; ALTCode = 175; Description = 'Right Double Guillemet'; Category = 'Quotation'; Problematic = $false; Common = $false }
-    @{ Symbol = '"'; ALTCode = 147; Description = 'Left Smart Quote'; Category = 'Quotation'; Problematic = $false; Common = $false }
-    @{ Symbol = '"'; ALTCode = 148; Description = 'Right Smart Quote'; Category = 'Quotation'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00AB; ALTCode = 174; Description = 'Left Double Guillemet'; Category = 'Quotation'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00BB; ALTCode = 175; Description = 'Right Double Guillemet'; Category = 'Quotation'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x201C; ALTCode = 147; Description = 'Left Smart Quote'; Category = 'Quotation'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x201D; ALTCode = 148; Description = 'Right Smart Quote'; Category = 'Quotation'; Problematic = $false; Common = $false }
     
     # Backslash and Forward Slash
     @{ Symbol = '\'; ALTCode = 92; Description = 'Backslash'; Category = 'Path'; Problematic = $true; Common = $true }
@@ -51,8 +51,8 @@ $script:SymbolDatabase = @(
     @{ Symbol = '$'; ALTCode = 36; Description = 'Dollar Sign'; Category = 'Special'; Problematic = $true; Common = $true }
     @{ Symbol = '%'; ALTCode = 37; Description = 'Percent'; Category = 'Special'; Problematic = $true; Common = $true }
     @{ Symbol = '&'; ALTCode = 38; Description = 'Ampersand'; Category = 'Special'; Problematic = $true; Common = $true }
-    @{ Symbol = '§'; ALTCode = 21; Description = 'Section Sign'; Category = 'Special'; Problematic = $false; Common = $false }
-    @{ Symbol = '¶'; ALTCode = 20; Description = 'Pilcrow/Paragraph'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00A7; ALTCode = 21; Description = 'Section Sign'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B6; ALTCode = 20; Description = 'Pilcrow/Paragraph'; Category = 'Special'; Problematic = $false; Common = $false }
     
     # Mathematical Operators
     @{ Symbol = '+'; ALTCode = 43; Description = 'Plus Sign'; Category = 'Operators'; Problematic = $false; Common = $true }
@@ -62,9 +62,9 @@ $script:SymbolDatabase = @(
     @{ Symbol = '='; ALTCode = 61; Description = 'Equals Sign'; Category = 'Operators'; Problematic = $true; Common = $true }
     @{ Symbol = '<'; ALTCode = 60; Description = 'Less Than'; Category = 'Operators'; Problematic = $true; Common = $true }
     @{ Symbol = '>'; ALTCode = 62; Description = 'Greater Than'; Category = 'Operators'; Problematic = $true; Common = $true }
-    @{ Symbol = '±'; ALTCode = 241; Description = 'Plus-Minus'; Category = 'Operators'; Problematic = $false; Common = $false }
-    @{ Symbol = '×'; ALTCode = 158; Description = 'Multiplication Sign'; Category = 'Operators'; Problematic = $false; Common = $false }
-    @{ Symbol = '÷'; ALTCode = 246; Description = 'Division Sign'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B1; ALTCode = 241; Description = 'Plus-Minus'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00D7; ALTCode = 158; Description = 'Multiplication Sign'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00F7; ALTCode = 246; Description = 'Division Sign'; Category = 'Operators'; Problematic = $false; Common = $false }
     
     # Brackets and Parentheses
     @{ Symbol = '('; ALTCode = 40; Description = 'Left Parenthesis'; Category = 'Brackets'; Problematic = $true; Common = $true }
@@ -81,40 +81,40 @@ $script:SymbolDatabase = @(
     @{ Symbol = '^'; ALTCode = 94; Description = 'Caret/Circumflex'; Category = 'Special'; Problematic = $true; Common = $true }
     @{ Symbol = '~'; ALTCode = 126; Description = 'Tilde'; Category = 'Special'; Problematic = $true; Common = $false }
     @{ Symbol = '_'; ALTCode = 95; Description = 'Underscore'; Category = 'Special'; Problematic = $true; Common = $true }
-    @{ Symbol = '¨'; ALTCode = 249; Description = 'Diaeresis'; Category = 'Special'; Problematic = $false; Common = $false }
-    @{ Symbol = '¯'; ALTCode = 175; Description = 'Macron'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00A8; ALTCode = 249; Description = 'Diaeresis'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00AF; ALTCode = 175; Description = 'Macron'; Category = 'Special'; Problematic = $false; Common = $false }
     
     # Assignment/Equals variations
-    @{ Symbol = '≈'; ALTCode = 247; Description = 'Approximately Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
-    @{ Symbol = '≠'; ALTCode = 173; Description = 'Not Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
-    @{ Symbol = '≤'; ALTCode = 243; Description = 'Less Than or Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
-    @{ Symbol = '≥'; ALTCode = 242; Description = 'Greater Than or Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2248; ALTCode = 247; Description = 'Approximately Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2260; ALTCode = 173; Description = 'Not Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2264; ALTCode = 243; Description = 'Less Than or Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2265; ALTCode = 242; Description = 'Greater Than or Equal'; Category = 'Operators'; Problematic = $false; Common = $false }
     
     # Additional Common Symbols
-    @{ Symbol = '°'; ALTCode = 248; Description = 'Degree Symbol'; Category = 'Special'; Problematic = $false; Common = $true }
-    @{ Symbol = '©'; ALTCode = 169; Description = 'Copyright'; Category = 'Special'; Problematic = $false; Common = $true }
-    @{ Symbol = '®'; ALTCode = 174; Description = 'Registered Trademark'; Category = 'Special'; Problematic = $false; Common = $false }
-    @{ Symbol = '™'; ALTCode = 153; Description = 'Trademark'; Category = 'Special'; Problematic = $false; Common = $false }
-    @{ Symbol = '€'; ALTCode = 128; Description = 'Euro Sign'; Category = 'Currency'; Problematic = $false; Common = $true }
-    @{ Symbol = '£'; ALTCode = 156; Description = 'Pound Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
-    @{ Symbol = '¥'; ALTCode = 157; Description = 'Yen Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
-    @{ Symbol = '¢'; ALTCode = 155; Description = 'Cent Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
-    @{ Symbol = '¤'; ALTCode = 207; Description = 'Generic Currency'; Category = 'Currency'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B0; ALTCode = 248; Description = 'Degree Symbol'; Category = 'Special'; Problematic = $false; Common = $true }
+    @{ Symbol = [char]0x00A9; ALTCode = 169; Description = 'Copyright'; Category = 'Special'; Problematic = $false; Common = $true }
+    @{ Symbol = [char]0x00AE; ALTCode = 174; Description = 'Registered Trademark'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2122; ALTCode = 153; Description = 'Trademark'; Category = 'Special'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x20AC; ALTCode = 128; Description = 'Euro Sign'; Category = 'Currency'; Problematic = $false; Common = $true }
+    @{ Symbol = [char]0x00A3; ALTCode = 156; Description = 'Pound Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00A5; ALTCode = 157; Description = 'Yen Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00A2; ALTCode = 155; Description = 'Cent Sign'; Category = 'Currency'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00A4; ALTCode = 207; Description = 'Generic Currency'; Category = 'Currency'; Problematic = $false; Common = $false }
     
     # Bullet and Arrow Symbols
-    @{ Symbol = '•'; ALTCode = 7; Description = 'Bullet Point'; Category = 'Symbols'; Problematic = $false; Common = $true }
-    @{ Symbol = '→'; ALTCode = 26; Description = 'Right Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
-    @{ Symbol = '←'; ALTCode = 27; Description = 'Left Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
-    @{ Symbol = '↑'; ALTCode = 24; Description = 'Up Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
-    @{ Symbol = '↓'; ALTCode = 25; Description = 'Down Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2022; ALTCode = 7; Description = 'Bullet Point'; Category = 'Symbols'; Problematic = $false; Common = $true }
+    @{ Symbol = [char]0x2192; ALTCode = 26; Description = 'Right Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2190; ALTCode = 27; Description = 'Left Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2191; ALTCode = 24; Description = 'Up Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x2193; ALTCode = 25; Description = 'Down Arrow'; Category = 'Symbols'; Problematic = $false; Common = $false }
     
     # Fraction and Mathematical
-    @{ Symbol = '½'; ALTCode = 171; Description = 'One Half'; Category = 'Fractions'; Problematic = $false; Common = $false }
-    @{ Symbol = '¼'; ALTCode = 172; Description = 'One Quarter'; Category = 'Fractions'; Problematic = $false; Common = $false }
-    @{ Symbol = '¾'; ALTCode = 184; Description = 'Three Quarters'; Category = 'Fractions'; Problematic = $false; Common = $false }
-    @{ Symbol = '³'; ALTCode = 252; Description = 'Superscript Three'; Category = 'Fractions'; Problematic = $false; Common = $false }
-    @{ Symbol = '²'; ALTCode = 253; Description = 'Superscript Two'; Category = 'Fractions'; Problematic = $false; Common = $false }
-    @{ Symbol = '¹'; ALTCode = 185; Description = 'Superscript One'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00BD; ALTCode = 171; Description = 'One Half'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00BC; ALTCode = 172; Description = 'One Quarter'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00BE; ALTCode = 184; Description = 'Three Quarters'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B3; ALTCode = 252; Description = 'Superscript Three'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B2; ALTCode = 253; Description = 'Superscript Two'; Category = 'Fractions'; Problematic = $false; Common = $false }
+    @{ Symbol = [char]0x00B9; ALTCode = 185; Description = 'Superscript One'; Category = 'Fractions'; Problematic = $false; Common = $false }
 )
 
 # ============================================================================
@@ -151,16 +151,16 @@ function Invoke-SymbolCopy {
         $clipboardContent = [System.Windows.Forms.Clipboard]::GetText()
         
         if ($clipboardContent -eq $Symbol) {
-            Write-Host "✓ Copied to clipboard: '$Symbol' ($Description)" -ForegroundColor Green
+            Write-Host "[OK] Copied to clipboard: '$Symbol' ($Description)" -ForegroundColor Green
             return $true
         }
         else {
-            Write-Host "✗ Failed to copy symbol to clipboard" -ForegroundColor Red
+            Write-Host "[FAILED] Failed to copy symbol to clipboard" -ForegroundColor Red
             return $false
         }
     }
     catch {
-        Write-Host "✗ Error copying symbol: $_" -ForegroundColor Red
+        Write-Host "[ERROR] Error copying symbol: $_" -ForegroundColor Red
         return $false
     }
 }
@@ -253,9 +253,9 @@ function Show-SymbolHelper {
     
     while ($true) {
         Clear-Host
-        Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║         SYMBOL HELPER - Copy to Clipboard               ║" -ForegroundColor Cyan
-        Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "================================================================" -ForegroundColor Cyan
+        Write-Host "         SYMBOL HELPER - Copy to Clipboard" -ForegroundColor Cyan
+        Write-Host "================================================================" -ForegroundColor Cyan
         Write-Host ""
         
         # Display categories
@@ -324,24 +324,24 @@ function Show-SymbolTable {
     
     while ($true) {
         Clear-Host
-        Write-Host "╔══════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║                     SELECT SYMBOL TO COPY                       ║" -ForegroundColor Cyan
-        Write-Host "╚══════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "======================================================================" -ForegroundColor Cyan
+        Write-Host "                     SELECT SYMBOL TO COPY" -ForegroundColor Cyan
+        Write-Host "======================================================================" -ForegroundColor Cyan
         Write-Host ""
         
         # Display symbols in a table
-        Write-Host "  # │ Symbol │ ALT Code │ Description │ Category" -ForegroundColor White
-        Write-Host "────┼────────┼──────────┼─────────────┼──────────────" -ForegroundColor Gray
+        Write-Host "  # | Symbol | ALT Code | Description | Category" -ForegroundColor White
+        Write-Host "----+--------+----------+-------------+--------------" -ForegroundColor Gray
         
         for ($i = 0; $i -lt $Symbols.Count; $i++) {
             $sym = $Symbols[$i]
-            $symbolDisplay = if ($sym.Problematic) { "$($sym.Symbol) ⚠" } else { $sym.Symbol }
-            Write-Host ("  {0:2d} │   {1}   │  {2,3}    │ {3,-11} │ {4}" -f `
+            $symbolDisplay = if ($sym.Problematic) { "$($sym.Symbol) [WARNING]" } else { $sym.Symbol }
+            Write-Host ("  {0:2d} |   {1}   |  {2,3}    | {3,-11} | {4}" -f `
                     $i + 1, $symbolDisplay, $sym.ALTCode, $sym.Description.Substring(0, [Math]::Min(11, $sym.Description.Length)), $sym.Category) -ForegroundColor White
         }
         
         Write-Host ""
-        Write-Host "Legend: ⚠ = Problematic in non-English layouts" -ForegroundColor DarkYellow
+        Write-Host "Legend: [WARNING] = Problematic in non-English layouts" -ForegroundColor DarkYellow
         Write-Host ""
         Write-Host "B. Back | Q. Quit" -ForegroundColor Yellow
         
@@ -423,15 +423,15 @@ function Show-ALTCodeReference {
     
     # Build reference text
     $reference = @()
-    $reference += "═" * 80
+    $reference += "=" * 80
     $reference += "WINDOWS ALT CODE REFERENCE FOR SPECIAL SYMBOLS"
-    $reference += "═" * 80
+    $reference += "=" * 80
     $reference += ""
     $reference += "INSTRUCTIONS:"
     $reference += "1. Hold Alt key on the numeric keypad (not the number row)"
     $reference += "2. Type the ALT code number"
     $reference += "3. Release Alt key"
-    $reference += "⚠  = Problematic symbol in non-English keyboard layouts"
+    $reference += "[WARNING] = Problematic symbol in non-English keyboard layouts"
     $reference += ""
     $reference += ""
     
@@ -441,12 +441,12 @@ function Show-ALTCodeReference {
     foreach ($cat in $categories) {
         $catSymbols = $symbols | Where-Object { $_.Category -eq $cat } | Sort-Object ALTCode
         
-        $reference += "─" * 80
+        $reference += "-" * 80
         $reference += "CATEGORY: $cat"
-        $reference += "─" * 80
+        $reference += "-" * 80
         
         foreach ($sym in $catSymbols) {
-            $marker = if ($sym.Problematic) { "⚠ " } else { "  " }
+            $marker = if ($sym.Problematic) { "[WARNING] " } else { "  " }
             $reference += "{0} Alt+{1,-3} | '{2}' | {3}" -f $marker, $sym.ALTCode, $sym.Symbol, $sym.Description
         }
         
@@ -462,10 +462,10 @@ function Show-ALTCodeReference {
         try {
             $reference | Out-File -FilePath $ExportToFile -Encoding UTF8 -Force
             Write-Host ""
-            Write-Host "✓ Reference exported to: $ExportToFile" -ForegroundColor Green
+            Write-Host "[OK] Reference exported to: $ExportToFile" -ForegroundColor Green
         }
         catch {
-            Write-Host "✗ Failed to export reference: $_" -ForegroundColor Red
+            Write-Host "[FAILED] Failed to export reference: $_" -ForegroundColor Red
         }
     }
     
@@ -493,10 +493,10 @@ function Launch-OnScreenKeyboard {
         Write-Host "Launching Windows On-Screen Keyboard..." -ForegroundColor Cyan
         Start-Process -FilePath "osk.exe" -ErrorAction Stop
         Start-Sleep -Seconds 1
-        Write-Host "✓ On-screen keyboard launched" -ForegroundColor Green
+        Write-Host "[OK] On-screen keyboard launched" -ForegroundColor Green
     }
     catch {
-        Write-Host "✗ Failed to launch on-screen keyboard: $_" -ForegroundColor Red
+        Write-Host "[FAILED] Failed to launch on-screen keyboard: $_" -ForegroundColor Red
     }
 }
 
@@ -518,9 +518,9 @@ function Get-KeyboardInfo {
     param()
     
     Clear-Host
-    Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║          KEYBOARD LAYOUT INFORMATION                      ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "          KEYBOARD LAYOUT INFORMATION" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host ""
     
     try {
@@ -612,9 +612,9 @@ function Show-ProblematicSymbols {
     $problematicSymbols = $script:SymbolDatabase | Where-Object { $_.Problematic -eq $true } | Sort-Object Symbol
     
     Clear-Host
-    Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-    Write-Host "║    PROBLEMATIC SYMBOLS (Non-English Keyboard Layouts)    ║" -ForegroundColor Yellow
-    Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+    Write-Host "================================================================" -ForegroundColor Yellow
+    Write-Host "    PROBLEMATIC SYMBOLS (Non-English Keyboard Layouts)" -ForegroundColor Yellow
+    Write-Host "================================================================" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "These symbols are most likely to be corrupted when typing with" -ForegroundColor Gray
     Write-Host "a physical keyboard that doesn't match your OS language setting." -ForegroundColor Gray
@@ -626,7 +626,7 @@ function Show-ProblematicSymbols {
     foreach ($cat in $categories) {
         $catSymbols = $problematicSymbols | Where-Object { $_.Category -eq $cat }
         
-        Write-Host "$cat:" -ForegroundColor Cyan
+        Write-Host "${cat}:" -ForegroundColor Cyan
         foreach ($sym in $catSymbols | Sort-Object ALTCode) {
             Write-Host "  • '$($sym.Symbol)' (Alt+$($sym.ALTCode)) - $($sym.Description)" -ForegroundColor Green
         }
@@ -663,7 +663,7 @@ function Show-SymbolHelperGUI {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
     }
     catch {
-        Write-Host "✗ WPF is not available on this system" -ForegroundColor Red
+        Write-Host "[FAILED] WPF is not available on this system" -ForegroundColor Red
         Write-Host "  Please use Show-SymbolHelper instead" -ForegroundColor Yellow
         return
     }
@@ -723,7 +723,7 @@ function Show-SymbolHelperGUI {
             $symbol = $selectedText[0]
             
             [System.Windows.Forms.Clipboard]::SetText($symbol)
-            $statusText.Text = "✓ Copied: '$symbol' to clipboard"
+            $statusText.Text = "[OK] Copied: '$symbol' to clipboard"
             
             $window.Dispatcher.Invoke({
                 Start-Sleep -Milliseconds 2000
@@ -790,7 +790,7 @@ function Invoke-SymbolSearch {
     
     for ($i = 0; $i -lt $results.Count; $i++) {
         $sym = $results[$i]
-        $marker = if ($sym.Problematic) { "⚠ " } else { "  " }
+        $marker = if ($sym.Problematic) { "[WARNING] " } else { "  " }
         Write-Host ("{0}{1}. '{2}' (Alt+{3,-3}) - {4} [{5}]" -f $marker, $i + 1, $sym.Symbol, $sym.ALTCode, $sym.Description, $sym.Category) -ForegroundColor Green
     }
     
@@ -825,7 +825,7 @@ function Get-CommonSymbols {
     Write-Host ""
     
     foreach ($sym in $common) {
-        $marker = if ($sym.Problematic) { "⚠" } else { "✓" }
+        $marker = if ($sym.Problematic) { "[WARNING]" } else { "[OK]" }
         Write-Host "  $marker '$($sym.Symbol)' (Alt+$($sym.ALTCode)) - $($sym.Description)" -ForegroundColor Green
     }
 }
@@ -852,7 +852,7 @@ function Get-SymbolByALTCode {
     $symbol = $script:SymbolDatabase | Where-Object { $_.ALTCode -eq $ALTCode }
     
     if ($symbol) {
-        Write-Host "Symbol for Alt+$ALTCode: '$($symbol.Symbol)'" -ForegroundColor Green
+        Write-Host "Symbol for Alt+${ALTCode}: '$($symbol.Symbol)'" -ForegroundColor Green
         Write-Host "  Description: $($symbol.Description)" -ForegroundColor Gray
         Write-Host "  Category: $($symbol.Category)" -ForegroundColor Gray
         Write-Host "  Problematic: $(if ($symbol.Problematic) { 'Yes' } else { 'No' })" -ForegroundColor Gray
@@ -912,10 +912,10 @@ function Export-SymbolDatabase {
             $script:SymbolDatabase | ConvertTo-Json | Out-File -FilePath $FilePath -Encoding UTF8 -Force
         }
         
-        Write-Host "✓ Database exported to: $FilePath" -ForegroundColor Green
+            Write-Host "[OK] Database exported to: $FilePath" -ForegroundColor Green
     }
     catch {
-        Write-Host "✗ Failed to export database: $_" -ForegroundColor Red
+        Write-Host "[FAILED] Failed to export database: $_" -ForegroundColor Red
     }
 }
 

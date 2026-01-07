@@ -126,9 +126,10 @@ function Start-TUI {
         Write-Host "G) Complete System Repair" -ForegroundColor Yellow
         Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
         Write-Host "I) Boot Chain Analysis (View Startup/Boot Logs)" -ForegroundColor Cyan
-        Write-Host "J) Utilities Menu (Notepad, Registry, PowerShell, etc.)" -ForegroundColor White
+        Write-Host "J) Look Up Windows Error Code (Get troubleshooting help)" -ForegroundColor Yellow
+        Write-Host "K) Utilities Menu (Notepad, Registry, PowerShell, etc.)" -ForegroundColor White
         if ($envDisplay -eq "WinPE") {
-            Write-Host "K) Install Browser (Chrome/Firefox - WinPE only)" -ForegroundColor Cyan
+            Write-Host "K2) Install Browser (Chrome/Firefox - WinPE only)" -ForegroundColor Cyan
         }
         Write-Host "L) Port Missing Drivers (Extract & Port Drivers)" -ForegroundColor Green
         Write-Host "M) Generate SAVE_ME.txt (Recovery Commands FAQ)" -ForegroundColor Yellow
@@ -744,6 +745,37 @@ function Start-TUI {
                 continue
             }
             "J" {
+                Write-Host "`nWINDOWS ERROR CODE LOOKUP" -ForegroundColor Yellow
+                Write-Host "===============================================================" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Enter a Windows error code to get detailed troubleshooting information." -ForegroundColor White
+                Write-Host "Examples: 0xc000000e, 0x80070002, 0x0000007B" -ForegroundColor Gray
+                Write-Host ""
+                
+                $errorCode = Read-Host "Enter error code"
+                if ($errorCode) {
+                    $drive = Read-Host "Target drive (e.g., C) [default: C]"
+                    if (-not $drive) { $drive = "C" }
+                    $drive = $drive.TrimEnd(':').ToUpper()
+                    
+                    Write-Host ""
+                    Write-Host "Looking up error code: $errorCode" -ForegroundColor Gray
+                    Write-Host ""
+                    
+                    $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
+                    
+                    Write-Host $errorInfo.Report
+                    
+                    Write-Host ""
+                    Write-Host "Press any key to continue..." -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                }
+            }
+            "j" {
+                $c = 'J'
+                continue
+            }
+            "K" {
                 Write-Host "`nUTILITIES MENU" -ForegroundColor Cyan
                 Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
@@ -1114,6 +1146,121 @@ function Start-TUI {
             }
             's' {
                 $c = 'S'
+                continue
+            }
+            'T' {
+                Write-Host ''
+                Write-Host 'REPAIR TEMPLATES - ONE-CLICK FIXES' -ForegroundColor Magenta
+                Write-Host '===============================================================' -ForegroundColor Gray
+                Write-Host ''
+                
+                $templates = Get-RepairTemplates
+                
+                Write-Host 'Available Repair Templates:' -ForegroundColor Cyan
+                Write-Host ''
+                $num = 1
+                foreach ($template in $templates) {
+                    $riskColor = switch ($template.RiskLevel) {
+                        'Low' { 'Green' }
+                        'Medium' { 'Yellow' }
+                        'High' { 'Red' }
+                        default { 'White' }
+                    }
+                    Write-Host "$num) $($template.Name)" -ForegroundColor White
+                    Write-Host "   $($template.Description)" -ForegroundColor Gray
+                    Write-Host "   Time: $($template.EstimatedTime) | Risk: " -NoNewline
+                    Write-Host $template.RiskLevel -ForegroundColor $riskColor
+                    Write-Host ''
+                    $num++
+                }
+                Write-Host '0) Back to main menu' -ForegroundColor Yellow
+                Write-Host ''
+                
+                $templateChoice = Read-Host 'Select template (number)'
+                
+                if ($templateChoice -eq '0' -or [string]::IsNullOrWhiteSpace($templateChoice)) {
+                    continue
+                }
+                
+                $selectedTemplate = $null
+                if ([int]::TryParse($templateChoice, [ref]$null)) {
+                    $templateIndex = [int]$templateChoice - 1
+                    if ($templateIndex -ge 0 -and $templateIndex -lt $templates.Count) {
+                        $selectedTemplate = $templates[$templateIndex]
+                    }
+                }
+                
+                if (-not $selectedTemplate) {
+                    Write-Host 'Invalid template selection.' -ForegroundColor Red
+                    Write-Host ''
+                    Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                    continue
+                }
+                
+                $drive = Read-Host "Target Windows drive letter (e.g. C or press Enter for C)"
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = 'C'
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host ''
+                Write-Host "Selected Template: $($selectedTemplate.Name)" -ForegroundColor Cyan
+                Write-Host "Description: $($selectedTemplate.Description)" -ForegroundColor Gray
+                Write-Host "Estimated Time: $($selectedTemplate.EstimatedTime)" -ForegroundColor Gray
+                Write-Host "Risk Level: $($selectedTemplate.RiskLevel)" -ForegroundColor $(switch ($selectedTemplate.RiskLevel) { 'Low' { 'Green' } 'Medium' { 'Yellow' } 'High' { 'Red' } default { 'White' } })
+                Write-Host ''
+                Write-Host 'Steps to execute:' -ForegroundColor Yellow
+                foreach ($step in $selectedTemplate.Steps) {
+                    Write-Host "  • $step" -ForegroundColor Gray
+                }
+                Write-Host ''
+                Write-Host "Target Drive: $drive`:" -ForegroundColor Cyan
+                Write-Host ''
+                
+                $confirm = Read-Host 'Type YES to execute this template'
+                if ($confirm -ne 'YES') {
+                    Write-Host 'Template execution cancelled.' -ForegroundColor Yellow
+                    Write-Host ''
+                    Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                    continue
+                }
+                
+                Write-Host ''
+                Write-Host 'Executing template...' -ForegroundColor Cyan
+                Write-Host ''
+                
+                # Progress callback
+                $progressCallback = {
+                    param($message)
+                    Write-Host $message -ForegroundColor Gray
+                }
+                
+                $result = Start-RepairTemplate -TemplateId $selectedTemplate.Id -TargetDrive $drive -ProgressCallback $progressCallback
+                
+                Write-Host ''
+                Write-Host $result.Report
+                Write-Host ''
+                
+                if ($result.Success) {
+                    Write-Host '[SUCCESS] Template execution completed successfully!' -ForegroundColor Green
+                } else {
+                    Write-Host '[WARNING] Template execution completed with some issues.' -ForegroundColor Yellow
+                    if ($result.Errors.Count -gt 0) {
+                        Write-Host 'Errors:' -ForegroundColor Red
+                        foreach ($error in $result.Errors) {
+                            Write-Host "  • $error" -ForegroundColor Red
+                        }
+                    }
+                }
+                
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            't' {
+                $c = 'T'
                 continue
             }
             'Q' { 

@@ -1908,6 +1908,57 @@ $W.FindName("BtnAnalyzeEventLogs").Add_Click({
     }
 })
 
+$W.FindName("BtnLookupErrorCode").Add_Click({
+    $errorCode = $W.FindName("ErrorCodeInput").Text.Trim()
+    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+    $drive = "C"
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($errorCode) -or $errorCode -eq "0x") {
+        [System.Windows.MessageBox]::Show(
+            "Please enter an error code to look up.`n`nExamples:`n• 0xc000000e`n• 0x80070002`n• 0x0000007B",
+            "No Error Code Entered",
+            "OK",
+            "Warning"
+        )
+        return
+    }
+    
+    $W.FindName("LogAnalysisBox").Text = "Looking up error code: $errorCode`n`nPlease wait...`n"
+    
+    try {
+        $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
+        $W.FindName("LogAnalysisBox").Text = $errorInfo.Report
+    } catch {
+        $W.FindName("LogAnalysisBox").Text = "Error looking up error code: $_`n`nPlease verify the error code format and try again."
+    }
+})
+
+$W.FindName("BtnBootChainAnalysis").Add_Click({
+    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+    $drive = "C"
+    
+    if ($selectedDrive) {
+        if ($selectedDrive -match '^([A-Z]):') {
+            $drive = $matches[1]
+        }
+    }
+    
+    $W.FindName("LogAnalysisBox").Text = "Analyzing boot chain for drive $drive`:...`n`nThis will identify where Windows failed in the boot process...`n`nPlease wait...`n"
+    
+    try {
+        $chainAnalysis = Get-BootChainAnalysis -TargetDrive $drive
+        $W.FindName("LogAnalysisBox").Text = $chainAnalysis.Report
+    } catch {
+        $W.FindName("LogAnalysisBox").Text = "Error analyzing boot chain: $_"
+    }
+})
+
 $W.FindName("BtnFullBootDiagnosis").Add_Click({
     $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
     $drive = "C"

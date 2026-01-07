@@ -1069,6 +1069,840 @@ function Get-BSODExplanation {
     }
 }
 
+function Get-WindowsErrorCodeInfo {
+    <#
+    .SYNOPSIS
+    Comprehensive Windows error code lookup system with explanations, recommendations, and troubleshooting steps.
+    
+    .DESCRIPTION
+    Provides detailed information about Windows boot errors, installation errors, BSOD stop codes, and system error codes.
+    Returns explanations, root causes, troubleshooting steps, and repair recommendations for each error code.
+    
+    .PARAMETER ErrorCode
+    The error code to look up (e.g., "0xc000000e", "0x80070002", "0x0000007B")
+    
+    .PARAMETER TargetDrive
+    Optional target drive for generating drive-specific repair commands.
+    
+    .EXAMPLE
+    Get-WindowsErrorCodeInfo -ErrorCode "0xc000000e"
+    
+    .EXAMPLE
+    Get-WindowsErrorCodeInfo -ErrorCode "0x80070002" -TargetDrive "C"
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ErrorCode,
+        [string]$TargetDrive = "C"
+    )
+    
+    # Normalize error code format (handle with/without 0x prefix, case insensitive)
+    $ErrorCode = $ErrorCode.Trim()
+    if (-not $ErrorCode.StartsWith("0x") -and -not $ErrorCode.StartsWith("0X")) {
+        if ($ErrorCode -match "^[0-9A-Fa-f]+$") {
+            $ErrorCode = "0x$ErrorCode"
+        }
+    }
+    $ErrorCode = $ErrorCode.ToUpper()
+    
+    # Normalize drive letter
+    if ($TargetDrive -match '^([A-Z]):?$') {
+        $TargetDrive = $matches[1]
+    }
+    
+    $result = @{
+        ErrorCode = $ErrorCode
+        Type = "Unknown"
+        Name = ""
+        Description = ""
+        RootCause = ""
+        BootStage = "Unknown"
+        Severity = "Unknown"
+        Recommendations = @()
+        TroubleshootingSteps = @()
+        RepairCommands = @()
+        RelatedErrors = @()
+        Found = $false
+    }
+    
+    # Comprehensive error code database
+    $errorDatabase = @{
+        # Boot Errors (0xc0000000 - 0xc0000FFF)
+        "0xC000000E" = @{
+            Type = "Boot Error"
+            Name = "BOOT DEVICE INACCESSIBLE"
+            Description = "Windows cannot access the boot device. The system cannot find or access the hard disk that contains the Windows installation."
+            RootCause = "Missing or corrupted boot files, BCD corruption, missing storage drivers, or disk hardware failure."
+            BootStage = "Stage 2: Boot Manager / Stage 3: Boot Loader"
+            Severity = "Critical"
+            Recommendations = @(
+                "Run: bcdboot $TargetDrive`:\Windows",
+                "Run: bootrec /rebuildbcd",
+                "Run: bootrec /fixboot",
+                "Check for missing storage drivers (VMD/RAID/NVMe)",
+                "Verify disk is detected in BIOS/UEFI",
+                "Check disk health: chkdsk $TargetDrive`: /f /r"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into Windows Recovery Environment (WinRE)",
+                "2. Open Command Prompt (Shift+F10)",
+                "3. Run: diskpart -> list volume (identify Windows drive)",
+                "4. Run: bcdboot X:\Windows (where X is your Windows drive)",
+                "5. If that fails, run: bootrec /rebuildbcd",
+                "6. Check for missing storage controller drivers",
+                "7. Verify disk is not failing (check SMART status)"
+            )
+            RepairCommands = @(
+                "bcdboot $TargetDrive`:\Windows",
+                "bootrec /rebuildbcd",
+                "bootrec /fixboot",
+                "bootrec /fixmbr",
+                "chkdsk $TargetDrive`: /f /r"
+            )
+            RelatedErrors = @("0x0000007B", "0xC000000F", "0xC0000225")
+        }
+        "0xC000000F" = @{
+            Type = "Boot Error"
+            Name = "BOOT FILE NOT FOUND"
+            Description = "A required boot file is missing or corrupted. Windows cannot find a critical boot file needed to start."
+            RootCause = "Missing bootmgr, winload.exe, or other critical boot files. Often caused by disk corruption or accidental deletion."
+            BootStage = "Stage 2: Boot Manager / Stage 3: Boot Loader"
+            Severity = "Critical"
+            Recommendations = @(
+                "Run: bcdboot $TargetDrive`:\Windows",
+                "Run: bootrec /fixboot",
+                "Check for disk corruption: chkdsk $TargetDrive`: /f",
+                "Verify boot files exist in System32 folder",
+                "Consider in-place upgrade repair"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into WinRE",
+                "2. Verify Windows drive is accessible",
+                "3. Check if boot files exist: dir $TargetDrive`:\Windows\System32\winload.exe",
+                "4. Run: bcdboot $TargetDrive`:\Windows",
+                "5. If files are missing, run: DISM /Image:$TargetDrive`:\ /Cleanup-Image /RestoreHealth",
+                "6. Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows"
+            )
+            RepairCommands = @(
+                "bcdboot $TargetDrive`:\Windows",
+                "bootrec /fixboot",
+                "sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows",
+                "DISM /Image:$TargetDrive`:\ /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0xC000000E", "0xC0000225")
+        }
+        "0xC0000225" = @{
+            Type = "Boot Error"
+            Name = "BOOT CONFIGURATION DATA MISSING"
+            Description = "The Boot Configuration Data (BCD) store is missing or corrupted. Windows cannot read boot configuration."
+            RootCause = "BCD store corruption, missing EFI partition, or BCD file deletion."
+            BootStage = "Stage 2: Boot Manager"
+            Severity = "Critical"
+            Recommendations = @(
+                "Run: bootrec /rebuildbcd",
+                "Run: bcdboot $TargetDrive`:\Windows",
+                "Check EFI partition is accessible",
+                "Verify BCD file exists"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into WinRE",
+                "2. Run: bootrec /rebuildbcd",
+                "3. If that fails, manually rebuild BCD:",
+                "   - bcdedit /export C:\BCD_Backup",
+                "   - attrib C:\boot\bcd -h -r -s",
+                "   - del C:\boot\bcd",
+                "   - bootrec /rebuildbcd",
+                "4. Verify EFI partition is mounted and accessible"
+            )
+            RepairCommands = @(
+                "bootrec /rebuildbcd",
+                "bcdboot $TargetDrive`:\Windows",
+                "bcdedit /enum all"
+            )
+            RelatedErrors = @("0xC000000E", "0xC000000F")
+        }
+        "0xC0000098" = @{
+            Type = "Boot Error"
+            Name = "REGISTRY FILE FAILURE"
+            Description = "Windows cannot load a required registry file (SYSTEM, SOFTWARE, SAM, or SECURITY hive)."
+            RootCause = "Corrupted registry hive, disk corruption, or missing registry files."
+            BootStage = "Stage 4: Kernel Initialization / Stage 6: Session Manager"
+            Severity = "Critical"
+            Recommendations = @(
+                "Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows",
+                "Check for disk corruption: chkdsk $TargetDrive`: /f /r",
+                "Restore registry from backup if available",
+                "Consider in-place upgrade repair"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into WinRE",
+                "2. Check registry hives: dir $TargetDrive`:\Windows\System32\config",
+                "3. Look for .bak or .old registry files",
+                "4. If backups exist, restore them",
+                "5. Run: sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows",
+                "6. Run: DISM /Image:$TargetDrive`:\ /Cleanup-Image /RestoreHealth"
+            )
+            RepairCommands = @(
+                "sfc /scannow /offbootdir=$TargetDrive`:\ /offwindir=$TargetDrive`:\Windows",
+                "DISM /Image:$TargetDrive`:\ /Cleanup-Image /RestoreHealth",
+                "chkdsk $TargetDrive`: /f /r"
+            )
+            RelatedErrors = @("0xC000021A", "0x80070002")
+        }
+        "0xC000021A" = @{
+            Type = "Boot Error"
+            Name = "FATAL SYSTEM ERROR"
+            Description = "A fatal system error occurred. Windows Session Manager (smss.exe) or Windows Logon (winlogon.exe) terminated unexpectedly."
+            RootCause = "Corrupted system files, registry corruption, or driver conflict during logon."
+            BootStage = "Stage 6: Session Manager / Stage 7: Windows Logon"
+            Severity = "Critical"
+            Recommendations = @(
+                "Run: sfc /scannow",
+                "Check for corrupted system files",
+                "Boot into Safe Mode if possible",
+                "Check Event Viewer for specific errors",
+                "Consider in-place upgrade repair"
+            )
+            TroubleshootingSteps = @(
+                "1. Try booting into Safe Mode",
+                "2. If Safe Mode works, check for recently installed software/drivers",
+                "3. Run: sfc /scannow",
+                "4. Check Event Viewer for application errors",
+                "5. Run: DISM /Online /Cleanup-Image /RestoreHealth",
+                "6. If all else fails, consider in-place upgrade"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth",
+                "chkdsk C: /f /r"
+            )
+            RelatedErrors = @("0xC0000098", "0x000000F4")
+        }
+        
+        # Installation Errors (0x80070000 - 0x8007FFFF)
+        "0x80070002" = @{
+            Type = "Installation Error"
+            Name = "FILE NOT FOUND"
+            Description = "Windows Setup cannot find a required file. The installation source may be incomplete or corrupted."
+            RootCause = "Corrupted installation media, incomplete download, or missing installation files."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Verify installation media integrity",
+                "Re-download Windows installation media",
+                "Check installation source is accessible",
+                "Try different USB port or installation media",
+                "Run installation as administrator"
+            )
+            TroubleshootingSteps = @(
+                "1. Verify installation media is not corrupted",
+                "2. Re-create Windows installation USB using Media Creation Tool",
+                "3. Try different USB port (prefer USB 2.0)",
+                "4. Check if installation source folder is accessible",
+                "5. Disable antivirus temporarily during installation",
+                "6. Check disk space on target drive"
+            )
+            RepairCommands = @()
+            RelatedErrors = @("0x80070003", "0x80070017", "0x8007000D")
+        }
+        "0x80070003" = @{
+            Type = "Installation Error"
+            Name = "PATH NOT FOUND"
+            Description = "Windows Setup cannot access a required path. The installation path may be invalid or inaccessible."
+            RootCause = "Invalid installation path, permission issues, or inaccessible drive."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Verify installation path is valid",
+                "Check drive permissions",
+                "Run installation as administrator",
+                "Verify target drive is accessible"
+            )
+            TroubleshootingSteps = @(
+                "1. Verify target drive letter is correct",
+                "2. Check if drive is accessible: dir X:\ (where X is target drive)",
+                "3. Run installation as administrator",
+                "4. Check disk management for drive status",
+                "5. Verify drive is not encrypted or locked"
+            )
+            RepairCommands = @()
+            RelatedErrors = @("0x80070002", "0x80070005")
+        }
+        "0x80070005" = @{
+            Type = "Installation Error"
+            Name = "ACCESS DENIED"
+            Description = "Windows Setup does not have permission to access required files or folders."
+            RootCause = "Insufficient permissions, file locks, or security restrictions."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Run installation as administrator",
+                "Disable antivirus temporarily",
+                "Close all applications",
+                "Check for file locks",
+                "Verify user has administrator privileges"
+            )
+            TroubleshootingSteps = @(
+                "1. Right-click setup.exe and select 'Run as administrator'",
+                "2. Disable antivirus and firewall temporarily",
+                "3. Close all running applications",
+                "4. Check Task Manager for locked files",
+                "5. Verify user account has administrator rights"
+            )
+            RepairCommands = @()
+            RelatedErrors = @("0x80070003", "0x80070020")
+        }
+        "0x8007000D" = @{
+            Type = "Installation Error"
+            Name = "INVALID DATA"
+            Description = "Windows Setup encountered invalid or corrupted data. The installation media may be corrupted."
+            RootCause = "Corrupted installation files, incomplete download, or damaged installation media."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Re-download Windows installation media",
+                "Verify installation media integrity",
+                "Try different installation source",
+                "Check for disk errors on installation media"
+            )
+            TroubleshootingSteps = @(
+                "1. Re-create Windows installation USB",
+                "2. Verify ISO file integrity (checksum)",
+                "3. Try different USB drive",
+                "4. Use Media Creation Tool to create fresh installation media",
+                "5. Check installation media for physical damage"
+            )
+            RepairCommands = @()
+            RelatedErrors = @("0x80070002", "0x80070017")
+        }
+        "0x80070017" = @{
+            Type = "Installation Error"
+            Name = "CRC ERROR"
+            Description = "Cyclic Redundancy Check (CRC) error. Data read from installation media is corrupted."
+            RootCause = "Corrupted installation media, bad USB drive, or damaged installation files."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Re-create installation media",
+                "Try different USB drive",
+                "Verify installation source integrity",
+                "Check USB port and cable"
+            )
+            TroubleshootingSteps = @(
+                "1. Re-create Windows installation USB using Media Creation Tool",
+                "2. Try different USB drive (prefer USB 2.0)",
+                "3. Try different USB port",
+                "4. Verify ISO file checksum matches Microsoft's",
+                "5. Check USB drive for bad sectors"
+            )
+            RepairCommands = @()
+            RelatedErrors = @("0x8007000D", "0x80070002")
+        }
+        "0x80070070" = @{
+            Type = "Installation Error"
+            Name = "INSUFFICIENT DISK SPACE"
+            Description = "Not enough free disk space to complete Windows installation or update."
+            RootCause = "Insufficient free space on target drive. Windows needs significant free space for installation."
+            BootStage = "Installation Phase"
+            Severity = "Medium"
+            Recommendations = @(
+                "Free up disk space (at least 20GB recommended)",
+                "Delete temporary files",
+                "Move files to another drive",
+                "Uninstall unused programs",
+                "Run Disk Cleanup"
+            )
+            TroubleshootingSteps = @(
+                "1. Check available disk space: dir C:\",
+                "2. Run Disk Cleanup: cleanmgr",
+                "3. Delete temporary files: %TEMP%",
+                "4. Uninstall unused programs",
+                "5. Move large files to external drive",
+                "6. Consider upgrading to larger drive"
+            )
+            RepairCommands = @(
+                "cleanmgr /d C:",
+                "dism /online /cleanup-image /startcomponentcleanup /resetbase"
+            )
+            RelatedErrors = @()
+        }
+        "0x8007045D" = @{
+            Type = "Installation Error"
+            Name = "I/O ERROR"
+            Description = "Input/Output error during installation. Problem reading from or writing to disk."
+            RootCause = "Disk hardware failure, bad sectors, or disk controller issues."
+            BootStage = "Installation Phase"
+            Severity = "High"
+            Recommendations = @(
+                "Check disk health (SMART status)",
+                "Run: chkdsk /f /r",
+                "Check disk cables and connections",
+                "Test with different drive",
+                "Backup data immediately if disk is failing"
+            )
+            TroubleshootingSteps = @(
+                "1. Check disk health: wmic diskdrive get status",
+                "2. Run: chkdsk C: /f /r",
+                "3. Check SATA/USB cables",
+                "4. Test disk with manufacturer's diagnostic tool",
+                "5. If disk is failing, backup data and replace drive"
+            )
+            RepairCommands = @(
+                "chkdsk C: /f /r",
+                "sfc /scannow"
+            )
+            RelatedErrors = @("0x80070017", "0x00000024")
+        }
+        "0x80070057" = @{
+            Type = "Installation Error"
+            Name = "INVALID PARAMETER"
+            Description = "Windows Setup received an invalid parameter. Installation options may be incorrect."
+            RootCause = "Invalid installation parameters, corrupted installation configuration, or incompatible options."
+            BootStage = "Installation Phase"
+            Severity = "Medium"
+            Recommendations = @(
+                "Verify installation options are correct",
+                "Use default installation settings",
+                "Re-run installation with standard options",
+                "Check for incompatible hardware"
+            )
+            TroubleshootingSteps = @(
+                "1. Use default installation options",
+                "2. Do not skip compatibility checks",
+                "3. Verify hardware meets Windows requirements",
+                "4. Check installation log for specific parameter error",
+                "5. Try clean installation instead of upgrade"
+            )
+            RepairCommands = @()
+            RelatedErrors = @()
+        }
+        
+        # BSOD Stop Codes (0x00000000 - 0x0000FFFF)
+        "0x0000007B" = @{
+            Type = "BSOD Stop Code"
+            Name = "INACCESSIBLE_BOOT_DEVICE"
+            Description = "Windows cannot access the boot device during kernel initialization. System cannot find or access the hard disk."
+            RootCause = "Missing storage drivers (VMD/RAID/NVMe), disk corruption, BCD issues, or hardware failure."
+            BootStage = "Stage 4: Kernel Initialization / Stage 5: Driver Loading"
+            Severity = "Critical"
+            Recommendations = @(
+                "Inject missing storage drivers using DISM",
+                "Check for VMD/RAID/NVMe controller drivers",
+                "Run: bcdboot $TargetDrive`:\Windows",
+                "Verify disk is detected in BIOS/UEFI",
+                "Check disk health and cables"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into WinRE",
+                "2. Identify missing storage drivers",
+                "3. Harvest drivers from working Windows installation",
+                "4. Inject drivers: DISM /Image:$TargetDrive`:\ /Add-Driver /Driver:X:\Drivers /Recurse",
+                "5. Run: bcdboot $TargetDrive`:\Windows",
+                "6. Check BIOS/UEFI for disk detection",
+                "7. Verify SATA/AHCI settings in BIOS"
+            )
+            RepairCommands = @(
+                "DISM /Image:$TargetDrive`:\ /Add-Driver /Driver:X:\Drivers /Recurse",
+                "bcdboot $TargetDrive`:\Windows",
+                "chkdsk $TargetDrive`: /f /r"
+            )
+            RelatedErrors = @("0xC000000E", "0xC000000F")
+        }
+        "0x0000007E" = @{
+            Type = "BSOD Stop Code"
+            Name = "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED"
+            Description = "A system thread generated an exception that the error handler didn't catch. Usually driver-related."
+            RootCause = "Faulty or incompatible driver, corrupted driver file, or hardware incompatibility."
+            BootStage = "Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Boot into Safe Mode",
+                "Update or rollback recently installed drivers",
+                "Check Event Viewer for specific driver error",
+                "Run: sfc /scannow",
+                "Uninstall problematic drivers"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into Safe Mode",
+                "2. Check Event Viewer for driver errors",
+                "3. Identify recently installed drivers",
+                "4. Rollback or update problematic drivers",
+                "5. Run: sfc /scannow",
+                "6. Check Windows Update for driver updates"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x0000001E", "0x000000D1")
+        }
+        "0x00000050" = @{
+            Type = "BSOD Stop Code"
+            Name = "PAGE_FAULT_IN_NONPAGED_AREA"
+            Description = "Invalid memory access in non-paged area. System tried to access invalid memory."
+            RootCause = "Bad RAM, corrupted page file, faulty driver, or memory corruption."
+            BootStage = "Stage 4: Kernel Initialization / Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Run Windows Memory Diagnostic",
+                "Check RAM for errors",
+                "Remove or replace faulty RAM modules",
+                "Check page file settings",
+                "Update drivers, especially storage"
+            )
+            TroubleshootingSteps = @(
+                "1. Run: mdsched.exe (Windows Memory Diagnostic)",
+                "2. Test RAM with MemTest86",
+                "3. Remove RAM modules one at a time to isolate bad module",
+                "4. Check page file: System Properties -> Advanced -> Performance Settings",
+                "5. Update all drivers, especially storage controllers"
+            )
+            RepairCommands = @(
+                "mdsched.exe",
+                "sfc /scannow"
+            )
+            RelatedErrors = @("0x0000003B", "0x0000001E")
+        }
+        "0x0000001E" = @{
+            Type = "BSOD Stop Code"
+            Name = "KMODE_EXCEPTION_NOT_HANDLED"
+            Description = "A kernel-mode program generated an exception that wasn't handled. Typically a driver problem."
+            RootCause = "Faulty driver, incompatible driver, or driver conflict."
+            BootStage = "Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Boot into Safe Mode",
+                "Check recently installed drivers",
+                "Update or rollback drivers",
+                "Check for driver conflicts",
+                "Run: sfc /scannow"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into Safe Mode",
+                "2. Check Event Viewer for driver errors",
+                "3. Identify recently installed/updated drivers",
+                "4. Rollback drivers via Device Manager",
+                "5. Update drivers from manufacturer's website",
+                "6. Check for driver conflicts in Device Manager"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x0000007E", "0x000000D1")
+        }
+        "0x0000003B" = @{
+            Type = "BSOD Stop Code"
+            Name = "SYSTEM_SERVICE_EXCEPTION"
+            Description = "An exception happened while executing a system service routine. Often driver or hardware related."
+            RootCause = "Faulty driver, hardware incompatibility, or corrupted system files."
+            BootStage = "Stage 5: Driver Loading / Stage 6: Session Manager"
+            Severity = "High"
+            Recommendations = @(
+                "Update drivers, especially graphics and storage",
+                "Run: sfc /scannow",
+                "Check for hardware issues",
+                "Update Windows",
+                "Check Event Viewer for specific errors"
+            )
+            TroubleshootingSteps = @(
+                "1. Update graphics drivers",
+                "2. Update storage controller drivers",
+                "3. Run: sfc /scannow",
+                "4. Check Event Viewer for specific service errors",
+                "5. Update Windows to latest version",
+                "6. Check for hardware compatibility issues"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x00000050", "0x0000001E")
+        }
+        "0x000000D1" = @{
+            Type = "BSOD Stop Code"
+            Name = "DRIVER_IRQL_NOT_LESS_OR_EQUAL"
+            Description = "A driver tried to access an improper memory address at an invalid IRQL. Usually a buggy driver."
+            RootCause = "Faulty driver, especially graphics drivers, or driver accessing invalid memory."
+            BootStage = "Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Update graphics drivers",
+                "Update all drivers",
+                "Rollback recently updated drivers",
+                "Check for driver conflicts",
+                "Run: sfc /scannow"
+            )
+            TroubleshootingSteps = @(
+                "1. Update graphics drivers from manufacturer's website",
+                "2. Check Event Viewer for specific driver name",
+                "3. Rollback drivers via Device Manager",
+                "4. Update all drivers, especially GPU and chipset",
+                "5. Check for driver conflicts"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x0000001E", "0x0000007E")
+        }
+        "0x000000F4" = @{
+            Type = "BSOD Stop Code"
+            Name = "CRITICAL_OBJECT_TERMINATION"
+            Description = "A critical system process terminated unexpectedly. Could indicate hardware failure or corrupted system files."
+            RootCause = "Hardware failure (especially disk or RAM), corrupted system files, or critical process crash."
+            BootStage = "Stage 6: Session Manager / Stage 7: Windows Logon"
+            Severity = "Critical"
+            Recommendations = @(
+                "Check disk health (SMART status)",
+                "Run: chkdsk /f /r",
+                "Check RAM for errors",
+                "Run: sfc /scannow",
+                "Check Event Viewer for specific process"
+            )
+            TroubleshootingSteps = @(
+                "1. Check disk health: wmic diskdrive get status",
+                "2. Run: chkdsk C: /f /r",
+                "3. Run Windows Memory Diagnostic",
+                "4. Check Event Viewer for specific process that terminated",
+                "5. Run: sfc /scannow",
+                "6. Check for hardware failures"
+            )
+            RepairCommands = @(
+                "chkdsk C: /f /r",
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0xC000021A", "0x00000024")
+        }
+        "0x00000024" = @{
+            Type = "BSOD Stop Code"
+            Name = "NTFS_FILE_SYSTEM"
+            Description = "Problem with NTFS file system. File system corruption or bad sectors on disk."
+            RootCause = "Disk corruption, bad sectors, or file system errors."
+            BootStage = "Stage 4: Kernel Initialization / Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Run: chkdsk /f /r",
+                "Check disk health",
+                "Backup data if disk is failing",
+                "Check for bad sectors",
+                "Run: sfc /scannow"
+            )
+            TroubleshootingSteps = @(
+                "1. Run: chkdsk C: /f /r (may take hours)",
+                "2. Check disk health: wmic diskdrive get status",
+                "3. Check SMART status of disk",
+                "4. Backup important data immediately",
+                "5. If disk is failing, replace it",
+                "6. Run: sfc /scannow after chkdsk completes"
+            )
+            RepairCommands = @(
+                "chkdsk C: /f /r",
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x000000F4", "0x8007045D")
+        }
+        "0x000000C2" = @{
+            Type = "BSOD Stop Code"
+            Name = "BAD_POOL_CALLER"
+            Description = "A kernel-mode process attempted an invalid memory operation. Usually driver-related."
+            RootCause = "Faulty driver, memory corruption, or driver accessing invalid memory pool."
+            BootStage = "Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Update drivers",
+                "Check for driver conflicts",
+                "Run: sfc /scannow",
+                "Check RAM for errors",
+                "Boot into Safe Mode"
+            )
+            TroubleshootingSteps = @(
+                "1. Boot into Safe Mode",
+                "2. Check Event Viewer for driver errors",
+                "3. Update all drivers",
+                "4. Check for driver conflicts",
+                "5. Run Windows Memory Diagnostic",
+                "6. Run: sfc /scannow"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x0000001E", "0x000000D1")
+        }
+        "0x000000EA" = @{
+            Type = "BSOD Stop Code"
+            Name = "THREAD_STUCK_IN_DEVICE_DRIVER"
+            Description = "A device driver is stuck in an infinite loop. Graphics driver is common culprit."
+            RootCause = "Faulty graphics driver, driver timeout, or hardware incompatibility."
+            BootStage = "Stage 5: Driver Loading"
+            Severity = "High"
+            Recommendations = @(
+                "Update graphics drivers",
+                "Rollback graphics drivers",
+                "Check for graphics driver conflicts",
+                "Update chipset drivers",
+                "Check graphics card hardware"
+            )
+            TroubleshootingSteps = @(
+                "1. Update graphics drivers from manufacturer's website",
+                "2. Rollback to previous graphics driver version",
+                "3. Check for graphics driver conflicts",
+                "4. Update chipset drivers",
+                "5. Test graphics card in another system",
+                "6. Check graphics card temperature and power"
+            )
+            RepairCommands = @(
+                "sfc /scannow",
+                "DISM /Online /Cleanup-Image /RestoreHealth"
+            )
+            RelatedErrors = @("0x000000D1", "0x0000001E")
+        }
+    }
+    
+    # Look up error code
+    if ($errorDatabase.ContainsKey($ErrorCode)) {
+        $errorInfo = $errorDatabase[$ErrorCode]
+        $result.Found = $true
+        $result.Type = $errorInfo.Type
+        $result.Name = $errorInfo.Name
+        $result.Description = $errorInfo.Description
+        $result.RootCause = $errorInfo.RootCause
+        $result.BootStage = $errorInfo.BootStage
+        $result.Severity = $errorInfo.Severity
+        $result.Recommendations = $errorInfo.Recommendations
+        $result.TroubleshootingSteps = $errorInfo.TroubleshootingSteps
+        $result.RepairCommands = $errorInfo.RepairCommands
+        $result.RelatedErrors = $errorInfo.RelatedErrors
+    } else {
+        # Try to match partial codes or provide generic guidance
+        if ($ErrorCode -match "^0xC") {
+            $result.Type = "Boot Error (Likely)"
+            $result.Description = "This appears to be a Windows boot error code. Boot errors typically indicate problems with boot files, BCD, or boot device access."
+            $result.Recommendations = @(
+                "Run: bcdboot $TargetDrive`:\Windows",
+                "Run: bootrec /rebuildbcd",
+                "Check for missing storage drivers",
+                "Verify boot files are not corrupted"
+            )
+        } elseif ($ErrorCode -match "^0x8") {
+            $result.Type = "Installation/System Error (Likely)"
+            $result.Description = "This appears to be a Windows installation or system error code. Installation errors typically indicate problems with installation files, permissions, or disk space."
+            $result.Recommendations = @(
+                "Verify installation media integrity",
+                "Check disk space",
+                "Run installation as administrator",
+                "Check for file permission issues"
+            )
+        } elseif ($ErrorCode -match "^0x0{6}[0-9A-F]{6}$") {
+            $result.Type = "BSOD Stop Code (Likely)"
+            $result.Description = "This appears to be a Blue Screen of Death (BSOD) stop code. BSOD errors typically indicate driver, hardware, or system file issues."
+            $result.Recommendations = @(
+                "Boot into Safe Mode",
+                "Update drivers, especially graphics and storage",
+                "Run: sfc /scannow",
+                "Check for hardware failures",
+                "Check Event Viewer for specific errors"
+            )
+        } else {
+            $result.Description = "Unknown error code format. Please verify the error code and try again."
+        }
+    }
+    
+    # Generate formatted report
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("WINDOWS ERROR CODE LOOKUP") | Out-Null
+    $report.AppendLine("Error Code: $ErrorCode") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    if ($result.Found) {
+        $report.AppendLine("ERROR INFORMATION:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("Type: $($result.Type)") | Out-Null
+        $report.AppendLine("Name: $($result.Name)") | Out-Null
+        $report.AppendLine("Severity: $($result.Severity)") | Out-Null
+        $report.AppendLine("Boot Stage: $($result.BootStage)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("DESCRIPTION:") | Out-Null
+        $report.AppendLine($result.Description) | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("ROOT CAUSE:") | Out-Null
+        $report.AppendLine($result.RootCause) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($result.Recommendations.Count -gt 0) {
+            $report.AppendLine("RECOMMENDATIONS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($rec in $result.Recommendations) {
+                $report.AppendLine("  • $rec") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.TroubleshootingSteps.Count -gt 0) {
+            $report.AppendLine("TROUBLESHOOTING STEPS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($step in $result.TroubleshootingSteps) {
+                $report.AppendLine($step) | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.RepairCommands.Count -gt 0) {
+            $report.AppendLine("REPAIR COMMANDS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($cmd in $result.RepairCommands) {
+                $report.AppendLine("  $cmd") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        if ($result.RelatedErrors.Count -gt 0) {
+            $report.AppendLine("RELATED ERROR CODES:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            $report.AppendLine("  $($result.RelatedErrors -join ', ')") | Out-Null
+            $report.AppendLine("") | Out-Null
+            $report.AppendLine("  (You can look up these codes using: Get-WindowsErrorCodeInfo -ErrorCode 'CODE')") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+    } else {
+        $report.AppendLine("ERROR CODE NOT FOUND IN DATABASE") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("Type: $($result.Type)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine($result.Description) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($result.Recommendations.Count -gt 0) {
+            $report.AppendLine("GENERAL RECOMMENDATIONS:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            foreach ($rec in $result.Recommendations) {
+                $report.AppendLine("  • $rec") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        }
+        
+        $report.AppendLine("SEARCH FOR HELP:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("1. Search online: 'Windows error $ErrorCode'") | Out-Null
+        $report.AppendLine("2. Check Microsoft Support: support.microsoft.com") | Out-Null
+        $report.AppendLine("3. Use ChatGPT: 'Windows error $ErrorCode troubleshooting'") | Out-Null
+        $report.AppendLine("4. Check Windows Event Viewer for detailed error information") | Out-Null
+        $report.AppendLine("") | Out-Null
+    }
+    
+    $report.AppendLine($separator) | Out-Null
+    $result.Report = $report.ToString()
+    
+    return $result
+}
+
 function Get-HardwareSupportInfo {
     $info = @{
         Motherboard = ""
@@ -7615,22 +8449,72 @@ function Get-BootChainAnalysis {
         }
     }
     
-    # Build report
+    # Determine "where they made it" - find the last passed stage
+    $lastPassedStage = -1
+    $firstFailedStage = -1
+    for ($i = 0; $i -lt $bootStages.Count; $i++) {
+        if ($bootStages[$i].Status -eq "Passed") {
+            $lastPassedStage = $i
+        } elseif ($bootStages[$i].Status -eq "Failed" -and $firstFailedStage -eq -1) {
+            $firstFailedStage = $i
+        }
+    }
+    
+    # Build report with visual progress indicator
     $report.AppendLine("BOOT CHAIN STAGE ANALYSIS:") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Show progress indicator
+    if ($lastPassedStage -ge 0) {
+        $progressPercent = [math]::Round((($lastPassedStage + 1) / $bootStages.Count) * 100)
+        $report.AppendLine("BOOT PROGRESS: $progressPercent% Complete") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        # Visual progress bar
+        $progressBar = ""
+        $filled = [math]::Floor(($lastPassedStage + 1) / $bootStages.Count * 40)
+        for ($i = 0; $i -lt 40; $i++) {
+            if ($i -lt $filled) {
+                $progressBar += "="
+            } else {
+                $progressBar += "-"
+            }
+        }
+        $report.AppendLine("[$progressBar]") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($lastPassedStage -lt $bootStages.Count - 1) {
+            $report.AppendLine("WHERE YOU MADE IT:") | Out-Null
+            $report.AppendLine("-" * 80) | Out-Null
+            $report.AppendLine("SUCCESS: Windows successfully completed: $($bootStages[$lastPassedStage].Name)") | Out-Null
+            if ($firstFailedStage -ge 0) {
+                $report.AppendLine("FAILURE: Windows failed at: $($bootStages[$firstFailedStage].Name)") | Out-Null
+            }
+            $report.AppendLine("") | Out-Null
+        } else {
+            $report.AppendLine("SUCCESS: All boot stages completed successfully!") | Out-Null
+            $report.AppendLine("") | Out-Null
+        }
+    }
+    
+    $report.AppendLine("DETAILED STAGE STATUS:") | Out-Null
+    $report.AppendLine("-" * 80) | Out-Null
+    $report.AppendLine("") | Out-Null
     
     foreach ($stage in $bootStages) {
-        $statusColor = switch ($stage.Status) {
+        $statusIcon = switch ($stage.Status) {
             "Passed" { "[OK]" }
             "Failed" { "[FAIL]" }
             default { "[?]" }
         }
-        $report.AppendLine("$statusColor $($stage.Name)") | Out-Null
+        $report.AppendLine("$statusIcon $($stage.Name)") | Out-Null
         $report.AppendLine("    $($stage.Details)") | Out-Null
+        $report.AppendLine("") | Out-Null
     }
     
-    $report.AppendLine("") | Out-Null
     $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
     
     if ($result.FailureStage -ne "Unknown") {
         $report.AppendLine("FAILURE DETECTED") | Out-Null
@@ -7652,6 +8536,47 @@ function Get-BootChainAnalysis {
         foreach ($rec in $result.Recommendations) {
             $report.AppendLine("  • $rec") | Out-Null
         }
+        $report.AppendLine("") | Out-Null
+        
+        # Suggest looking up common error codes
+        $report.AppendLine("COMMON ERROR CODES FOR THIS FAILURE STAGE:") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        switch ($result.FailureStage) {
+            "Stage 1: BIOS/UEFI" {
+                $report.AppendLine("  • 0xC000000E - Boot device inaccessible") | Out-Null
+                $report.AppendLine("  • 0xC000000F - Boot file not found") | Out-Null
+            }
+            "Stage 2: Boot Manager" {
+                $report.AppendLine("  • 0xC000000E - Boot device inaccessible") | Out-Null
+                $report.AppendLine("  • 0xC0000225 - BCD missing or corrupted") | Out-Null
+                $report.AppendLine("  • 0xC000000F - Boot file not found") | Out-Null
+            }
+            "Stage 3: Boot Loader" {
+                $report.AppendLine("  • 0xC000000F - Boot file not found") | Out-Null
+                $report.AppendLine("  • 0xC000000E - Boot device inaccessible") | Out-Null
+            }
+            "Stage 4: Kernel" {
+                $report.AppendLine("  • 0x0000007B - Inaccessible boot device (BSOD)") | Out-Null
+                $report.AppendLine("  • 0x00000050 - Page fault in nonpaged area (BSOD)") | Out-Null
+            }
+            "Stage 5: Driver Loading" {
+                $report.AppendLine("  • 0x0000007B - Inaccessible boot device (BSOD)") | Out-Null
+                $report.AppendLine("  • 0x0000007E - System thread exception (BSOD)") | Out-Null
+                $report.AppendLine("  • 0x0000001E - KMODE exception (BSOD)") | Out-Null
+                $report.AppendLine("  • 0x000000D1 - Driver IRQL not less or equal (BSOD)") | Out-Null
+            }
+            "Stage 6: Session Manager" {
+                $report.AppendLine("  • 0xC0000098 - Registry file failure") | Out-Null
+                $report.AppendLine("  • 0xC000021A - Fatal system error") | Out-Null
+            }
+            "Stage 7: Windows Logon" {
+                $report.AppendLine("  • 0xC000021A - Fatal system error") | Out-Null
+                $report.AppendLine("  • 0x000000F4 - Critical object termination (BSOD)") | Out-Null
+            }
+        }
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("  Use menu option 'J' to look up any error code for detailed troubleshooting.") | Out-Null
+        $report.AppendLine("") | Out-Null
     } else {
         $report.AppendLine("NO FAILURE DETECTED") | Out-Null
         $report.AppendLine("-" * 80) | Out-Null
@@ -7660,6 +8585,7 @@ function Get-BootChainAnalysis {
         $report.AppendLine("  • Event logs for application/service errors") | Out-Null
         $report.AppendLine("  • System file integrity (SFC/DISM)") | Out-Null
         $report.AppendLine("  • Disk health (chkdsk)") | Out-Null
+        $report.AppendLine("  • Look up specific error codes using menu option 'J'") | Out-Null
     }
     
     $result.BootStages = $bootStages
@@ -9586,6 +10512,38 @@ function Get-RepairTemplates {
             Description = "Fix boot issues and corrupted system files"
             EstimatedTime = "30-60 minutes"
             Steps = @("BootRepair", "SystemFiles")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "InaccessibleBootDevice"
+            Name = "Inaccessible Boot Device (0x7B)"
+            Description = "Fix 0x7B BSOD and inaccessible boot device errors (missing storage drivers)"
+            EstimatedTime = "20-40 minutes"
+            Steps = @("DriverPorting", "BootRepair", "SystemFiles")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "BlueScreenRecovery"
+            Name = "Blue Screen Recovery"
+            Description = "Comprehensive fix for BSOD errors and system crashes"
+            EstimatedTime = "30-60 minutes"
+            Steps = @("BootChainAnalysis", "SystemFiles", "BootRepair", "RepairInstallReadiness")
+            RiskLevel = "Medium"
+        },
+        @{
+            Id = "BCDCorruption"
+            Name = "BCD Corruption Fix"
+            Description = "Fix Boot Configuration Data corruption and boot manager issues"
+            EstimatedTime = "10-20 minutes"
+            Steps = @("BootRepair", "BootFiles")
+            RiskLevel = "Low"
+        },
+        @{
+            Id = "PreventReinstall"
+            Name = "Prevent Reinstall (Last Resort)"
+            Description = "Comprehensive repair to avoid Windows reinstall - tries all repair methods"
+            EstimatedTime = "60-120 minutes"
+            Steps = @("CompleteSystemRepair", "BootChainAnalysis", "RepairInstallReadiness", "SystemFiles")
             RiskLevel = "Medium"
         }
     )

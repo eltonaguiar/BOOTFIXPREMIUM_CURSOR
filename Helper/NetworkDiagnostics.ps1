@@ -203,7 +203,7 @@ function Test-InternetConnectivity {
         
         if ($adapters.Count -eq 0) {
             $result.FailurePoints += "No connected network adapters detected"
-            if ($Verbose) { Write-Host "    [✗] No connected adapters found" -ForegroundColor Red }
+            if ($Verbose) { Write-Host "    [FAILED] No connected adapters found" -ForegroundColor Red }
             return $result
         }
         
@@ -211,15 +211,15 @@ function Test-InternetConnectivity {
         if ($dhcpConfigs.Count -gt 0) {
             $result.DHCPConfigured = $true
             if ($Verbose) { 
-                Write-Host "    [✓] DHCP configured on $($dhcpConfigs.Count) adapter(s)" -ForegroundColor Green 
+                Write-Host "    [OK] DHCP configured on $($dhcpConfigs.Count) adapter(s)" -ForegroundColor Green 
             }
         } else {
             $result.FailurePoints += "DHCP not enabled on any connected adapter"
-            if ($Verbose) { Write-Host "    [✗] DHCP not configured" -ForegroundColor Red }
+            if ($Verbose) { Write-Host "    [FAILED] DHCP not configured" -ForegroundColor Red }
         }
     } catch {
         $result.FailurePoints += "Error checking DHCP: $_"
-        if ($Verbose) { Write-Host "    [✗] Error: $_" -ForegroundColor Red }
+        if ($Verbose) { Write-Host "    [FAILED] Error: $_" -ForegroundColor Red }
     }
     
     # Step 2: Check DNS Configuration
@@ -232,15 +232,15 @@ function Test-InternetConnectivity {
         if ($dnsServers) {
             $result.DNSResolving = $true
             if ($Verbose) { 
-                Write-Host "    [✓] DNS servers configured: $($dnsServers.ServerAddresses -join ', ')" -ForegroundColor Green 
+                Write-Host "    [OK] DNS servers configured: $($dnsServers.ServerAddresses -join ', ')" -ForegroundColor Green 
             }
         } else {
             $result.FailurePoints += "No DNS servers configured"
-            if ($Verbose) { Write-Host "    [✗] No DNS servers found" -ForegroundColor Red }
+            if ($Verbose) { Write-Host "    [FAILED] No DNS servers found" -ForegroundColor Red }
         }
     } catch {
         $result.FailurePoints += "Error checking DNS: $_"
-        if ($Verbose) { Write-Host "    [✗] Error: $_" -ForegroundColor Red }
+        if ($Verbose) { Write-Host "    [FAILED] Error: $_" -ForegroundColor Red }
     }
     
     # Step 3: Test Ping to Google DNS (8.8.8.8)
@@ -250,15 +250,15 @@ function Test-InternetConnectivity {
         if ($pingResult) {
             $result.CanPingGoogle = $true
             if ($Verbose) { 
-                Write-Host "    [✓] Successfully pinged 8.8.8.8 (Response time: $($pingResult.ResponseTime)ms)" -ForegroundColor Green 
+                Write-Host "    [OK] Successfully pinged 8.8.8.8 (Response time: $($pingResult.ResponseTime)ms)" -ForegroundColor Green 
             }
         } else {
             $result.FailurePoints += "Cannot ping 8.8.8.8 - No response or timeout"
-            if ($Verbose) { Write-Host "    [✗] No response from 8.8.8.8" -ForegroundColor Red }
+            if ($Verbose) { Write-Host "    [FAILED] No response from 8.8.8.8" -ForegroundColor Red }
         }
     } catch {
         $result.FailurePoints += "Error pinging 8.8.8.8: $_"
-        if ($Verbose) { Write-Host "    [✗] Error: $_" -ForegroundColor Red }
+        if ($Verbose) { Write-Host "    [FAILED] Error: $_" -ForegroundColor Red }
     }
     
     # Step 4: Test DNS Resolution and Connectivity to google.com
@@ -267,7 +267,7 @@ function Test-InternetConnectivity {
         $dnsResolve = Resolve-DnsName -Name "google.com" -ErrorAction SilentlyContinue
         if ($dnsResolve) {
             if ($Verbose) { 
-                Write-Host "    [✓] DNS resolution successful (IP: $($dnsResolve.IPAddress | Select-Object -First 1))" -ForegroundColor Green 
+                Write-Host "    [OK] DNS resolution successful (IP: $($dnsResolve.IPAddress | Select-Object -First 1))" -ForegroundColor Green 
             }
             
             # Step 5: Ping google.com
@@ -277,19 +277,19 @@ function Test-InternetConnectivity {
                 $result.InternetReachable = $true
                 $result.CanResolveGoogle = $true
                 if ($Verbose) { 
-                    Write-Host "    [✓] Successfully reached google.com (Response time: $($pingGoogle.ResponseTime)ms)" -ForegroundColor Green 
+                    Write-Host "    [OK] Successfully reached google.com (Response time: $($pingGoogle.ResponseTime)ms)" -ForegroundColor Green 
                 }
             } else {
                 $result.FailurePoints += "DNS resolved but cannot ping google.com"
-                if ($Verbose) { Write-Host "    [✗] Cannot reach google.com despite DNS resolution" -ForegroundColor Red }
+                if ($Verbose) { Write-Host "    [FAILED] Cannot reach google.com despite DNS resolution" -ForegroundColor Red }
             }
         } else {
             $result.FailurePoints += "DNS resolution failed for google.com"
-            if ($Verbose) { Write-Host "    [✗] DNS resolution failed" -ForegroundColor Red }
+            if ($Verbose) { Write-Host "    [FAILED] DNS resolution failed" -ForegroundColor Red }
         }
     } catch {
         $result.FailurePoints += "Error during DNS resolution test: $_"
-        if ($Verbose) { Write-Host "    [✗] Error: $_" -ForegroundColor Red }
+        if ($Verbose) { Write-Host "    [FAILED] Error: $_" -ForegroundColor Red }
     }
     
     # Determine overall success
@@ -618,7 +618,7 @@ function Export-NetworkDrivers {
         $result.Success = $result.DriversCopied -gt 0
         
         if ($result.Success) {
-            Write-Host "[✓] Successfully exported $($result.DriversCopied) driver(s) to: $OutputPath" -ForegroundColor Green
+            Write-Host "[OK] Successfully exported $($result.DriversCopied) driver(s) to: $OutputPath" -ForegroundColor Green
         }
         
     } catch {
@@ -702,10 +702,10 @@ function Add-DriversToWinPE {
         # Check for success
         if ($LASTEXITCODE -eq 0) {
             $result.Success = $true
-            Write-Host "[✓] Drivers successfully injected" -ForegroundColor Green
+            Write-Host "[OK] Drivers successfully injected" -ForegroundColor Green
         } else {
             $result.Errors += "DISM returned exit code: $LASTEXITCODE"
-            Write-Host "[✗] Driver injection failed (Exit code: $LASTEXITCODE)" -ForegroundColor Red
+            Write-Host "[FAILED] Driver injection failed (Exit code: $LASTEXITCODE)" -ForegroundColor Red
         }
         
     } catch {
@@ -760,7 +760,7 @@ function Enable-NetworkAdapter {
         if ($adapter -and $adapter.Enabled) {
             $result.Success = $true
             $result.Message = "Network adapter '$AdapterName' successfully enabled"
-            Write-Host "[✓] $($result.Message)" -ForegroundColor Green
+            Write-Host "[OK] $($result.Message)" -ForegroundColor Green
         } else {
             $result.Message = "Adapter enable command executed but status unclear"
             Write-Host "[!] $($result.Message)" -ForegroundColor Yellow
@@ -812,7 +812,7 @@ function Disable-NetworkAdapter {
         if ($adapter -and -not $adapter.Enabled) {
             $result.Success = $true
             $result.Message = "Network adapter '$AdapterName' successfully disabled"
-            Write-Host "[✓] $($result.Message)" -ForegroundColor Green
+            Write-Host "[OK] $($result.Message)" -ForegroundColor Green
         } else {
             $result.Message = "Adapter disable command executed but status unclear"
             Write-Host "[!] $($result.Message)" -ForegroundColor Yellow
@@ -870,31 +870,31 @@ function Invoke-NetworkDiagnostics {
     }
     
     Write-Host "`n" -ForegroundColor Cyan
-    Write-Host "╔════════════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "║                      NETWORK DIAGNOSTICS & TROUBLESHOOTING                      ║" -ForegroundColor Cyan
-    Write-Host "║                          MiracleBoot Network Module v1.0                        ║" -ForegroundColor Cyan
-    Write-Host "╚════════════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "============================================================================================" -ForegroundColor Cyan
+    Write-Host "                      NETWORK DIAGNOSTICS & TROUBLESHOOTING" -ForegroundColor Cyan
+    Write-Host "                          MiracleBoot Network Module v1.0" -ForegroundColor Cyan
+    Write-Host "============================================================================================" -ForegroundColor Cyan
     Write-Host "`n"
     
     # Phase 1: Adapter Detection
     Write-Host "[PHASE 1] Detecting Network Adapters..." -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "-------------------------------------------------------------------------------------------" -ForegroundColor Gray
     
     $adapters = Get-NetworkAdapterStatus -IncludeDisabled
     $report.Adapters = $adapters
     
     if ($adapters.Count -eq 0) {
-        Write-Host "[✗] NO NETWORK ADAPTERS DETECTED" -ForegroundColor Red
+        Write-Host "[FAILED] NO NETWORK ADAPTERS DETECTED" -ForegroundColor Red
         $report.FailurePoints += "No network adapters found in system"
         $report.Recommendations += "Check if drivers are loaded or hardware is present"
-        Write-Host "   → Possible causes: Missing drivers, disabled hardware, BIOS disabled" -ForegroundColor Yellow
+        Write-Host "   -> Possible causes: Missing drivers, disabled hardware, BIOS disabled" -ForegroundColor Yellow
         Write-Host ""
     } else {
-        Write-Host "[✓] Found $($adapters.Count) network adapter(s)" -ForegroundColor Green
+        Write-Host "[OK] Found $($adapters.Count) network adapter(s)" -ForegroundColor Green
         Write-Host ""
         
         foreach ($adapter in $adapters) {
-            $status = if ($adapter.Connected) { "[✓] Connected" } else { "[✗] Disconnected" }
+            $status = if ($adapter.Connected) { "[OK] Connected" } else { "[FAILED] Disconnected" }
             Write-Host "   $status  $($adapter.Description)" -ForegroundColor $(if ($adapter.Connected) { "Green" } else { "Yellow" })
             Write-Host "            Type: $($adapter.Type) | MAC: $($adapter.MacAddress)" -ForegroundColor Gray
             Write-Host "            IP: $($adapter.IPAddress) | DHCP: $($adapter.DHCPEnabled)" -ForegroundColor Gray
@@ -908,22 +908,22 @@ function Invoke-NetworkDiagnostics {
     
     # Phase 2: Drivers
     Write-Host "[PHASE 2] Checking Network Drivers..." -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "-------------------------------------------------------------------------------------------" -ForegroundColor Gray
     
     try {
         $drivers = Get-NetworkDrivers
         $report.DriversLoaded = $drivers.Count
         
         if ($drivers.Count -gt 0) {
-            Write-Host "[✓] Found $($drivers.Count) loaded network driver(s)" -ForegroundColor Green
+            Write-Host "[OK] Found $($drivers.Count) loaded network driver(s)" -ForegroundColor Green
             foreach ($driver in $drivers | Select-Object -First 3) {
-                Write-Host "   • $($driver.DriverName) (v$($driver.DriverVersion))" -ForegroundColor Gray
+                Write-Host "   - $($driver.DriverName) (v$($driver.DriverVersion))" -ForegroundColor Gray
             }
             if ($drivers.Count -gt 3) {
                 Write-Host "   ... and $($drivers.Count - 3) more" -ForegroundColor Gray
             }
         } else {
-            Write-Host "[✗] No network drivers detected" -ForegroundColor Red
+            Write-Host "[FAILED] No network drivers detected" -ForegroundColor Red
             $report.FailurePoints += "Network drivers not loaded"
             $report.Recommendations += "Load network drivers using driver injection"
         }
@@ -934,23 +934,23 @@ function Invoke-NetworkDiagnostics {
     
     # Phase 3: Connectivity Testing
     Write-Host "[PHASE 3] Testing Internet Connectivity..." -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "-------------------------------------------------------------------------------------------" -ForegroundColor Gray
     
     $connectivity = Test-InternetConnectivity -Verbose
     $report.Connectivity = $connectivity
     
     if ($connectivity.Success) {
         Write-Host ""
-        Write-Host "[✓] INTERNET CONNECTIVITY CONFIRMED" -ForegroundColor Green
+        Write-Host "[OK] INTERNET CONNECTIVITY CONFIRMED" -ForegroundColor Green
         Write-Host "    All connectivity tests passed!" -ForegroundColor Green
     } else {
         Write-Host ""
-        Write-Host "[✗] CONNECTIVITY ISSUES DETECTED" -ForegroundColor Red
+        Write-Host "[FAILED] CONNECTIVITY ISSUES DETECTED" -ForegroundColor Red
         
         if ($connectivity.FailurePoints.Count -gt 0) {
             Write-Host "`n   Specific Failure Points:" -ForegroundColor Yellow
             foreach ($failure in $connectivity.FailurePoints) {
-                Write-Host "   → $failure" -ForegroundColor Red
+                Write-Host "   -> $failure" -ForegroundColor Red
             }
         }
         
@@ -960,11 +960,11 @@ function Invoke-NetworkDiagnostics {
     
     # Phase 4: Recommendations
     Write-Host "[PHASE 4] Diagnostic Summary & Recommendations..." -ForegroundColor Cyan
-    Write-Host "─────────────────────────────────────────────────────────────────────────────────" -ForegroundColor Gray
+    Write-Host "-------------------------------------------------------------------------------------------" -ForegroundColor Gray
     
     if ($connectivity.Success) {
         $report.Success = $true
-        Write-Host "[✓] Network Status: FULLY OPERATIONAL" -ForegroundColor Green
+        Write-Host "[OK] Network Status: FULLY OPERATIONAL" -ForegroundColor Green
         Write-Host "`n   Your network is properly configured and has internet access." -ForegroundColor Green
     } else {
         Write-Host "[!] Network Status: REQUIRES ATTENTION" -ForegroundColor Yellow
@@ -1014,27 +1014,27 @@ function Get-NetworkTroubleshootingGuide {
     #>
     
     $guide = @"
-╔════════════════════════════════════════════════════════════════════════════════╗
-║                    NETWORK TROUBLESHOOTING GUIDE                               ║
-║                        MiracleBoot Network Module                              ║
-╚════════════════════════════════════════════════════════════════════════════════╝
+============================================================================================
+                    NETWORK TROUBLESHOOTING GUIDE
+                        MiracleBoot Network Module
+============================================================================================
 
 COMMON NETWORK ISSUES AND SOLUTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 ISSUE 1: No Network Adapters Detected
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • Get-NetworkAdapterStatus returns empty
-  • Network icon shows "No adapters"
-  • Cannot see any network connections
+  - Get-NetworkAdapterStatus returns empty
+  - Network icon shows "No adapters"
+  - Cannot see any network connections
 
 Possible Causes:
-  ✗ Network drivers not installed
-  ✗ Network adapter disabled in Device Manager
-  ✗ Network adapter disabled in BIOS
-  ✗ Hardware not recognized
+  [FAILED] Network drivers not installed
+  [FAILED] Network adapter disabled in Device Manager
+  [FAILED] Network adapter disabled in BIOS
+  [FAILED] Hardware not recognized
 
 Solutions (in order of ease):
   1. Check BIOS: Reboot and enter BIOS, enable "Onboard Network" or "LAN"
@@ -1047,17 +1047,17 @@ Command to re-detect hardware:
 
 
 ISSUE 2: Network Adapter Present But Disconnected
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • Adapter shows in Device Manager but marked disconnected
-  • No cable symbol or WiFi connected icon
+  - Adapter shows in Device Manager but marked disconnected
+  - No cable symbol or WiFi connected icon
 
 Possible Causes:
-  ✗ Ethernet cable not connected
-  ✗ WiFi network not visible or wrong password
-  ✗ Adapter driver not fully loaded
-  ✗ DHCP timeout
+  [FAILED] Ethernet cable not connected
+  [FAILED] WiFi network not visible or wrong password
+  [FAILED] Adapter driver not fully loaded
+  [FAILED] DHCP timeout
 
 Solutions:
   1. Physical: Check cable is firmly connected to both PC and router
@@ -1070,18 +1070,18 @@ Solutions:
 
 
 ISSUE 3: Adapter Connected But No IP Address (Stuck on DHCP)
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • Adapter shows connected but IP is 169.x.x.x (APIPA)
-  • ipconfig shows DHCP enabled but no address assigned
-  • Cannot access network resources
+  - Adapter shows connected but IP is 169.x.x.x (APIPA)
+  - ipconfig shows DHCP enabled but no address assigned
+  - Cannot access network resources
 
 Possible Causes:
-  ✗ DHCP server not responding
-  ✗ Router misconfigured
-  ✗ Network adapter DHCP timeout
-  ✗ Duplicate IP on network
+  [FAILED] DHCP server not responding
+  [FAILED] Router misconfigured
+  [FAILED] Network adapter DHCP timeout
+  [FAILED] Duplicate IP on network
 
 Solutions:
   1. Restart DHCP: ipconfig /release && ipconfig /renew
@@ -1096,19 +1096,19 @@ Command to check DHCP lease:
 
 
 ISSUE 4: DHCP Works But Cannot Resolve Domain Names
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • ipconfig shows valid IP and gateway
-  • Can ping IP addresses (ping 8.8.8.8 works)
-  • Cannot ping domain names (ping google.com fails)
-  • "Cannot find host" errors
+  - ipconfig shows valid IP and gateway
+  - Can ping IP addresses (ping 8.8.8.8 works)
+  - Cannot ping domain names (ping google.com fails)
+  - "Cannot find host" errors
 
 Possible Causes:
-  ✗ DNS server not configured
-  ✗ DNS server unreachable
-  ✗ ISP DNS is blocking
-  ✗ Router DNS misconfigured
+  [FAILED] DNS server not configured
+  [FAILED] DNS server unreachable
+  [FAILED] ISP DNS is blocking
+  [FAILED] Router DNS misconfigured
 
 Solutions:
   1. Check DNS: ipconfig /all | findstr "DNS Server"
@@ -1119,24 +1119,24 @@ Solutions:
   4. Test: ping google.com
 
 Recommended DNS servers:
-  • Google: 8.8.8.8 and 8.8.4.4
-  • Cloudflare: 1.1.1.1 and 1.0.0.1
-  • OpenDNS: 208.67.222.123 and 208.67.220.123
+  - Google: 8.8.8.8 and 8.8.4.4
+  - Cloudflare: 1.1.1.1 and 1.0.0.1
+  - OpenDNS: 208.67.222.123 and 208.67.220.123
 
 
 ISSUE 5: DNS Works But Cannot Access Internet
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • ping google.com works
-  • Web browser shows "Cannot connect"
-  • Some services work, others don't
+  - ping google.com works
+  - Web browser shows "Cannot connect"
+  - Some services work, others don't
 
 Possible Causes:
-  ✗ Firewall blocking internet access
-  ✗ Proxy misconfigured
-  ✗ ISP blocking ports
-  ✗ Network timeout issues
+  [FAILED] Firewall blocking internet access
+  [FAILED] Proxy misconfigured
+  [FAILED] ISP blocking ports
+  [FAILED] Network timeout issues
 
 Solutions:
   1. Check firewall: Windows Defender Firewall > Allow an app
@@ -1149,18 +1149,18 @@ Solutions:
 
 
 ISSUE 6: Intermittent Connectivity Drops
-═════════════════════════════════════════════════════════════════════════════════
+============================================================================================
 
 Symptoms:
-  • Connection drops for 10-30 seconds then reconnects
-  • High packet loss on ping
-  • Network becomes unresponsive periodically
+  - Connection drops for 10-30 seconds then reconnects
+  - High packet loss on ping
+  - Network becomes unresponsive periodically
 
 Possible Causes:
-  ✗ Driver issue (power saving mode enabled)
-  ✗ WiFi interference
-  ✗ Router stability problem
-  ✗ Hardware conflict
+  [FAILED] Driver issue (power saving mode enabled)
+  [FAILED] WiFi interference
+  [FAILED] Router stability problem
+  [FAILED] Hardware conflict
 
 Solutions:
   1. Disable power saving for NIC:
@@ -1173,7 +1173,7 @@ Solutions:
 
 
 QUICK DIAGNOSTICS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Run this command for complete network diagnostics:
   Invoke-NetworkDiagnostics -Interactive
@@ -1192,7 +1192,7 @@ Export drivers:
 
 
 ADVANCED COMMANDS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 ipconfig /all                    - Show all network details
 netsh interface show interface   - List all adapters
@@ -1217,13 +1217,13 @@ function Get-NetworkDiagnosticsHelp {
     #>
     
     $help = @"
-╔════════════════════════════════════════════════════════════════════════════════╗
-║                  NETWORK DIAGNOSTICS MODULE - FUNCTION REFERENCE               ║
-║                         MiracleBoot v7.2.0 Network Module                      ║
-╚════════════════════════════════════════════════════════════════════════════════╝
+============================================================================================
+                  NETWORK DIAGNOSTICS MODULE - FUNCTION REFERENCE
+                         MiracleBoot v7.2.0 Network Module
+============================================================================================
 
 ADAPTER DETECTION FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Get-NetworkAdapterStatus
   Purpose: Get all network adapters and their status
@@ -1245,14 +1245,14 @@ Get-WirelessAdapters
 
 
 CONNECTIVITY TESTING FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Test-InternetConnectivity
   Purpose: Comprehensive multi-step connectivity test
   Usage:   Test-InternetConnectivity [-Verbose]
   Example: \$result = Test-InternetConnectivity -Verbose
   Output:  PSCustomObject with test results and failure points
-  Tests:   DHCP → DNS → Ping 8.8.8.8 → Ping google.com
+  Tests:   DHCP -> DNS -> Ping 8.8.8.8 -> Ping google.com
 
 Test-NetworkConnectivity
   Purpose: Quick internet connectivity check
@@ -1262,7 +1262,7 @@ Test-NetworkConnectivity
 
 
 DRIVER DETECTION FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Get-NetworkDrivers
   Purpose: Get currently loaded network drivers
@@ -1290,7 +1290,7 @@ Get-DriverStorePath
 
 
 DRIVER MANAGEMENT FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Export-NetworkDrivers
   Purpose: Export network drivers to a folder
@@ -1306,7 +1306,7 @@ Add-DriversToWinPE
 
 
 ADAPTER MANAGEMENT FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Enable-NetworkAdapter
   Purpose: Enable a disabled network adapter
@@ -1322,7 +1322,7 @@ Disable-NetworkAdapter
 
 
 DIAGNOSTICS & REPORTING FUNCTIONS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Invoke-NetworkDiagnostics
   Purpose: Run comprehensive network diagnostics
@@ -1345,7 +1345,7 @@ Get-NetworkDiagnosticsHelp
 
 
 COMMON WORKFLOWS
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 WORKFLOW 1: Quick Network Check
   Get-NetworkAdapterStatus
@@ -1367,7 +1367,7 @@ WORKFLOW 5: Troubleshoot Connectivity
 
 
 TIPS & BEST PRACTICES
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 1. Always run diagnostics before attempting fixes
    \$diag = Invoke-NetworkDiagnostics
@@ -1392,7 +1392,7 @@ TIPS & BEST PRACTICES
 
 
 REQUIREMENTS & ENVIRONMENT
-───────────────────────────────────────────────────────────────────────────────────
+-------------------------------------------------------------------------------------------
 
 Privileges: Administrator (required for most operations)
 OS Support: Windows 10/11 (FullOS, WinPE, WinRE)
