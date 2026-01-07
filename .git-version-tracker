@@ -1,0 +1,8 @@
+# Version Tracker Configuration
+# This file tracks version milestones for backup branches
+# Backup branches are created every 20 commits
+
+LAST_BACKUP_COMMIT=0
+LAST_BACKUP_VERSION=v7.0
+NEXT_BACKUP_AT=20
+

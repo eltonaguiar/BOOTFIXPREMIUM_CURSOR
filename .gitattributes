@@ -1,0 +1,8 @@
+# Git attributes for Miracle Boot
+# Ensure consistent line endings
+
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.md text eol=lf
+*.txt text eol=lf
+
