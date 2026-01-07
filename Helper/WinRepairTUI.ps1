@@ -857,7 +857,7 @@ function Start-TUI {
                                 Write-Host ""
                             }
                         } else {
-                            Write-Host "[INFO] No restore points found or System Restore is disabled." -ForegroundColor Yellow
+                            Write-Host '[INFO] No restore points found or System Restore is disabled.' -ForegroundColor Yellow
                         }
                     }
                     "3" {
@@ -885,7 +885,7 @@ function Start-TUI {
                                     Write-Host "[ERROR] $($result.Message)" -ForegroundColor Red
                                 }
                             } else {
-                                Write-Host "[ERROR] No restore points available." -ForegroundColor Red
+                                Write-Host '[ERROR] No restore points available.' -ForegroundColor Red
                             }
                         } else {
                             Write-Host "Restore cancelled." -ForegroundColor Yellow
@@ -922,7 +922,7 @@ function Start-TUI {
             }
             "P" {
                 if (Get-Command Invoke-NetworkDiagnostics -ErrorAction SilentlyContinue) {
-                    Write-Host "`nNETWORK DIAGNOSTICS & DRIVER MANAGEMENT" -ForegroundColor Cyan
+                    Write-Host "`nNETWORK DIAGNOSTICS and DRIVER MANAGEMENT" -ForegroundColor Cyan
                     Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Gray
                     Write-Host ""
                     $result = Invoke-NetworkDiagnostics
@@ -963,7 +963,7 @@ function Start-TUI {
                 Write-Host "This will ensure Windows is ready for in-place upgrade (Keep apps + files)" -ForegroundColor Yellow
                 Write-Host ""
                 
-                $fix = Read-Host "Automatically fix blockers? (Y/N, default: Y)"
+                $fix = Read-Host 'Automatically fix blockers? (Y/N, default Y)'
                 $fixBlockers = ($fix -ne "N" -and $fix -ne "n")
                 
                 Write-Host ""
@@ -983,10 +983,10 @@ function Start-TUI {
                 Write-Host ""
                 
                 if ($result.Eligible) {
-                    Write-Host "[SUCCESS] System is ready for repair install!" -ForegroundColor Green
+                    Write-Host '[SUCCESS] System is ready for repair install!' -ForegroundColor Green
                     Write-Host "You can now run: setup.exe /auto upgrade /quiet" -ForegroundColor Cyan
                 } else {
-                    Write-Host "[WARNING] System is not fully ready. Review blockers above." -ForegroundColor Yellow
+                    Write-Host '[WARNING] System is not fully ready. Review blockers above.' -ForegroundColor Yellow
                 }
                 
                 Write-Host "`nPress any key to continue..." -ForegroundColor Gray

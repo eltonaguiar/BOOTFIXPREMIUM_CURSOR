@@ -4680,13 +4680,13 @@ function Test-InternetConnectivity {
         "google.com"         # Google
     )
     
-    foreach ($host in $testHosts) {
+    foreach ($testHost in $testHosts) {
         try {
-            $result.TestedHosts += $host
-            $ping = Test-Connection -ComputerName $host -Count 1 -TimeoutSeconds $TimeoutSeconds -ErrorAction Stop
+            $result.TestedHosts += $testHost
+            $ping = Test-Connection -ComputerName $testHost -Count 1 -TimeoutSeconds $TimeoutSeconds -ErrorAction Stop
             if ($ping) {
                 $result.Connected = $true
-                $result.Message = "Internet connectivity confirmed (reached $host)"
+                $result.Message = "Internet connectivity confirmed (reached $testHost)"
                 return $result
             }
         } catch {
@@ -6695,7 +6695,8 @@ function Start-CompleteSystemRepair {
         [switch]$SkipDiskRepair = $false,
         [switch]$SkipSystemFileRepair = $false,
         [switch]$SkipBootRepair = $false,
-        [switch]$SkipConfirmation = $false
+        [switch]$SkipConfirmation = $false,
+        [scriptblock]$ProgressCallback = $null
     )
     
     $result = @{
@@ -6785,7 +6786,7 @@ function Start-CompleteSystemRepair {
         try {
             $diskHealth = Test-DiskHealth -TargetDrive $TargetDrive
             if ($diskHealth.NeedsRepair) {
-                $diskRepair = Start-DiskRepair -TargetDrive $TargetDrive -FixErrors -RecoverBadSectors:$diskHealth.HasBadSectors
+                $diskRepair = Start-DiskRepair -TargetDrive $TargetDrive -FixErrors -ProgressCallback $ProgressCallback -RecoverBadSectors:$diskHealth.HasBadSectors
                 $report.AppendLine($diskRepair.Report) | Out-Null
                 
                 if ($diskRepair.Success) {
@@ -6813,8 +6814,11 @@ function Start-CompleteSystemRepair {
     if (-not $SkipSystemFileRepair) {
         $report.AppendLine("STEP 3: System File Repair (SFC + DISM)...") | Out-Null
         Write-RepairLog "Starting system file repair"
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Starting system file repair..."
+        }
         try {
-            $fileRepair = Start-SystemFileRepair -TargetDrive $TargetDrive
+            $fileRepair = Start-SystemFileRepair -TargetDrive $TargetDrive -ProgressCallback $ProgressCallback
             $report.AppendLine($fileRepair.Report) | Out-Null
             
             if ($fileRepair.Success) {
@@ -6838,6 +6842,9 @@ function Start-CompleteSystemRepair {
     if (-not $SkipBootRepair) {
         $report.AppendLine("STEP 4: Boot Repair...") | Out-Null
         Write-RepairLog "Starting boot repair"
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback "Starting boot repair..."
+        }
         try {
             $bootRepair = Start-AutomatedBootRepair -TargetDrive $TargetDrive -SkipConfirmation:$SkipConfirmation
             $report.AppendLine($bootRepair.Report) | Out-Null
@@ -6953,8 +6960,8 @@ function Get-InPlaceUpgradeReadiness {
             
             if ($bootErrors) {
                 $report.AppendLine("[WARNING] Boot log shows errors:") | Out-Null
-                foreach ($error in $bootErrors) {
-                    $report.AppendLine("  - $error") | Out-Null
+                foreach ($bootError in $bootErrors) {
+                    $report.AppendLine("  - $bootError") | Out-Null
                 }
                 $result.Warnings += "Boot log contains errors - may indicate driver or service issues"
             } else {
@@ -8258,7 +8265,7 @@ function Start-DiskManagementHelper {
                 $volumes | Format-Table -AutoSize
                 Write-Host ""
                 $volNum = Read-Host "Enter volume number to assign letter to"
-                $letter = Read-Host "Enter drive letter (e.g., E, F, G)"
+                $letter = Read-Host "Enter drive letter (e.g. E, F, G)"
                 
                 try {
                     $vol = Get-Volume -UniqueId $volumes[$volNum].UniqueId
@@ -9609,13 +9616,18 @@ function Start-RepairTemplate {
                 }
                 "BootFiles" {
                     # Quick boot files fix
-                    $bootResult = bootrec /fixboot 2>&1 | Out-String
-                    if ($LASTEXITCODE -eq 0) {
-                        $result.StepsCompleted += "BootFiles"
-                        $report.AppendLine("[OK] Boot files fixed") | Out-Null
-                    } else {
+                    try {
+                        $bootRecOutput = bootrec /fixboot 2>&1 | Out-String
+                        if ($LASTEXITCODE -eq 0) {
+                            $result.StepsCompleted += "BootFiles"
+                            $report.AppendLine("[OK] Boot files fixed") | Out-Null
+                        } else {
+                            $result.StepsFailed += "BootFiles"
+                            $report.AppendLine("[WARNING] Boot files fix had issues") | Out-Null
+                        }
+                    } catch {
                         $result.StepsFailed += "BootFiles"
-                        $report.AppendLine("[WARNING] Boot files fix had issues") | Out-Null
+                        $report.AppendLine("[WARNING] Boot files fix failed: $_") | Out-Null
                     }
                 }
                 "DriverPorting" {
