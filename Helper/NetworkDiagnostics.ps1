@@ -1408,25 +1408,28 @@ Network: IPv4 supported (IPv6 partial support)
 # MODULE EXPORT
 ################################################################################
 
-# Export all public functions
-Export-ModuleMember -Function @(
-    'Get-NetworkAdapterStatus',
-    'Get-WirelessAdapters',
-    'Get-WiredAdapters',
-    'Test-InternetConnectivity',
-    'Test-NetworkConnectivity',
-    'Get-NetworkDrivers',
-    'Get-DriverStorePath',
-    'Find-NetworkDrivers',
-    'Find-DriversOnVolumes',
-    'Export-NetworkDrivers',
-    'Add-DriversToWinPE',
-    'Enable-NetworkAdapter',
-    'Disable-NetworkAdapter',
-    'Invoke-NetworkDiagnostics',
-    'Get-NetworkTroubleshootingGuide',
-    'Get-NetworkDiagnosticsHelp'
-)
+# Export all public functions (only if running as a module)
+# When dot-sourced, Export-ModuleMember will fail, so we check if we're in a module context
+if ($MyInvocation.MyCommand.ModuleName) {
+    Export-ModuleMember -Function @(
+        'Get-NetworkAdapterStatus',
+        'Get-WirelessAdapters',
+        'Get-WiredAdapters',
+        'Test-InternetConnectivity',
+        'Test-NetworkConnectivity',
+        'Get-NetworkDrivers',
+        'Get-DriverStorePath',
+        'Find-NetworkDrivers',
+        'Find-DriversOnVolumes',
+        'Export-NetworkDrivers',
+        'Add-DriversToWinPE',
+        'Enable-NetworkAdapter',
+        'Disable-NetworkAdapter',
+        'Invoke-NetworkDiagnostics',
+        'Get-NetworkTroubleshootingGuide',
+        'Get-NetworkDiagnosticsHelp'
+    )
+}
 
 ################################################################################
 # END OF NETWORK DIAGNOSTICS MODULE

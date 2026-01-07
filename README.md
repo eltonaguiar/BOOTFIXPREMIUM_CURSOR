@@ -96,6 +96,30 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 
 ---
 
+## 📁 Project Structure
+
+Miracle Boot follows industry best practices for project organization:
+
+```
+MiracleBoot_v7_1_1/
+├── MiracleBoot.ps1              # Main PowerShell entry point
+├── RunMiracleBoot.cmd           # Main CMD entry point
+├── Helper/                      # Core modules (engine, GUI, TUI)
+├── Helper Scripts/             # Utility and maintenance scripts
+├── Test/                        # All testing modules and test files
+└── [Documentation files]        # README, CHANGELOG, etc.
+```
+
+**Key Points:**
+- **Root Directory**: Only contains 2 entry point files (`.ps1` and `.cmd`)
+- **Helper/**: Core functionality modules loaded by main script
+- **Helper Scripts/**: Optional utility scripts for maintenance
+- **Test/**: All test files and test execution logs
+
+For detailed structure information, see `PROJECT_STRUCTURE.md`.
+
+---
+
 ## 🚀 Quick Start Guide
 
 ### Step 1: Download and Extract

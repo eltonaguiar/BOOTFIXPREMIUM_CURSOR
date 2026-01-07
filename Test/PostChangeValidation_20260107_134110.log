@@ -1,0 +1,13 @@
+[2026-01-07 13:41:10] Test started at 01/07/2026 13:41:10
+[2026-01-07 13:41:10] Repository root: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+[2026-01-07 13:41:10] Log file: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\PostChangeValidation_20260107_134110.log
+[2026-01-07 13:41:10] ✅ PASS : Syntax Validation
+[2026-01-07 13:41:10]   Checked 7 files
+[2026-01-07 13:41:10] ✅ PASS : Module Loading
+[2026-01-07 13:41:10]   Tested 2 modules
+[2026-01-07 13:41:13] ✅ PASS : Core Module Loading
+[2026-01-07 13:41:13] ✅ PASS : WPF Availability
+[2026-01-07 13:41:14] ❌ FAIL : GUI Module Loading
+[2026-01-07 13:41:14]   Start-GUI function not found after loading GUI module
+[2026-01-07 13:41:14] ✅ PASS : Browser Test (No Auto-Open)
+[2026-01-07 13:41:14]   Test-BrowserAvailability function not found

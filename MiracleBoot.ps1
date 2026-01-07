@@ -177,9 +177,11 @@ function Test-BrowserAvailability {
     Tests if a web browser is available.
     #>
     $browsers = @(
-        @{ Name = "Default Browser"; Path = "start"; Test = { Start-Process "https://www.microsoft.com" -ErrorAction SilentlyContinue } },
+        @{ Name = "Default Browser"; Path = "start"; Test = { $null -ne (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -ErrorAction SilentlyContinue) } },
         @{ Name = "Internet Explorer"; Path = "iexplore.exe"; Test = { Test-Path "$env:ProgramFiles\Internet Explorer\iexplore.exe" } },
-        @{ Name = "Edge"; Path = "msedge.exe"; Test = { Test-Path "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe" } }
+        @{ Name = "Edge"; Path = "msedge.exe"; Test = { Test-Path "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe" -or Test-Path "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe" } },
+        @{ Name = "Chrome"; Path = "chrome.exe"; Test = { Test-Path "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" -or Test-Path "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe" } },
+        @{ Name = "Firefox"; Path = "firefox.exe"; Test = { Test-Path "$env:ProgramFiles\Mozilla Firefox\firefox.exe" -or Test-Path "$env:ProgramFiles (x86)\Mozilla Firefox\firefox.exe" } }
     )
     
     foreach ($browser in $browsers) {
@@ -221,8 +223,60 @@ $envType = Get-EnvironmentType
 
 # Load core functions
 try {
+    #region agent log - WinRepairCore load
+    try {
+        $logPayload = @{
+            sessionId    = "debug-session"
+            runId        = "verify-run"
+            hypothesisId = "H1"
+            location     = "MiracleBoot.ps1:before-load-core"
+            message      = "About to load WinRepairCore.ps1"
+            data         = @{
+                ScriptRoot = $PSScriptRoot
+                CorePath   = "$PSScriptRoot\Helper\WinRepairCore.ps1"
+            }
+            timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+        } | ConvertTo-Json -Compress
+        Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+    } catch {}
+    #endregion
+    
     . "$PSScriptRoot\Helper\WinRepairCore.ps1"
+    
+    #region agent log - WinRepairCore loaded
+    try {
+        $logPayload = @{
+            sessionId    = "debug-session"
+            runId        = "verify-run"
+            hypothesisId = "H2"
+            location     = "MiracleBoot.ps1:after-load-core"
+            message      = "WinRepairCore.ps1 loaded successfully"
+            data         = @{
+                FunctionsLoaded = $true
+            }
+            timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+        } | ConvertTo-Json -Compress
+        Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+    } catch {}
+    #endregion
 } catch {
+    #region agent log - WinRepairCore load error
+    try {
+        $logPayload = @{
+            sessionId    = "debug-session"
+            runId        = "verify-run"
+            hypothesisId = "H3"
+            location     = "MiracleBoot.ps1:load-core-error"
+            message      = "Failed to load WinRepairCore.ps1"
+            data         = @{
+                Error = $_.ToString()
+            }
+            timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+        } | ConvertTo-Json -Compress
+        Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+    } catch {}
+    #endregion
+    
     Write-Host "Error loading Helper\WinRepairCore.ps1: $_" -ForegroundColor Red
     Write-Host "Current directory: $(Get-Location)" -ForegroundColor Yellow
     Write-Host "Script root: $PSScriptRoot" -ForegroundColor Yellow
@@ -273,6 +327,21 @@ if ($envType -eq 'FullOS') {
         Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
         Write-Host "WPF assemblies loaded successfully." -ForegroundColor Green
+        
+        #region agent log - WPF loaded
+        try {
+            $logPayload = @{
+                sessionId    = "debug-session"
+                runId        = "verify-run"
+                hypothesisId = "H4"
+                location     = "MiracleBoot.ps1:wpf-loaded"
+                message      = "WPF assemblies loaded, attempting GUI"
+                data         = @{ WPFReady = $true }
+                timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+            } | ConvertTo-Json -Compress
+            Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+        } catch {}
+        #endregion
     } catch {
         Write-Host "WARNING: WPF assemblies not available: $_" -ForegroundColor Yellow
         Write-Host "Falling back to MS-DOS Style mode..." -ForegroundColor Yellow
@@ -282,16 +351,66 @@ if ($envType -eq 'FullOS') {
     }
     
     try {
-        . "$PSScriptRoot\Helper\WinRepairGUI.ps1"
+        Write-Host "Loading GUI module..." -ForegroundColor Gray
+        . "$PSScriptRoot\Helper\WinRepairGUI.ps1" -ErrorAction Stop
+        Write-Host "GUI module loaded successfully." -ForegroundColor Green
+        
         if (Get-Command Start-GUI -ErrorAction SilentlyContinue) {
+            Write-Host "Start-GUI function found. Launching GUI..." -ForegroundColor Green
+            #region agent log - GUI starting
+            try {
+                $logPayload = @{
+                    sessionId    = "debug-session"
+                    runId        = "verify-run"
+                    hypothesisId = "H5"
+                    location     = "MiracleBoot.ps1:gui-starting"
+                    message      = "Starting GUI mode"
+                    data         = @{ GUIMode = $true }
+                    timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+                } | ConvertTo-Json -Compress
+                Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+            } catch {}
+            #endregion
+            
             Start-GUI
         } else {
             throw "Start-GUI function not found in WinRepairGUI.ps1"
         }
     } catch {
-        Write-Host "`nGUI mode failed, falling back to TUI:" -ForegroundColor Yellow
-        Write-Host "Error: $_" -ForegroundColor Red
-        Write-Host "`nPress any key to continue with TUI mode..." -ForegroundColor Yellow
+        #region agent log - GUI failed, falling back
+        try {
+            $logPayload = @{
+                sessionId    = "debug-session"
+                runId        = "verify-run"
+                hypothesisId = "H6"
+                location     = "MiracleBoot.ps1:gui-failed"
+                message      = "GUI mode failed, falling back to TUI"
+                data         = @{
+                    Error = $_.ToString()
+                    FallbackToTUI = $true
+                }
+                timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+            } | ConvertTo-Json -Compress
+            Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+        } catch {}
+        #endregion
+        
+        Write-Host "`n===============================================================" -ForegroundColor Red
+        Write-Host "GUI MODE FAILED - FALLING BACK TO TUI" -ForegroundColor Red
+        Write-Host "===============================================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Error Details:" -ForegroundColor Yellow
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor White
+        if ($_.Exception.InnerException) {
+            Write-Host "  Inner Exception: $($_.Exception.InnerException.Message)" -ForegroundColor Gray
+        }
+        Write-Host ""
+        Write-Host "This usually means:" -ForegroundColor Yellow
+        Write-Host "  - WPF assemblies failed to load" -ForegroundColor Gray
+        Write-Host "  - GUI module has syntax errors" -ForegroundColor Gray
+        Write-Host "  - Missing .NET Framework components" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Press any key to continue with TUI mode..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
         Start-TUI
@@ -299,6 +418,25 @@ if ($envType -eq 'FullOS') {
 } else {
     # WinRE or WinPE - use MS-DOS Style mode
     Write-Host "Running in $envType environment - using MS-DOS Style mode." -ForegroundColor Yellow
+    
+    #region agent log - TUI mode
+    try {
+        $logPayload = @{
+            sessionId    = "debug-session"
+            runId        = "verify-run"
+            hypothesisId = "H7"
+            location     = "MiracleBoot.ps1:tui-mode"
+            message      = "Starting TUI mode"
+            data         = @{
+                Environment = $envType
+                TUIMode = $true
+            }
+            timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+        } | ConvertTo-Json -Compress
+        Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+    } catch {}
+    #endregion
+    
     . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
     Start-TUI
 }

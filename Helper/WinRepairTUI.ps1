@@ -154,6 +154,16 @@ function New-TUIProgressCallback {
 }
 
 function Start-TUI {
+    # Load LogAnalysis module
+    $logAnalysisPath = Join-Path $PSScriptRoot "LogAnalysis.ps1"
+    if (Test-Path $logAnalysisPath) {
+        try {
+            . $logAnalysisPath
+        } catch {
+            Write-Warning "Failed to load LogAnalysis module: $_"
+        }
+    }
+    
     # Detect environment for display (matching main script logic)
     $envDisplay = "FullOS"
     
@@ -201,6 +211,9 @@ function Start-TUI {
         Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
         Write-Host "I) Boot Chain Analysis (View Startup/Boot Logs)" -ForegroundColor Cyan
         Write-Host "J) Look Up Windows Error Code (Get troubleshooting help)" -ForegroundColor Yellow
+        Write-Host "U) Comprehensive Log Analysis (All Tiers - Root Cause)" -ForegroundColor Red
+        Write-Host "V) Open Event Viewer" -ForegroundColor Cyan
+        Write-Host "W) Crash Dump Analyzer (crashanalyze.exe)" -ForegroundColor Magenta
         Write-Host "K) Utilities Menu (Notepad, Registry, PowerShell, etc.)" -ForegroundColor White
         if ($envDisplay -eq "WinPE") {
             Write-Host "K2) Install Browser (Chrome/Firefox - WinPE only)" -ForegroundColor Cyan
@@ -851,6 +864,129 @@ function Start-TUI {
                 $c = 'J'
                 continue
             }
+            "U" {
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                Write-Host "`nCOMPREHENSIVE LOG ANALYSIS - ROOT CAUSE DIAGNOSTICS" -ForegroundColor Red
+                Write-Host "===============================================================" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Gathering logs from all tiers..." -ForegroundColor Yellow
+                Write-Host "  TIER 1: Crash dumps (MEMORY.DMP, LiveKernelReports, Minidumps)" -ForegroundColor Cyan
+                Write-Host "  TIER 2: Boot pipeline logs (Setup logs, ntbtlog.txt)" -ForegroundColor Cyan
+                Write-Host "  TIER 3: Event logs (System.evtx, SrtTrail.txt)" -ForegroundColor Cyan
+                Write-Host "  TIER 4: Boot structure (BCD, Registry)" -ForegroundColor Cyan
+                Write-Host "  TIER 5: Hardware/image context" -ForegroundColor Cyan
+                Write-Host ""
+                Write-Host "This may take several moments..." -ForegroundColor Gray
+                Write-Host ""
+                
+                try {
+                    $analysis = Get-ComprehensiveLogAnalysis -TargetDrive $drive
+                    
+                    Write-Host ""
+                    Write-Host $analysis.Report
+                    
+                    if ($analysis.RootCauseSummary) {
+                        Write-Host ""
+                        Write-Host "ROOT CAUSE SUMMARY" -ForegroundColor Yellow
+                        Write-Host "-" * 80 -ForegroundColor Gray
+                        Write-Host $analysis.RootCauseSummary
+                    }
+                    
+                    if ($analysis.Recommendations.Count -gt 0) {
+                        Write-Host ""
+                        Write-Host "RECOMMENDATIONS:" -ForegroundColor Green
+                        Write-Host "-" * 80 -ForegroundColor Gray
+                        $counter = 1
+                        foreach ($rec in $analysis.Recommendations) {
+                            Write-Host "$counter. $rec" -ForegroundColor White
+                            $counter++
+                        }
+                    }
+                    
+                } catch {
+                    Write-Host ""
+                    Write-Host "ERROR: Failed to perform comprehensive log analysis" -ForegroundColor Red
+                    Write-Host $_.Exception.Message -ForegroundColor Yellow
+                }
+                
+                Write-Host ""
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "u" {
+                $c = 'U'
+                continue
+            }
+            "V" {
+                Write-Host "`nOpening Event Viewer..." -ForegroundColor Gray
+                try {
+                    $result = Open-EventViewer
+                    if ($result.Success) {
+                        Write-Host "Event Viewer opened successfully." -ForegroundColor Green
+                    } else {
+                        Write-Host "Failed to open Event Viewer: $($result.Message)" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "Failed to open Event Viewer: $_" -ForegroundColor Red
+                }
+                Write-Host ""
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "v" {
+                $c = 'V'
+                continue
+            }
+            "W" {
+                $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
+                if ([string]::IsNullOrWhiteSpace($drive)) {
+                    $drive = "C"
+                }
+                $drive = $drive.TrimEnd(':').ToUpper()
+                
+                # Check for MEMORY.DMP
+                $memoryDump = "$drive`:\Windows\MEMORY.DMP"
+                $dumpPath = ""
+                
+                if (Test-Path $memoryDump) {
+                    Write-Host "`nMEMORY.DMP found at: $memoryDump" -ForegroundColor Green
+                    $useDump = Read-Host "Do you want to analyze this dump file? (Y/N)"
+                    if ($useDump -eq 'Y' -or $useDump -eq 'y') {
+                        $dumpPath = $memoryDump
+                    }
+                } else {
+                    Write-Host "`nMEMORY.DMP not found at: $memoryDump" -ForegroundColor Yellow
+                    Write-Host "Crash Analyzer will open without a file." -ForegroundColor Gray
+                }
+                
+                Write-Host ""
+                Write-Host "Launching Crash Dump Analyzer..." -ForegroundColor Gray
+                
+                try {
+                    $result = Start-CrashAnalyzer -DumpPath $dumpPath
+                    if ($result.Success) {
+                        Write-Host "Crash Analyzer launched: $($result.Message)" -ForegroundColor Green
+                    } else {
+                        Write-Host "Failed to launch Crash Analyzer: $($result.Message)" -ForegroundColor Red
+                        Write-Host "Please ensure crashanalyze.exe is available in Helper\CrashAnalyzer\" -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "Failed to launch Crash Analyzer: $_" -ForegroundColor Red
+                }
+                
+                Write-Host ""
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "w" {
+                $c = 'W'
+                continue
+            }
             "K" {
                 Write-Host "`nUTILITIES MENU" -ForegroundColor Cyan
                 Write-Host "===============================================================" -ForegroundColor Gray
@@ -862,6 +998,7 @@ function Start-TUI {
                 Write-Host "5) Command Prompt" -ForegroundColor White
                 Write-Host "6) Disk Management" -ForegroundColor White
                 Write-Host "7) Event Viewer" -ForegroundColor White
+                Write-Host "8) Restart Windows Explorer" -ForegroundColor White
                 Write-Host "B) Back to main menu" -ForegroundColor Yellow
                 Write-Host ""
                 
@@ -895,6 +1032,18 @@ function Start-TUI {
                     "7" {
                         $result = Start-UtilitiesMenu -Utility "EventViewer"
                         Write-Host $result.Message -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                    }
+                    "8" {
+                        Write-Host "`nRestarting Windows Explorer..." -ForegroundColor Yellow
+                        $result = Restart-WindowsExplorer
+                        if ($result.Success) {
+                            Write-Host $result.Message -ForegroundColor Green
+                        } else {
+                            Write-Host $result.Message -ForegroundColor Red
+                        }
+                        Write-Host ""
+                        Write-Host "Press any key to continue..." -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                     'B' { continue }
                     'b' { continue }
@@ -1325,8 +1474,8 @@ function Start-TUI {
                     Write-Host '[WARNING] Template execution completed with some issues.' -ForegroundColor Yellow
                     if ($result.Errors.Count -gt 0) {
                         Write-Host 'Errors:' -ForegroundColor Red
-                        foreach ($error in $result.Errors) {
-                            Write-Host "  • $error" -ForegroundColor Red
+                        foreach ($errItem in $result.Errors) {
+                            Write-Host "  • $errItem" -ForegroundColor Red
                         }
                     }
                 }
