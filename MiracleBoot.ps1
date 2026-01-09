@@ -60,6 +60,44 @@
 # Set execution policy for this session (needed in WinRE/WinPE)
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 
+# CRITICAL: WPF requires STA (Single Threaded Apartment) threading
+# Check and enforce STA mode before any WPF operations
+$currentThread = [System.Threading.Thread]::CurrentThread
+$apartmentState = $currentThread.GetApartmentState()
+if ($apartmentState -ne 'STA') {
+    Write-Host ("=" * 80) -ForegroundColor Red
+    Write-Host "CRITICAL ERROR: PowerShell must run in STA mode for WPF UI" -ForegroundColor Red
+    Write-Host ("=" * 80) -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Current threading mode: $apartmentState" -ForegroundColor Yellow
+    Write-Host "WPF (Windows Presentation Foundation) REQUIRES STA mode." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "SOLUTION:" -ForegroundColor Cyan
+    Write-Host "  Launch PowerShell with: powershell.exe -STA -File MiracleBoot.ps1" -ForegroundColor White
+    Write-Host "  Or use: pwsh.exe -STA -File MiracleBoot.ps1" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Attempting to set STA mode..." -ForegroundColor Yellow
+    try {
+        $currentThread.SetApartmentState([System.Threading.ApartmentState]::STA)
+        $newState = $currentThread.GetApartmentState()
+        if ($newState -eq 'STA') {
+            Write-Host "STA mode set successfully." -ForegroundColor Green
+        } else {
+            Write-Host "Failed to set STA mode. Current state: $newState" -ForegroundColor Red
+            Write-Host "Please restart PowerShell with -STA flag." -ForegroundColor Yellow
+            Write-Host "Press any key to exit..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            exit 1
+        }
+    } catch {
+        Write-Host "Cannot set STA mode at runtime: $_" -ForegroundColor Red
+        Write-Host "Please restart PowerShell with -STA flag." -ForegroundColor Yellow
+        Write-Host "Press any key to exit..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 1
+    }
+}
+
 $ErrorActionPreference = 'Stop'
 
 function Get-EnvironmentType {
@@ -218,8 +256,62 @@ if (-not (Test-Path $PSScriptRoot)) {
     $PSScriptRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($MyInvocation.MyCommand.Path))
 }
 
+# Initialize centralized logging system
+try {
+    if (Test-Path "$PSScriptRoot\Helper\ErrorLogging.ps1") {
+        . "$PSScriptRoot\Helper\ErrorLogging.ps1"
+        $null = Initialize-ErrorLogging -ScriptRoot $PSScriptRoot -RetentionDays 7
+        Add-MiracleBootLog -Level "INFO" -Message "MiracleBoot.ps1 started" -Location "MiracleBoot.ps1"
+    }
+} catch {
+    # Silently continue if logging fails - don't break startup
+}
 
 $envType = Get-EnvironmentType
+
+# Pre-launch validation
+try {
+    if (Test-Path "$PSScriptRoot\Helper\PreLaunchValidation.ps1") {
+        . "$PSScriptRoot\Helper\PreLaunchValidation.ps1"
+        $validation = Test-PreLaunchValidation -ScriptRoot $PSScriptRoot
+        
+        if (-not $validation.Passed) {
+            Write-Host ""
+            Write-Host "===============================================================" -ForegroundColor Red
+            Write-Host "  PRE-LAUNCH VALIDATION FAILED" -ForegroundColor Red
+            Write-Host "===============================================================" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "The following errors were detected:" -ForegroundColor Yellow
+            foreach ($error in $validation.Errors) {
+                Write-Host "  - $error" -ForegroundColor White
+            }
+            Write-Host ""
+            if ($validation.Warnings.Count -gt 0) {
+                Write-Host "Warnings:" -ForegroundColor Yellow
+                foreach ($warning in $validation.Warnings) {
+                    Write-Host "  - $warning" -ForegroundColor Gray
+                }
+                Write-Host ""
+            }
+            Write-Host "Please fix these errors before launching Miracle Boot." -ForegroundColor Yellow
+            Write-Host "Press any key to exit..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+            exit 1
+        }
+        
+        if ($validation.Warnings.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Validation warnings (non-critical):" -ForegroundColor Yellow
+            foreach ($warning in $validation.Warnings) {
+                Write-Host "  - $warning" -ForegroundColor Gray
+            }
+            Write-Host ""
+        }
+    }
+} catch {
+    Write-Host "Warning: Pre-launch validation failed: $_" -ForegroundColor Yellow
+    Write-Host "Continuing anyway..." -ForegroundColor Yellow
+}
 
 # Load core functions
 try {
@@ -351,30 +443,62 @@ if ($envType -eq 'FullOS') {
     }
     
     try {
+        # Run Readiness Gate before GUI launch
+        $readinessGatePath = Join-Path $PSScriptRoot "Helper\ReadinessGate.ps1"
+        if (Test-Path $readinessGatePath) {
+            Write-Host "Running readiness validation..." -ForegroundColor Gray
+            . $readinessGatePath
+            $readiness = Test-ReadinessGate -ScriptRoot $PSScriptRoot
+            if (-not $readiness.IsReady) {
+                Write-Host ""
+                Write-Host "❌ READINESS GATE FAILED - GUI LAUNCH BLOCKED" -ForegroundColor Red
+                Write-Host "The following issues must be fixed before GUI can launch:" -ForegroundColor Yellow
+                foreach ($blocker in $readiness.Blockers) {
+                    Write-Host "  - $blocker" -ForegroundColor Yellow
+                }
+                Write-Host ""
+                Write-Host "Falling back to TUI mode..." -ForegroundColor Yellow
+                throw "Readiness gate failed - GUI launch blocked"
+            }
+        }
+        
         Write-Host "Loading GUI module..." -ForegroundColor Gray
         . "$PSScriptRoot\Helper\WinRepairGUI.ps1" -ErrorAction Stop
-        Write-Host "GUI module loaded successfully." -ForegroundColor Green
+        Write-Host "GUI module loaded." -ForegroundColor Green
         
-        if (Get-Command Start-GUI -ErrorAction SilentlyContinue) {
-            Write-Host "Start-GUI function found. Launching GUI..." -ForegroundColor Green
-            #region agent log - GUI starting
-            try {
-                $logPayload = @{
-                    sessionId    = "debug-session"
-                    runId        = "verify-run"
-                    hypothesisId = "H5"
-                    location     = "MiracleBoot.ps1:gui-starting"
-                    message      = "Starting GUI mode"
-                    data         = @{ GUIMode = $true }
-                    timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
-                } | ConvertTo-Json -Compress
-                Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
-            } catch {}
-            #endregion
-            
-            Start-GUI
-        } else {
+        # Verify Start-GUI function exists (use Stop to fail fast if missing)
+        if (-not (Get-Command Start-GUI -ErrorAction Stop)) {
             throw "Start-GUI function not found in WinRepairGUI.ps1"
+        }
+        
+        Write-Host "Launching GUI window..." -ForegroundColor Green
+        #region agent log - GUI starting
+        try {
+            $logPayload = @{
+                sessionId    = "debug-session"
+                runId        = "verify-run"
+                hypothesisId = "H5"
+                location     = "MiracleBoot.ps1:gui-starting"
+                message      = "Starting GUI mode"
+                data         = @{ GUIMode = $true }
+                timestamp    = [int][double]::Parse((Get-Date -UFormat %s))
+            } | ConvertTo-Json -Compress
+            Add-Content -Path ".cursor\debug.log" -Value $logPayload -ErrorAction SilentlyContinue
+        } catch {}
+        #endregion
+        
+        # Call Start-GUI with explicit error handling
+        try {
+            Start-GUI
+            Write-Host "GUI launched successfully." -ForegroundColor Green
+            exit 0  # Exit successfully after GUI closes
+        } catch {
+            # Log error to file for debugging
+            $errorLogPath = Join-Path $PSScriptRoot "MiracleBoot_GUI_Error.log"
+            $errorMsg = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): GUI window launch failed: $($_.Exception.Message)"
+            Add-Content -Path $errorLogPath -Value $errorMsg -ErrorAction SilentlyContinue
+            Add-Content -Path $errorLogPath -Value "Stack trace: $($_.ScriptStackTrace)" -ErrorAction SilentlyContinue
+            throw  # Re-throw to be caught by outer catch
         }
     } catch {
         #region agent log - GUI failed, falling back
@@ -384,7 +508,7 @@ if ($envType -eq 'FullOS') {
                 runId        = "verify-run"
                 hypothesisId = "H6"
                 location     = "MiracleBoot.ps1:gui-failed"
-                message      = "GUI mode failed, falling back to TUI"
+                message      = "GUI window launch failed, falling back to TUI"
                 data         = @{
                     Error = $_.ToString()
                     FallbackToTUI = $true
@@ -395,9 +519,12 @@ if ($envType -eq 'FullOS') {
         } catch {}
         #endregion
         
-        Write-Host "`n===============================================================" -ForegroundColor Red
-        Write-Host "GUI MODE FAILED - FALLING BACK TO TUI" -ForegroundColor Red
-        Write-Host "===============================================================" -ForegroundColor Red
+        Write-Host "`n===============================================================" -ForegroundColor Yellow
+        Write-Host "GUI WINDOW LAUNCH FAILED - FALLING BACK TO TUI" -ForegroundColor Yellow
+        Write-Host "===============================================================" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Note: GUI module loaded successfully, but the window failed to launch." -ForegroundColor Gray
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host ""
         Write-Host "Error Details:" -ForegroundColor Yellow
         Write-Host "  $($_.Exception.Message)" -ForegroundColor White

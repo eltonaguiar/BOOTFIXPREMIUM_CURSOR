@@ -1,0 +1,12 @@
+﻿=== GUI LAUNCH TEST ===
+STDOUT:
+[PASS] WPF assemblies loaded
+[WARN] Get-ComprehensiveLogAnalysis not found (LogAnalysis.ps1 may not have loaded)
+[PASS] GUI module loaded successfully, Start-GUI function available
+[PASS] GUI launch test passed
+
+
+STDERR:
+
+
+ExitCode: 0

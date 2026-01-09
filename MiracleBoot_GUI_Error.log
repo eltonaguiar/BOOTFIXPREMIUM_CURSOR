@@ -1,0 +1,4 @@
+2026-01-08 04:29:36: GUI window launch failed: Exception calling "ShowDialog" with "0" argument(s): "Cannot process argument transformation on parameter 'EstimatedTimeRemaining'. Cannot convert null to type "System.TimeSpan"."
+Stack trace: at Start-GUI, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1: line 5158
+at <ScriptBlock>, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1: line 492
+at <ScriptBlock>, <No file>: line 1

@@ -1,0 +1,52 @@
+Super Test started at 01/07/2026 17:48:36
+Repository root : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+Log directory   : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs
+
+[PASS] Syntax check: MiracleBoot.ps1
+[PASS] Syntax check: Helper/WinRepairCore.ps1
+[PASS] Syntax check: Helper/WinRepairTUI.ps1
+[PASS] Syntax check: Helper/WinRepairGUI.ps1
+[PASS] Syntax check: Helper/NetworkDiagnostics.ps1
+[PASS] Syntax check: Helper/KeyboardSymbols.ps1
+[FAIL] Syntax check: Helper/LogAnalysis.ps1 - Found 5 syntax error(s)
+      Line 624, Column 61 : Missing ')' in method call.
+      Line 624, Column 62 : Unexpected token 'AHCI?") | Out-Null
+        $summary.AppendLine("' in expression or statement.
+      Line 774, Column 63 : The string is missing the terminator: ".
+      Line 619, Column 32 : Missing closing '}' in statement block or type definition.
+      Line 535, Column 31 : Missing closing '}' in statement block or type definition.
+SYNTAX VALIDATION PASSED: All 7 PowerShell files have valid syntax
+Testing runtime module loading...
+  Testing: WinRepairCore.ps1...
+    [PASS] Module loaded successfully
+  Testing: NetworkDiagnostics.ps1...
+    [FAIL] Missing functions: Test-NetworkAvailability
+  Testing: KeyboardSymbols.ps1...
+    [PASS] Module loaded successfully
+  Testing: LogAnalysis.ps1...
+    [FAIL] Exception: At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\LogAnalysis.ps1:624 char:61
++         $summary.AppendLine("     • BIOS changed: RAID ↔ AHCI?")  ...
++                                                             ~
+Missing ')' in method call.
+
+At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\LogAnalysis.ps1:624 char:62
++ ... ummary.AppendLine("     • BIOS changed: RAID ↔ AHCI?") | Out-Null
++                                                        ~~~~~~~~~~~~~~~~~~
+Unexpected token 'AHCI?") | Out-Null
+        $summary.AppendLine("' in expression or statement.
+
+At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\LogAnalysis.ps1:774 char:63
++         $result.Message = "Failed to launch Crash Analyzer: $_"
++                                                               ~
+The string is missing the terminator: ".
+
+At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\LogAnalysis.ps1:619 char:32
++     if ($summary.Length -eq 0) {
++                                ~
+Missing closing '}' in statement block or type definition.
+
+At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\LogAnalysis.ps1:535 char:31
++ function Get-RootCauseSummary {
++                               ~
+Missing closing '}' in statement block or type definition.
+    Line: 624

@@ -1,0 +1,49 @@
+﻿=== STDOUT ===
+========================================
+MiracleBoot Code Verification Test
+========================================
+
+Loading core files from: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+
+Helper\WinRepairCore.ps1 loaded successfully
+Testing: Verify WinRepairCore.ps1 Loaded... PASSED
+True
+Testing: Network Functions Available... PASSED
+True
+Testing: Warning System Functions Available... PASSED
+True
+Testing: Install Failure Analysis Function Available... PASSED
+True
+Testing: Get-CommandRiskLevel... PASSED
+True
+Testing: Get-NetworkAdapters... PASSED
+True
+Testing: Show-CommandWarning... PASSED
+True
+Testing: Environment Detection Functions... FAILED
+  Error: MiracleBoot.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+False
+Testing: Load WinRepairTUI.ps1... FAILED
+  Error: Helper\WinRepairTUI.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+False
+Testing: Load WinRepairGUI.ps1 (Syntax Check)... FAILED
+  Error: Helper\WinRepairGUI.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+False
+
+========================================
+Test Summary
+========================================
+Total Tests: 10
+Passed: 7
+Failed: 3
+
+Failed Tests:
+  - Environment Detection Functions: MiracleBoot.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+  - Load WinRepairTUI.ps1: Helper\WinRepairTUI.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+  - Load WinRepairGUI.ps1 (Syntax Check): Helper\WinRepairGUI.ps1 not found at C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test
+
+
+=== STDERR ===
+
+
+ExitCode: 1
