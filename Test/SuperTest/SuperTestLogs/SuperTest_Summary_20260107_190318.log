@@ -1,0 +1,42 @@
+Super Test started at 01/07/2026 19:03:18
+Repository root : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+Log directory   : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs
+
+[PASS] Syntax check: MiracleBoot.ps1
+[PASS] Syntax check: Helper/WinRepairCore.ps1
+[PASS] Syntax check: Helper/WinRepairTUI.ps1
+[PASS] Syntax check: Helper/WinRepairGUI.ps1
+[PASS] Syntax check: Helper/NetworkDiagnostics.ps1
+[PASS] Syntax check: Helper/KeyboardSymbols.ps1
+[PASS] Syntax check: Helper/LogAnalysis.ps1
+SYNTAX VALIDATION PASSED: All 7 PowerShell files have valid syntax
+Testing runtime module loading...
+  Testing: WinRepairCore.ps1...
+    [PASS] Module loaded successfully
+  Testing: NetworkDiagnostics.ps1...
+    [PASS] Module loaded successfully
+  Testing: KeyboardSymbols.ps1...
+    [PASS] Module loaded successfully
+  Testing: LogAnalysis.ps1...
+    [PASS] Module loaded successfully
+RUNTIME MODULE LOADING PASSED: All modules loaded successfully
+Testing GUI launch capability...
+[PASS] GUI launch test passed
+  Log: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs\GUILaunchTest_20260107_190318.log
+Running test: Test-CompleteCodebase
+  Script : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Test-CompleteCodebase.ps1
+  Log    : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs\Test-CompleteCodebase_20260107_190318.log
+  [!] Detected critical pattern 'The term .* is not recognized' in output.
+  Result : FAIL (ExitCode=1, CriticalOutput=True)
+
+Running test: Test-SafeFunctions
+  Script : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Test-SafeFunctions.ps1
+  Log    : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs\Test-SafeFunctions_20260107_190318.log
+  Result : FAIL (ExitCode=1, CriticalOutput=False)
+
+Running test: Test-MiracleBoot
+  Script : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Test-MiracleBoot.ps1
+  Log    : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs\Test-MiracleBoot_20260107_190318.log
+  Result : FAIL (ExitCode=1, CriticalOutput=False)
+
+Super Test completed at 01/07/2026 19:03:20

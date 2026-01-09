@@ -1,0 +1,129 @@
+﻿=== STDOUT ===
+========================================================================
+  MIRACLE BOOT - COMPREHENSIVE AUTOMATED TEST SUITE
+========================================================================
+
+PHASE 1: File Existence Checks
+----------------------------------------
+[FAIL] File exists: MiracleBoot.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\MiracleBoot.ps1
+[FAIL] File exists: Helper\WinRepairCore.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairCore.ps1
+[FAIL] File exists: Helper\WinRepairTUI.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairTUI.ps1
+[FAIL] File exists: Helper\WinRepairGUI.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairGUI.ps1
+[FAIL] File exists: Helper\NetworkDiagnostics.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\NetworkDiagnostics.ps1
+[FAIL] File exists: Helper\KeyboardSymbols.ps1
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\KeyboardSymbols.ps1
+[FAIL] File exists: RunMiracleBoot.cmd
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\RunMiracleBoot.cmd
+[FAIL] File exists: Helper\WinRepairCore.cmd
+      File not found: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairCore.cmd
+
+PHASE 2: Syntax Validation
+----------------------------------------
+
+PHASE 3: Module Loading Tests
+----------------------------------------
+[FAIL] Load KeyboardSymbols.ps1
+      The term 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\KeyboardSymbols.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Load NetworkDiagnostics.ps1
+      The term 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\NetworkDiagnostics.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Load WinRepairCore.ps1
+      The term 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairCore.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Load WinRepairTUI.ps1
+      The term 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairTUI.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Load WinRepairGUI.ps1
+      The term 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Helper\WinRepairGUI.ps1' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Load MiracleBoot.ps1 functions
+      Cannot convert 'System.Object[]' to the type 'System.String' required by parameter 'Command'. Specified method is not supported.
+
+PHASE 4: Function Availability Tests
+----------------------------------------
+[FAIL] Function available: Get-WindowsVolumes
+      Function not found
+[FAIL] Function available: Get-BootChainAnalysis
+      Function not found
+[FAIL] Function available: Get-BootLogAnalysis
+      Function not found
+[FAIL] Function available: Get-WindowsErrorCodeInfo
+      Function not found
+[FAIL] Function available: Get-RepairTemplates
+      Function not found
+[FAIL] Function available: Get-EnvironmentType
+      Function not found
+[FAIL] Function available: Test-PowerShellAvailability
+      Function not found
+
+PHASE 5: Safe Function Execution Tests
+----------------------------------------
+[FAIL] Execute Get-EnvironmentType
+      The term 'Get-EnvironmentType' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Execute Get-WindowsVolumes
+      The term 'Get-WindowsVolumes' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Execute Get-RepairTemplates
+      The term 'Get-RepairTemplates' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Execute Get-WindowsErrorCodeInfo
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Execute Get-BootChainAnalysis
+      The term 'Get-BootChainAnalysis' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+PHASE 6: Common Issue Checks
+----------------------------------------
+
+PHASE 7: Error Code Lookup Tests
+----------------------------------------
+[FAIL] Lookup error code: 0xc000000e
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Lookup error code: 0x80070002
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Lookup error code: 0x0000007B
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Lookup error code: 0xC0000225
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+[FAIL] Lookup error code: 0x80070070
+      The term 'Get-WindowsErrorCodeInfo' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+PHASE 8: Repair Template System Tests
+----------------------------------------
+[FAIL] Get-RepairTemplates
+      The term 'Get-RepairTemplates' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+========================================================================
+  TEST SUMMARY
+========================================================================
+
+Total Tests: 32
+Passed: 0
+Failed: 32
+Warnings: 0
+
+========================================================================
+  SOME TESTS FAILED - REVIEW ERRORS ABOVE
+========================================================================
+
+Failed Tests:
+
+
+=== STDERR ===
+
+
+ExitCode: 1

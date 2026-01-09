@@ -75,25 +75,25 @@ function Get-ComprehensiveLogAnalysis {
     # ============================================
     # TIER 1 - BOOT-CRITICAL CRASH DUMPS
     # ============================================
-    $report.AppendLine("🔥 TIER 1 — BOOT-CRITICAL CRASH DUMPS") | Out-Null
+    $report.AppendLine("TIER 1 - BOOT-CRITICAL CRASH DUMPS") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
     
     $tier1 = Get-Tier1CrashDumps -TargetDrive $TargetDrive
     $result.Tier1 = $tier1
     
     if ($tier1.MemoryDump.Found) {
-        $report.AppendLine("✅ MEMORY.DMP: FOUND at $($tier1.MemoryDump.Path)") | Out-Null
+        $report.AppendLine("[OK] MEMORY.DMP: FOUND at $($tier1.MemoryDump.Path)") | Out-Null
         $report.AppendLine("   Size: $([math]::Round($tier1.MemoryDump.SizeMB, 2)) MB") | Out-Null
         $report.AppendLine("   Modified: $($tier1.MemoryDump.LastModified)") | Out-Null
-        $report.AppendLine("   ⚠️  THIS IS THE HIGHEST PRIORITY DUMP - ANALYZE THIS FIRST!") | Out-Null
+        $report.AppendLine("   [WARN] THIS IS THE HIGHEST PRIORITY DUMP - ANALYZE THIS FIRST!") | Out-Null
         $result.LogFilesFound += $tier1.MemoryDump.Path
     } else {
-        $report.AppendLine("❌ MEMORY.DMP: NOT FOUND at C:\Windows\MEMORY.DMP") | Out-Null
+        $report.AppendLine("[FAIL] MEMORY.DMP: NOT FOUND at C:\Windows\MEMORY.DMP") | Out-Null
         $result.LogFilesMissing += "C:\Windows\MEMORY.DMP"
     }
     
     if ($tier1.LiveKernelReports.Count -gt 0) {
-        $report.AppendLine("✅ LiveKernelReports: FOUND $($tier1.LiveKernelReports.Count) report(s)") | Out-Null
+        $report.AppendLine("[OK] LiveKernelReports: FOUND $($tier1.LiveKernelReports.Count) report(s)") | Out-Null
         foreach ($reportItem in $tier1.LiveKernelReports | Select-Object -First 5) {
             $report.AppendLine("   - $($reportItem.Path) ($($reportItem.Category))") | Out-Null
             $result.LogFilesFound += $reportItem.Path
@@ -102,18 +102,18 @@ function Get-ComprehensiveLogAnalysis {
             $report.AppendLine("   ... and $($tier1.LiveKernelReports.Count - 5) more") | Out-Null
         }
     } else {
-        $report.AppendLine("❌ LiveKernelReports: NOT FOUND in C:\Windows\LiveKernelReports\") | Out-Null
+        $report.AppendLine("[FAIL] LiveKernelReports: NOT FOUND in C:\Windows\LiveKernelReports\") | Out-Null
         $result.LogFilesMissing += "C:\Windows\LiveKernelReports\"
     }
     
     if ($tier1.MiniDumps.Count -gt 0) {
-        $report.AppendLine("✅ Minidumps: FOUND $($tier1.MiniDumps.Count) dump(s)") | Out-Null
+        $report.AppendLine("[OK] Minidumps: FOUND $($tier1.MiniDumps.Count) dump(s)") | Out-Null
         foreach ($dump in $tier1.MiniDumps | Select-Object -First 3) {
             $report.AppendLine("   - $($dump.Path) ($($dump.Date))") | Out-Null
             $result.LogFilesFound += $dump.Path
         }
     } else {
-        $report.AppendLine("⚠️  Minidumps: NOT FOUND (low priority for boot failures)") | Out-Null
+        $report.AppendLine("[WARN] Minidumps: NOT FOUND (low priority for boot failures)") | Out-Null
     }
     
     $report.AppendLine("") | Out-Null
@@ -121,28 +121,28 @@ function Get-ComprehensiveLogAnalysis {
     # ============================================
     # TIER 2 - BOOT PIPELINE LOGS
     # ============================================
-    $report.AppendLine("🔥 TIER 2 — BOOT PIPELINE LOGS") | Out-Null
+    $report.AppendLine("TIER 2 - BOOT PIPELINE LOGS") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
     
     $tier2 = Get-Tier2BootPipelineLogs -TargetDrive $TargetDrive
     $result.Tier2 = $tier2
     
     if ($tier2.SetupLogs.Count -gt 0) {
-        $report.AppendLine("✅ Setup Logs: FOUND $($tier2.SetupLogs.Count) log file(s)") | Out-Null
+        $report.AppendLine("[OK] Setup Logs: FOUND $($tier2.SetupLogs.Count) log file(s)") | Out-Null
         foreach ($log in $tier2.SetupLogs) {
             $report.AppendLine("   - $($log.Path)") | Out-Null
             $result.LogFilesFound += $log.Path
         }
     } else {
-        $report.AppendLine("❌ Setup Logs: NOT FOUND (check Panther directories)") | Out-Null
+        $report.AppendLine("[FAIL] Setup Logs: NOT FOUND (check Panther directories)") | Out-Null
     }
     
     if ($tier2.BootLog.Found) {
-        $report.AppendLine("✅ Boot Log (ntbtlog.txt): FOUND") | Out-Null
+        $report.AppendLine("[OK] Boot Log (ntbtlog.txt): FOUND") | Out-Null
         $report.AppendLine("   - $($tier2.BootLog.Path)") | Out-Null
         $result.LogFilesFound += $tier2.BootLog.Path
     } else {
-        $report.AppendLine("⚠️  Boot Log (ntbtlog.txt): NOT FOUND (boot logging may not be enabled)") | Out-Null
+        $report.AppendLine("[WARN] Boot Log (ntbtlog.txt): NOT FOUND (boot logging may not be enabled)") | Out-Null
     }
     
     $report.AppendLine("") | Out-Null
@@ -150,31 +150,31 @@ function Get-ComprehensiveLogAnalysis {
     # ============================================
     # TIER 3 - EVENT LOGS
     # ============================================
-    $report.AppendLine("🔥 TIER 3 — EVENT LOGS") | Out-Null
+    $report.AppendLine("TIER 3 - EVENT LOGS") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
     
     $tier3 = Get-Tier3EventLogs -TargetDrive $TargetDrive
     $result.Tier3 = $tier3
     
     if ($tier3.SystemLog.Found) {
-        $report.AppendLine("✅ System Event Log: FOUND") | Out-Null
+        $report.AppendLine("[OK] System Event Log: FOUND") | Out-Null
         $report.AppendLine("   - $($tier3.SystemLog.Path)") | Out-Null
         $report.AppendLine("   - Events analyzed: $($tier3.SystemLog.EventCount)") | Out-Null
         if ($tier3.SystemLog.CriticalEvents.Count -gt 0) {
-            $report.AppendLine("   - ⚠️  CRITICAL EVENTS: $($tier3.SystemLog.CriticalEvents.Count)") | Out-Null
+            $report.AppendLine("   - [WARN] CRITICAL EVENTS: $($tier3.SystemLog.CriticalEvents.Count)") | Out-Null
         }
         $result.LogFilesFound += $tier3.SystemLog.Path
     } else {
-        $report.AppendLine("❌ System Event Log: NOT FOUND") | Out-Null
+        $report.AppendLine("[FAIL] System Event Log: NOT FOUND") | Out-Null
         $result.LogFilesMissing += "C:\Windows\System32\winevt\Logs\System.evtx"
     }
     
     if ($tier3.SrtTrail.Found) {
-        $report.AppendLine("✅ SrtTrail.txt: FOUND") | Out-Null
+        $report.AppendLine("[OK] SrtTrail.txt: FOUND") | Out-Null
         $report.AppendLine("   - $($tier3.SrtTrail.Path)") | Out-Null
         $result.LogFilesFound += $tier3.SrtTrail.Path
     } else {
-        $report.AppendLine("⚠️  SrtTrail.txt: NOT FOUND") | Out-Null
+        $report.AppendLine("[WARN] SrtTrail.txt: NOT FOUND") | Out-Null
     }
     
     $report.AppendLine("") | Out-Null
@@ -182,29 +182,29 @@ function Get-ComprehensiveLogAnalysis {
     # ============================================
     # TIER 4 - BOOT STRUCTURE
     # ============================================
-    $report.AppendLine("🔥 TIER 4 — BOOT STRUCTURE") | Out-Null
+    $report.AppendLine("TIER 4 - BOOT STRUCTURE") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
     
     $tier4 = Get-Tier4BootStructure -TargetDrive $TargetDrive
     $result.Tier4 = $tier4
     
     if ($tier4.BCD.Found) {
-        $report.AppendLine("✅ BCD Store: FOUND") | Out-Null
+        $report.AppendLine("[OK] BCD Store: FOUND") | Out-Null
         $report.AppendLine("   - Status: $($tier4.BCD.Status)") | Out-Null
         if ($tier4.BCD.Issues.Count -gt 0) {
-            $report.AppendLine("   - ⚠️  ISSUES DETECTED: $($tier4.BCD.Issues.Count)") | Out-Null
+            $report.AppendLine("   - [WARN] ISSUES DETECTED: $($tier4.BCD.Issues.Count)") | Out-Null
             foreach ($issue in $tier4.BCD.Issues) {
                 $report.AppendLine("     • $issue") | Out-Null
             }
         }
     } else {
-        $report.AppendLine("❌ BCD Store: NOT FOUND or CORRUPT") | Out-Null
+        $report.AppendLine("[FAIL] BCD Store: NOT FOUND or CORRUPT") | Out-Null
     }
     
     if ($tier4.StorageDrivers.Count -gt 0) {
-        $report.AppendLine("✅ Storage Drivers: ANALYZED") | Out-Null
+        $report.AppendLine("[OK] Storage Drivers: ANALYZED") | Out-Null
         foreach ($driver in $tier4.StorageDrivers) {
-            $status = if ($driver.StartValue -eq 0) { "✅" } elseif ($driver.StartValue -eq 4) { "❌ DISABLED" } else { "⚠️" }
+            $status = if ($driver.StartValue -eq 0) { "[OK]" } elseif ($driver.StartValue -eq 4) { "[FAIL] DISABLED" } else { "[WARN]" }
             $report.AppendLine("   $status $($driver.Name): Start=$($driver.StartValue)") | Out-Null
         }
     }
@@ -214,7 +214,7 @@ function Get-ComprehensiveLogAnalysis {
     # ============================================
     # ROOT CAUSE ANALYSIS
     # ============================================
-    $report.AppendLine("🧠 ROOT CAUSE ANALYSIS") | Out-Null
+    $report.AppendLine("ROOT CAUSE ANALYSIS") | Out-Null
     $report.AppendLine("-" * 80) | Out-Null
     
     $rootCause = Get-RootCauseSummary -Tier1 $tier1 -Tier2 $tier2 -Tier3 $tier3 -Tier4 $tier4
@@ -225,7 +225,7 @@ function Get-ComprehensiveLogAnalysis {
     $report.AppendLine("") | Out-Null
     
     if ($rootCause.Recommendations.Count -gt 0) {
-        $report.AppendLine("📋 RECOMMENDATIONS:") | Out-Null
+        $report.AppendLine("RECOMMENDATIONS:") | Out-Null
         $report.AppendLine("-" * 80) | Out-Null
         $counter = 1
         foreach ($rec in $rootCause.Recommendations) {
@@ -240,11 +240,11 @@ function Get-ComprehensiveLogAnalysis {
         try {
             $exportResult = Export-LogCollection -TargetDrive $TargetDrive -OutputPath $ExportPath -Tier1 $tier1 -Tier2 $tier2 -Tier3 $tier3
             if ($exportResult.Success) {
-                $report.AppendLine("📦 Logs exported to: $ExportPath") | Out-Null
+                $report.AppendLine("[INFO] Logs exported to: $ExportPath") | Out-Null
                 $result.ExportPath = $ExportPath
             }
         } catch {
-            $report.AppendLine("⚠️  Export failed: $_") | Out-Null
+            $report.AppendLine("[WARN] Export failed: $_") | Out-Null
         }
     }
     
@@ -549,7 +549,7 @@ function Get-RootCauseSummary {
     
     # Decision tree based on findings
     if ($Tier1.MemoryDump.Found) {
-        $summary.AppendLine("🎯 PRIMARY FINDING: MEMORY.DMP exists - THIS IS THE HIGHEST PRIORITY") | Out-Null
+        $summary.AppendLine("[CRITICAL] PRIMARY FINDING: MEMORY.DMP exists - THIS IS THE HIGHEST PRIORITY") | Out-Null
         $summary.AppendLine("   → Analyze MEMORY.DMP first using crashanalyze.exe or WinDbg") | Out-Null
         $summary.AppendLine("   → This dump contains kernel + storage stack information") | Out-Null
         $summary.AppendLine("   → Best for: INACCESSIBLE_BOOT_DEVICE, VMD/NVMe/RST issues") | Out-Null
@@ -561,7 +561,7 @@ function Get-RootCauseSummary {
         $storageReports = $Tier1.LiveKernelReports | Where-Object { $_.Category -eq "STORAGE" }
         if ($storageReports.Count -gt 0) {
             $summary.AppendLine("") | Out-Null
-            $summary.AppendLine("🎯 CRITICAL: LiveKernelReports STORAGE dumps found") | Out-Null
+            $summary.AppendLine("[CRITICAL] LiveKernelReports STORAGE dumps found") | Out-Null
             $summary.AppendLine("   → These indicate storage driver hangs before full BSOD") | Out-Null
             $summary.AppendLine("   → Very common with INACCESSIBLE_BOOT_DEVICE") | Out-Null
             $summary.AppendLine("   → Often exists even when Minidump is empty") | Out-Null
@@ -571,7 +571,7 @@ function Get-RootCauseSummary {
     
     if ($Tier2.SetupLogs.Count -gt 0) {
         $summary.AppendLine("") | Out-Null
-        $summary.AppendLine("📋 Setup logs found - check for explicit boot failure reasons") | Out-Null
+        $summary.AppendLine("[INFO] Setup logs found - check for explicit boot failure reasons") | Out-Null
         $summary.AppendLine("   → Look for: 'Boot environment mismatch', 'Edition/build family mismatch'") | Out-Null
         $summary.AppendLine("   → Look for: 'CBS state invalid', 'Boot device not accessible'") | Out-Null
         $recommendations += "Review setupact.log and setuperr.log for explicit failure messages"
@@ -579,7 +579,7 @@ function Get-RootCauseSummary {
     
     if ($Tier2.BootLog.Found) {
         $summary.AppendLine("") | Out-Null
-        $summary.AppendLine("📋 Boot log (ntbtlog.txt) found - shows driver load sequence") | Out-Null
+        $summary.AppendLine("[INFO] Boot log (ntbtlog.txt) found - shows driver load sequence") | Out-Null
         $summary.AppendLine("   → Check which driver was last loaded before crash") | Out-Null
         $summary.AppendLine("   → If last driver is storage → bingo!") | Out-Null
         $recommendations += "Analyze ntbtlog.txt to identify last loaded driver before crash"
@@ -587,7 +587,7 @@ function Get-RootCauseSummary {
     
     if ($Tier3.SystemLog.Found -and $Tier3.SystemLog.CriticalEvents.Count -gt 0) {
         $summary.AppendLine("") | Out-Null
-        $summary.AppendLine("⚠️  Critical events found in System event log") | Out-Null
+        $summary.AppendLine("[WARN] Critical events found in System event log") | Out-Null
         $summary.AppendLine("   → Event 1001: BugCheck information") | Out-Null
         $summary.AppendLine("   → Event 41: Kernel-Power (unexpected shutdown)") | Out-Null
         $summary.AppendLine("   → Storage-related errors indicate driver/controller issues") | Out-Null
@@ -596,7 +596,7 @@ function Get-RootCauseSummary {
     
     if ($Tier4.BCD.Issues.Count -gt 0) {
         $summary.AppendLine("") | Out-Null
-        $summary.AppendLine("❌ BCD ISSUES DETECTED") | Out-Null
+        $summary.AppendLine("[FAIL] BCD ISSUES DETECTED") | Out-Null
         foreach ($issue in $Tier4.BCD.Issues) {
             $summary.AppendLine("   → $issue") | Out-Null
         }
@@ -607,7 +607,7 @@ function Get-RootCauseSummary {
     $disabledStorageDrivers = $Tier4.StorageDrivers | Where-Object { $_.StartValue -eq 4 }
     if ($disabledStorageDrivers.Count -gt 0) {
         $summary.AppendLine("") | Out-Null
-        $summary.AppendLine("❌ CRITICAL: Storage driver(s) DISABLED in registry") | Out-Null
+        $summary.AppendLine("[FAIL] CRITICAL: Storage driver(s) DISABLED in registry") | Out-Null
         foreach ($driver in $disabledStorageDrivers) {
             $summary.AppendLine("   → $($driver.Name): Start=4 (DISABLED)") | Out-Null
         }
@@ -617,11 +617,11 @@ function Get-RootCauseSummary {
     }
     
     if ($summary.Length -eq 0) {
-        $summary.AppendLine("⚠️  No critical issues detected in analyzed logs") | Out-Null
+        $summary.AppendLine("[WARN] No critical issues detected in analyzed logs") | Out-Null
         $summary.AppendLine("   → Check hardware context (TIER 5):") | Out-Null
         $summary.AppendLine("     • Image restored from SATA → NVMe?") | Out-Null
         $summary.AppendLine("     • VMD ON → OFF (or vice versa)?") | Out-Null
-        $summary.AppendLine("     • BIOS changed: RAID ↔ AHCI?") | Out-Null
+        $summary.AppendLine("     • BIOS changed: RAID <-> AHCI?") | Out-Null
         $summary.AppendLine("     • Disk moved to different NVMe slot?") | Out-Null
         $summary.AppendLine("     • Secure Boot state changed?") | Out-Null
         $recommendations += "Check hardware/BIOS configuration changes"
@@ -720,7 +720,7 @@ function Open-EventViewer {
 function Start-CrashAnalyzer {
     <#
     .SYNOPSIS
-    Launches crashanalyze.exe with specified dump file.
+    Launches crashanalyze.exe with specified dump file, or provides alternative analysis methods.
     
     .PARAMETER DumpPath
     Path to the crash dump file to analyze
@@ -736,13 +736,14 @@ function Start-CrashAnalyzer {
     $result = @{
         Success = $false
         Message = ""
+        AlternativeMethods = @()
     }
     
     # Try to find crashanalyze.exe
     if (-not $CrashAnalyzerPath) {
         $possiblePaths = @(
             "$PSScriptRoot\CrashAnalyzer\crashanalyze.exe",
-            "$PSScriptRoot\..\Helper\CrashAnalyzer\crashanalyze.exe",
+            "$PSScriptRoot\..\Helper\CrashAnalyzer\crashAnalyzer.exe",
             "I:\Dart Crash analyzer\v10\crashanalyze.exe"
         )
         
@@ -754,24 +755,44 @@ function Start-CrashAnalyzer {
         }
     }
     
-    if (-not $CrashAnalyzerPath -or -not (Test-Path $CrashAnalyzerPath)) {
-        $result.Message = "crashanalyze.exe not found. Please specify the path to crashanalyze.exe"
-        return $result
+    # Try to launch crashanalyze.exe if found
+    if ($CrashAnalyzerPath -and (Test-Path $CrashAnalyzerPath)) {
+        try {
+            if ($DumpPath -and (Test-Path $DumpPath)) {
+                Start-Process -FilePath $CrashAnalyzerPath -ArgumentList "`"$DumpPath`"" -WorkingDirectory (Split-Path $CrashAnalyzerPath -Parent) -ErrorAction Stop
+                $result.Success = $true
+                $result.Message = "Crash Analyzer launched with dump file: $DumpPath"
+                return $result
+            } else {
+                Start-Process -FilePath $CrashAnalyzerPath -WorkingDirectory (Split-Path $CrashAnalyzerPath -Parent) -ErrorAction Stop
+                $result.Success = $true
+                $result.Message = "Crash Analyzer launched"
+                return $result
+            }
+        } catch {
+            # If launch fails (e.g., platform incompatibility), provide alternatives
+            $result.Message = "crashanalyze.exe found but cannot launch (platform incompatibility or other error). Providing alternative methods..."
+        }
     }
     
-    try {
-        if ($DumpPath -and (Test-Path $DumpPath)) {
-            Start-Process -FilePath $CrashAnalyzerPath -ArgumentList "`"$DumpPath`"" -WorkingDirectory (Split-Path $CrashAnalyzerPath -Parent)
-            $result.Success = $true
-            $result.Message = "Crash Analyzer launched with dump file: $DumpPath"
-        } else {
-            # Launch without arguments (user can open file from UI)
-            Start-Process -FilePath $CrashAnalyzerPath -WorkingDirectory (Split-Path $CrashAnalyzerPath -Parent)
-            $result.Success = $true
-            $result.Message = "Crash Analyzer launched"
+    # Provide alternative analysis methods
+    $result.AlternativeMethods = @(
+        "PowerShell-based dump analysis (basic info extraction)",
+        "WinDbg instructions and commands",
+        "Manual dump file location and size information"
+    )
+    
+    # Try PowerShell-based analysis if dump file provided
+    if ($DumpPath -and (Test-Path $DumpPath)) {
+        try {
+            $dumpInfo = Get-Item $DumpPath
+            $result.Message = "Alternative: Dump file found at $DumpPath`nSize: $([math]::Round($dumpInfo.Length / 1MB, 2)) MB`n`nTo analyze:`n1. Install WinDbg from Windows SDK`n2. Run: windbg -z `"$DumpPath`"`n3. Or use: Get-WinEvent -Path `"$DumpPath`" (for .evtx files)"
+            $result.Success = $true  # Consider this success since we provided alternatives
+        } catch {
+            $result.Message = "Dump file found but cannot analyze. Install WinDbg or use Event Viewer for .evtx files."
         }
-    } catch {
-        $result.Message = "Failed to launch Crash Analyzer: $_"
+    } else {
+        $result.Message = "crashanalyze.exe not available. Alternative methods:`n`n1. Install WinDbg (Windows SDK):`n   - Download from Microsoft`n   - Run: windbg -z `"<dump_file>`"`n`n2. Use Event Viewer for .evtx files:`n   - Open Event Viewer`n   - Navigate to Windows Logs > System`n`n3. Check dump file location:`n   - MEMORY.DMP: C:\Windows\MEMORY.DMP`n   - Minidumps: C:\Windows\Minidump\`n   - LiveKernelReports: C:\Windows\LiveKernelReports\"
     }
     
     return $result

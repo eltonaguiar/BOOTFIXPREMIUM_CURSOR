@@ -1,0 +1,21 @@
+Super Test started at 01/07/2026 17:49:11
+Repository root : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1
+Log directory   : C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\SuperTestLogs
+
+[PASS] Syntax check: MiracleBoot.ps1
+[PASS] Syntax check: Helper/WinRepairCore.ps1
+[PASS] Syntax check: Helper/WinRepairTUI.ps1
+[PASS] Syntax check: Helper/WinRepairGUI.ps1
+[PASS] Syntax check: Helper/NetworkDiagnostics.ps1
+[PASS] Syntax check: Helper/KeyboardSymbols.ps1
+[PASS] Syntax check: Helper/LogAnalysis.ps1
+SYNTAX VALIDATION PASSED: All 7 PowerShell files have valid syntax
+Testing runtime module loading...
+  Testing: WinRepairCore.ps1...
+    [PASS] Module loaded successfully
+  Testing: NetworkDiagnostics.ps1...
+    [FAIL] Missing functions: Test-NetworkAvailability
+  Testing: KeyboardSymbols.ps1...
+    [PASS] Module loaded successfully
+  Testing: LogAnalysis.ps1...
+    [PASS] Module loaded successfully

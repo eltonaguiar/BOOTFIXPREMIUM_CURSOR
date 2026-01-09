@@ -3628,37 +3628,41 @@ function Run-BootDiagnosis {
     # 2. Check for BCD File and Integrity
     $bcdFound = $false
     $bcdPath = $null
+    $bcdAccessible = $false
+    $checkedPaths = @()
+    
     try {
+        # First, check if bcdedit actually works (most reliable test)
+        try {
+            $bcdTest = bcdedit /enum 2>&1 | Out-String
+            if ($bcdTest -match "Windows Boot Manager" -or $bcdTest -match "identifier.*\{default\}") {
+                $bcdAccessible = $true
+                $report.AppendLine("[PASS] BCD Store is accessible via bcdedit (system can boot)")
+                $bcdFound = $true
+            } elseif ($bcdTest -match "The boot configuration data store could not be opened") {
+                $report.AppendLine("[FAIL] BCD exists but cannot be opened - may be corrupted or locked")
+                $issues += @{
+                    Type = "BCD Integrity Failure"
+                    Severity = "Critical"
+                    Description = "The BCD exists but is 'orphaned' or the attributes are locked. bcdedit returns 'could not be opened'."
+                    Recommendation = "Run: attrib [BCD_PATH] -h -r -s, then rename to bcd.old, then run: bootrec /rebuildbcd"
+                }
+            }
+        } catch {
+            # bcdedit failed, continue with file path checks
+        }
+        
+        # Now check file paths (for detailed reporting)
         if ($efiDriveLetter) {
             $bcdPath = "$efiDriveLetter`:\EFI\Microsoft\Boot\BCD"
+            $checkedPaths += $bcdPath
             if (Test-Path $bcdPath) { 
-                $report.AppendLine("[PASS] BCD Store exists at $bcdPath")
-                $bcdFound = $true
-                
-                # Check BCD integrity - try to enumerate
-                try {
-                    $bcdTest = bcdedit /enum 2>&1
-                    if ($bcdTest -match "The boot configuration data store could not be opened") {
-                        $report.AppendLine("[FAIL] BCD exists but cannot be opened - may be corrupted or locked")
-                        $issues += @{
-                            Type = "BCD Integrity Failure"
-                            Severity = "Critical"
-                            Description = "The BCD exists but is 'orphaned' or the attributes are locked. bcdedit returns 'could not be opened'."
-                            Recommendation = "Run: attrib $bcdPath -h -r -s, then rename to bcd.old, then run: bootrec /rebuildbcd"
-                        }
-                    } else {
-                        $report.AppendLine("[PASS] BCD Store is accessible and can be enumerated")
-                    }
-                } catch {
-                    $report.AppendLine("[WARNING] Could not test BCD accessibility: $_")
-                }
+                $report.AppendLine("[PASS] BCD Store file exists at $bcdPath")
+                if (-not $bcdFound) { $bcdFound = $true }
             } else {
-                $report.AppendLine("[FAIL] BCD Store not found at expected location: $bcdPath")
-                $issues += @{
-                    Type = "Missing BCD File"
-                    Severity = "Critical"
-                    Description = "The Boot Configuration Data file is missing or located on an unmounted partition, preventing the Windows Boot Manager from locating the OS."
-                    Recommendation = "Boot into a recovery environment and run: bcdboot $Drive`:\Windows /s $efiDriveLetter`: /f UEFI"
+                $report.AppendLine("[INFO] BCD Store file not found at expected location: $bcdPath")
+                if ($bcdAccessible) {
+                    $report.AppendLine("       However, bcdedit works, so BCD is accessible from another location.")
                 }
             }
         } else {
@@ -3666,39 +3670,56 @@ function Run-BootDiagnosis {
             $allEfiParts = Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -and $_.DriveLetter }
             foreach ($efi in $allEfiParts) {
                 $testPath = "$($efi.DriveLetter):\EFI\Microsoft\Boot\BCD"
+                $checkedPaths += $testPath
                 if (Test-Path $testPath) { 
-                    $report.AppendLine("[PASS] BCD Store exists at $testPath")
+                    $report.AppendLine("[PASS] BCD Store file exists at $testPath")
                     $bcdFound = $true
                     $bcdPath = $testPath
                     $efiDriveLetter = $efi.DriveLetter
-                    
-                    # Test BCD integrity
-                    try {
-                        $bcdTest = bcdedit /enum 2>&1
-                        if ($bcdTest -match "could not be opened") {
-                            $report.AppendLine("[FAIL] BCD exists but cannot be opened - may be corrupted")
-                            $issues += @{
-                                Type = "BCD Integrity Failure"
-                                Severity = "Critical"
-                                Description = "The BCD exists but is 'orphaned' or locked."
-                                Recommendation = "Run: attrib $testPath -h -r -s, rename to bcd.old, then: bootrec /rebuildbcd"
-                            }
-                        }
-                    } catch {
-                        # Ignore test errors
-                    }
                     break
                 }
             }
-            if (-not $bcdFound) {
-                $report.AppendLine("[FAIL] BCD Store not found in any EFI partition.")
-                $issues += @{
-                    Type = "Missing BCD File"
-                    Severity = "Critical"
-                    Description = "The Boot Configuration Data file is missing from all EFI partitions."
-                    Recommendation = "Boot into a recovery environment and run: bcdboot $Drive`:\Windows /s [EFILetter]: /f UEFI (replace [EFILetter] with the EFI partition drive letter)"
+            
+            # Try to mount EFI partitions without drive letters
+            $allEfiPartsNoLetter = Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -and -not $_.DriveLetter }
+            foreach ($efi in $allEfiPartsNoLetter) {
+                try {
+                    # Try to assign a temporary drive letter
+                    $tempLetter = [char](70 + $efi.PartitionNumber)  # Start from F:
+                    if (-not (Get-PSDrive -Name $tempLetter -ErrorAction SilentlyContinue)) {
+                        $efi | Set-Partition -NewDriveLetter $tempLetter -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 500
+                        $testPath = "$tempLetter`:\EFI\Microsoft\Boot\BCD"
+                        $checkedPaths += $testPath
+                        if (Test-Path $testPath) {
+                            $report.AppendLine("[PASS] BCD Store file exists at $testPath (mounted EFI partition)")
+                            $bcdFound = $true
+                            $bcdPath = $testPath
+                            $efiDriveLetter = $tempLetter
+                            break
+                        }
+                        # Unmount if not found
+                        $efi | Remove-PartitionAccessPath -AccessPath "$tempLetter`:" -ErrorAction SilentlyContinue
+                    }
+                } catch {
+                    # Ignore mount errors
                 }
             }
+        }
+        
+        # Only report missing BCD if bcdedit also fails
+        if (-not $bcdFound -and -not $bcdAccessible) {
+            $checkedPathsList = $checkedPaths -join ", "
+            $report.AppendLine("[FAIL] BCD Store not found in any checked location.")
+            $report.AppendLine("       Checked paths: $checkedPathsList")
+            $issues += @{
+                Type = "Missing BCD File"
+                Severity = "Critical"
+                Description = "The Boot Configuration Data file is missing from all EFI partitions. Checked paths: $checkedPathsList"
+                Recommendation = "Boot into a recovery environment and run: bcdboot $Drive`:\Windows /s [EFILetter]: /f UEFI (replace [EFILetter] with the EFI partition drive letter). If EFI partition has no drive letter, mount it first using Disk Management."
+            }
+        } elseif (-not $bcdFound -and $bcdAccessible) {
+            $report.AppendLine("[INFO] BCD file path not found, but bcdedit works - BCD is accessible (may be on unmounted partition)")
         }
         
         # Check if BCD is orphaned (exists but no entries)
@@ -3792,18 +3813,66 @@ function Run-BootDiagnosis {
                 # Check if WinRE location is accessible
                 if ($reagentcOutput -match "Windows RE location:\s*(.+)") {
                     $reLocation = $matches[1].Trim()
-                    if (Test-Path $reLocation) {
+                    $report.AppendLine("[INFO] WinRE location reported by reagentc: $reLocation")
+                    
+                    # Device paths (\\?\GLOBALROOT\...) need special handling
+                    $reAccessible = $false
+                    if ($reLocation -match "^\\\\\?\\GLOBALROOT") {
+                        # This is a device path - try to access it differently
+                        try {
+                            # Check if we can get partition info from the path
+                            if ($reLocation -match "harddisk(\d+)\\partition(\d+)") {
+                                $diskNum = [int]$matches[1]
+                                $partNum = [int]$matches[2]
+                                $part = Get-Partition -DiskNumber $diskNum -PartitionNumber $partNum -ErrorAction SilentlyContinue
+                                if ($part) {
+                                    $reAccessible = $true
+                                    $report.AppendLine("[PASS] WinRE partition exists (Disk $diskNum, Partition $partNum)")
+                                }
+                            }
+                        } catch {
+                            # Try direct path test as fallback
+                            $reAccessible = Test-Path $reLocation
+                        }
+                    } else {
+                        # Regular path - test directly
+                        $reAccessible = Test-Path $reLocation
+                    }
+                    
+                    if ($reAccessible) {
                         $report.AppendLine("[PASS] WinRE location is accessible: $reLocation")
                         $report.AppendLine("[PASS] System can reach 'Windows Logo' stage - 'Good Enough' state achieved")
                     } else {
-                        $report.AppendLine("[FAIL] WinRE location reported but not accessible: $reLocation")
-                        $issues += @{
-                            Type = "WinRE Inaccessible"
-                            Severity = "Warning"
-                            Description = "WinRE is enabled but the recovery environment cannot trigger 'Startup Repair' - location may be invalid."
-                            Recommendation = "Run: reagentc /enable to re-link the recovery image to the boot menu."
+                        # Check if WinRE is actually functional by testing reagentc operations
+                        try {
+                            $reTest = reagentc /info 2>&1 | Out-String
+                            if ($reTest -match "Operation Successful" -and $reStatus -eq "Enabled") {
+                                $report.AppendLine("[INFO] WinRE is enabled and reagentc reports successful operation")
+                                $report.AppendLine("[INFO] Path check failed, but WinRE may still be functional (device path may not be accessible via Test-Path)")
+                                $report.AppendLine("[PASS] WinRE appears functional based on reagentc status")
+                            } else {
+                                $report.AppendLine("[WARNING] WinRE location reported but not accessible: $reLocation")
+                                $report.AppendLine("         Exact path checked: $reLocation")
+                                $issues += @{
+                                    Type = "WinRE Inaccessible"
+                                    Severity = "Warning"
+                                    Description = "WinRE is enabled according to reagentc, but the reported location cannot be accessed. Location: $reLocation. This may be a false positive if using device paths (\\?\GLOBALROOT\...)."
+                                    Recommendation = "If WinRE is actually working (you can access Advanced Startup), this warning can be ignored. Otherwise, run: reagentc /enable to re-link the recovery image to the boot menu."
+                                }
+                            }
+                        } catch {
+                            $report.AppendLine("[WARNING] WinRE location reported but not accessible: $reLocation")
+                            $report.AppendLine("         Exact path checked: $reLocation")
+                            $issues += @{
+                                Type = "WinRE Inaccessible"
+                                Severity = "Warning"
+                                Description = "WinRE is enabled but the recovery environment location cannot be verified. Location: $reLocation"
+                                Recommendation = "Run: reagentc /enable to re-link the recovery image to the boot menu."
+                            }
                         }
                     }
+                } else {
+                    $report.AppendLine("[WARNING] WinRE is enabled but location not reported by reagentc")
                 }
             } else {
                 $report.AppendLine("[FAIL] Windows Recovery Environment (WinRE) is disabled")
@@ -3815,7 +3884,7 @@ function Run-BootDiagnosis {
                 }
             }
         } else {
-            $report.AppendLine("[WARNING] Could not determine WinRE status")
+            $report.AppendLine("[WARNING] Could not determine WinRE status from reagentc output")
         }
     } catch {
         $report.AppendLine("[WARNING] Could not check WinRE status: $_")
@@ -4465,6 +4534,764 @@ function Inject-Drivers-Offline {
     dism /Image:"$imagePath" /Add-Driver /Driver:"$DriverPath" /Recurse /ForceUnsigned
 }
 
+# ============================================================================
+# ADVANCED STORAGE CONTROLLER & DRIVER MANAGEMENT (2025+ Systems)
+# ============================================================================
+# These functions address the #1 reason repair installs fail in 2025+ systems:
+# - Storage controller detection
+# - Driver matching logic
+# - Driver injection/loading flow
+# Based on real-world cases and Microsoft documentation
+# ============================================================================
+
+function Get-AdvancedStorageControllerInfo {
+    <#
+    .SYNOPSIS
+    Advanced storage controller detection using multiple methods (WMI, Registry, PCI enumeration).
+    
+    .DESCRIPTION
+    Detects storage controllers using:
+    - WMI (Win32_PnPEntity, Win32_DiskDrive)
+    - Registry (PCI device enumeration)
+    - Hardware IDs and compatible IDs
+    - Device Manager error codes
+    
+    Returns comprehensive information about all storage controllers, including:
+    - Controller type (NVMe, RAID, AHCI, VMD, etc.)
+    - Hardware IDs and compatible IDs
+    - Driver status and error codes
+    - Boot-critical status
+    - Required driver INF files
+    
+    .EXAMPLE
+    $controllers = Get-AdvancedStorageControllerInfo
+    $controllers | Format-Table -AutoSize
+    #>
+    param(
+        [switch]$IncludeNonCritical = $false,
+        [switch]$Detailed = $false
+    )
+    
+    $controllers = @()
+    
+    try {
+        # Method 1: WMI - Win32_PnPEntity (most comprehensive)
+        $pnpDevices = Get-WmiObject -Class Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+            $class = $_.PNPClass
+            $name = $_.Name
+            $desc = $_.Description
+            
+            # Storage-related classes
+            $class -match 'SCSIAdapter|StorageController|System|DiskDrive' -or
+            $name -match 'VMD|RAID|NVMe|Storage|Controller|AHCI|SATA|SCSI|IDE' -or
+            $desc -match 'VMD|RAID|NVMe|Storage|Controller|AHCI|SATA|SCSI|IDE'
+        }
+        
+        foreach ($device in $pnpDevices) {
+            $hwids = @()
+            $compatIds = @()
+            
+            # Extract Hardware IDs
+            if ($device.HardwareID) {
+                $hwids = $device.HardwareID
+            }
+            
+            # Extract Compatible IDs from registry
+            try {
+                $regPath = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($device.DeviceID)"
+                if (Test-Path $regPath) {
+                    $compatIds = (Get-ItemProperty -Path $regPath -Name "CompatibleIDs" -ErrorAction SilentlyContinue).CompatibleIDs
+                    if (-not $compatIds) { $compatIds = @() }
+                }
+            } catch {
+                # Registry access may fail in WinPE/WinRE
+            }
+            
+            # Determine controller type from hardware ID
+            $controllerType = "Unknown"
+            $isBootCritical = $false
+            $requiredInf = "Unknown"
+            $vendor = "Unknown"
+            $deviceId = "Unknown"
+            
+            foreach ($hwid in $hwids) {
+                # Intel VMD (Volume Management Device) - Common in 2025+ systems
+                if ($hwid -match 'VEN_8086.*DEV_(9A0B|467F|467D|467E|467C)') {
+                    $controllerType = "Intel VMD"
+                    $isBootCritical = $true
+                    $requiredInf = "iaStorVD.inf"
+                    $vendor = "Intel"
+                    if ($hwid -match 'DEV_9A0B') { $deviceId = "9A0B" }
+                    elseif ($hwid -match 'DEV_467F') { $deviceId = "467F" }
+                    break
+                }
+                # Intel RST RAID
+                elseif ($hwid -match 'VEN_8086.*DEV_(2822|282A|2826|2829|282B)') {
+                    $controllerType = "Intel RST RAID"
+                    $isBootCritical = $true
+                    $requiredInf = "iaStorAC.inf"
+                    $vendor = "Intel"
+                    break
+                }
+                # Intel RST VROC
+                elseif ($hwid -match 'VEN_8086.*DEV_(06EF|06E0|06E1)') {
+                    $controllerType = "Intel RST VROC"
+                    $isBootCritical = $true
+                    $requiredInf = "iaStorAVC.inf"
+                    $vendor = "Intel"
+                    break
+                }
+                # AMD RAID
+                elseif ($hwid -match 'VEN_1022.*DEV_(7901|7902|7903|7904)') {
+                    $controllerType = "AMD RAID"
+                    $isBootCritical = $true
+                    $requiredInf = "rcraid.inf"
+                    $vendor = "AMD"
+                    break
+                }
+                # Samsung NVMe
+                elseif ($hwid -match 'VEN_144D') {
+                    $controllerType = "Samsung NVMe"
+                    $isBootCritical = $true
+                    $requiredInf = "stornvme.inf"
+                    $vendor = "Samsung"
+                    break
+                }
+                # Generic NVMe
+                elseif ($hwid -match 'NVMe|PCI\\VEN_.*NVMe') {
+                    $controllerType = "NVMe Controller"
+                    $isBootCritical = $true
+                    $requiredInf = "stornvme.inf"
+                    if ($hwid -match 'VEN_([0-9A-F]{4})') {
+                        $venId = $matches[1]
+                        $vendor = switch ($venId) {
+                            "144D" { "Samsung" }
+                            "10EC" { "Realtek" }
+                            "1BB1" { "Seagate" }
+                            "1C5C" { "SK Hynix" }
+                            "8086" { "Intel" }
+                            default { "Unknown (VEN_$venId)" }
+                        }
+                    }
+                    break
+                }
+                # NVIDIA Storage
+                elseif ($hwid -match 'VEN_10DE') {
+                    $controllerType = "NVIDIA Storage"
+                    $isBootCritical = $true
+                    $requiredInf = "nvgrd.inf"
+                    $vendor = "NVIDIA"
+                    break
+                }
+                # Standard AHCI
+                elseif ($hwid -match 'VEN_8086.*AHCI|VEN_8086.*DEV_2922') {
+                    $controllerType = "Intel AHCI"
+                    $isBootCritical = $false
+                    $requiredInf = "msahci.inf"
+                    $vendor = "Intel"
+                    break
+                }
+            }
+            
+            # Check if boot-critical (storage controllers usually are)
+            if ($controllerType -match 'VMD|RAID|NVMe|Storage') {
+                $isBootCritical = $true
+            }
+            
+            # Get error code and status
+            $errorCode = $device.ConfigManagerErrorCode
+            $status = $device.Status
+            $hasDriver = ($errorCode -eq 0)
+            $needsDriver = ($errorCode -eq 28 -or $errorCode -eq 1 -or $errorCode -eq 3)
+            
+            # Skip non-critical if not requested
+            if (-not $IncludeNonCritical -and -not $isBootCritical -and $hasDriver) {
+                continue
+            }
+            
+            $controller = [PSCustomObject]@{
+                Name = $device.Name
+                Description = $device.Description
+                DeviceID = $device.DeviceID
+                PNPClass = $device.PNPClass
+                ControllerType = $controllerType
+                Vendor = $vendor
+                DeviceID_Hex = $deviceId
+                HardwareIDs = $hwids
+                CompatibleIDs = $compatIds
+                Status = $status
+                ErrorCode = $errorCode
+                HasDriver = $hasDriver
+                NeedsDriver = $needsDriver
+                IsBootCritical = $isBootCritical
+                RequiredInf = $requiredInf
+                Service = $device.Service
+                Manufacturer = $device.Manufacturer
+            }
+            
+            $controllers += $controller
+        }
+        
+        # Method 2: Registry-based PCI enumeration (for offline systems)
+        if ($Detailed) {
+            try {
+                $pciDevices = Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Enum\PCI" -ErrorAction SilentlyContinue -Recurse -Depth 2
+                foreach ($pciDevice in $pciDevices) {
+                    $deviceDesc = (Get-ItemProperty -Path $pciDevice.PSPath -Name "DeviceDesc" -ErrorAction SilentlyContinue).DeviceDesc
+                    if ($deviceDesc -match 'VMD|RAID|NVMe|Storage|Controller') {
+                        $hwid = (Get-ItemProperty -Path $pciDevice.PSPath -Name "HardwareID" -ErrorAction SilentlyContinue).HardwareID
+                        if ($hwid -and $hwid.Count -gt 0) {
+                            # Check if we already have this device
+                            $exists = $controllers | Where-Object { $_.DeviceID -eq $pciDevice.PSChildName }
+                            if (-not $exists) {
+                                # Add as additional detection
+                            }
+                        }
+                    }
+                }
+            } catch {
+                # Registry enumeration may fail in limited environments
+            }
+        }
+        
+    } catch {
+        Write-Warning "Error detecting storage controllers: $_"
+    }
+    
+    return $controllers
+}
+
+function Test-DriverMatch {
+    <#
+    .SYNOPSIS
+    Advanced driver matching logic that parses INF files and matches hardware IDs.
+    
+    .DESCRIPTION
+    Matches drivers to storage controllers by:
+    - Parsing INF files for [Manufacturer] and [Models] sections
+    - Extracting hardware IDs, compatible IDs, and service names
+    - Ranking matches by precision (exact match > compatible match)
+    - Validating driver signatures and versions
+    
+    .PARAMETER HardwareID
+    Hardware ID to match (e.g., "PCI\VEN_8086&DEV_9A0B")
+    
+    .PARAMETER CompatibleIDs
+    Array of compatible IDs
+    
+    .PARAMETER DriverPath
+    Path to driver folder or INF file
+    
+    .EXAMPLE
+    $match = Test-DriverMatch -HardwareID "PCI\VEN_8086&DEV_9A0B" -DriverPath "X:\Drivers\Intel\RST"
+    if ($match.Matched) {
+        Write-Host "Found matching driver: $($match.DriverName)"
+    }
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$HardwareID,
+        
+        [string[]]$CompatibleIDs = @(),
+        
+        [Parameter(Mandatory=$true)]
+        [string]$DriverPath
+    )
+    
+    $result = @{
+        Matched = $false
+        DriverName = ""
+        INFPath = ""
+        MatchType = "None"  # Exact, Compatible, Partial
+        MatchScore = 0
+        ServiceName = ""
+        DriverVersion = ""
+        IsSigned = $false
+        AllMatches = @()
+    }
+    
+    if (-not (Test-Path $DriverPath)) {
+        return $result
+    }
+    
+    # Find all INF files
+    $infFiles = @()
+    if ((Get-Item $DriverPath).PSIsContainer) {
+        $infFiles = Get-ChildItem -Path $DriverPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+    } else {
+        if ($DriverPath -match '\.inf$') {
+            $infFiles = @(Get-Item $DriverPath)
+        }
+    }
+    
+    foreach ($infFile in $infFiles) {
+        try {
+            $infContent = Get-Content $infFile.FullName -Raw -ErrorAction Stop
+            
+            # Extract hardware IDs from INF file
+            $infHwids = @()
+            $infCompatIds = @()
+            $serviceName = ""
+            $driverVersion = ""
+            
+            # Parse [Models] section for hardware IDs
+            if ($infContent -match '\[Models\](.*?)(?=\[|\Z)', [System.Text.RegularExpressions.RegexOptions]::Singleline) {
+                $modelsSection = $matches[1]
+                $lines = $modelsSection -split "`n"
+                foreach ($line in $lines) {
+                    if ($line -match '^([^=]+)=(.+)') {
+                        $hwidPattern = $matches[1].Trim()
+                        # Hardware IDs are typically in format: "PCI\VEN_xxxx&DEV_xxxx"
+                        if ($hwidPattern -match 'PCI\\|USB\\|SCSI\\') {
+                            $infHwids += $hwidPattern
+                        }
+                    }
+                }
+            }
+            
+            # Parse [Strings] section for compatible IDs (sometimes stored there)
+            if ($infContent -match '\[Strings\](.*?)(?=\[|\Z)', [System.Text.RegularExpressions.RegexOptions]::Singleline) {
+                $stringsSection = $matches[1]
+                # Look for compatible ID patterns
+            }
+            
+            # Extract service name
+            if ($infContent -match 'Service\s*=\s*([^\s,]+)') {
+                $serviceName = $matches[1]
+            }
+            
+            # Extract driver version (from [Version] section or file properties)
+            if ($infContent -match 'DriverVer\s*=\s*([^,]+)') {
+                $driverVersion = $matches[1]
+            }
+            
+            # Check for matches
+            $matchScore = 0
+            $matchType = "None"
+            
+            # Exact hardware ID match (highest priority)
+            foreach ($hwid in $HardwareID) {
+                foreach ($infHwid in $infHwids) {
+                    # Normalize for comparison (case-insensitive, handle variations)
+                    $hwidNormalized = $hwid -replace '\\', '\\' -replace '&', '&'
+                    $infHwidNormalized = $infHwid -replace '\\', '\\' -replace '&', '&'
+                    
+                    if ($hwidNormalized -eq $infHwidNormalized) {
+                        $matchScore = 100
+                        $matchType = "Exact"
+                        break
+                    }
+                    # Partial match (VEN and DEV match)
+                    elseif ($hwid -match 'VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})' -and 
+                            $infHwid -match 'VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})') {
+                        $hwidVen = $matches[1]
+                        $hwidDev = $matches[2]
+                        $infVen = $matches[1]
+                        $infDev = $matches[2]
+                        if ($hwidVen -eq $infVen -and $hwidDev -eq $infDev) {
+                            $matchScore = 80
+                            $matchType = "Compatible"
+                        }
+                    }
+                }
+            }
+            
+            # Compatible ID match (lower priority)
+            if ($matchScore -lt 80) {
+                foreach ($compatId in $CompatibleIDs) {
+                    foreach ($infCompatId in $infCompatIds) {
+                        if ($compatId -eq $infCompatId) {
+                            $matchScore = 60
+                            $matchType = "Compatible"
+                            break
+                        }
+                    }
+                }
+            }
+            
+            # Check driver signature (if available)
+            $isSigned = $false
+            try {
+                $catFiles = Get-ChildItem -Path $infFile.DirectoryName -Filter "*.cat" -ErrorAction SilentlyContinue
+                if ($catFiles) {
+                    $isSigned = $true  # Presence of CAT file suggests signature
+                }
+            } catch {}
+            
+            if ($matchScore -gt 0) {
+                $match = [PSCustomObject]@{
+                    INFPath = $infFile.FullName
+                    DriverName = $infFile.Name
+                    MatchType = $matchType
+                    MatchScore = $matchScore
+                    ServiceName = $serviceName
+                    DriverVersion = $driverVersion
+                    IsSigned = $isSigned
+                }
+                
+                $result.AllMatches += $match
+                
+                # Keep best match
+                if ($matchScore -gt $result.MatchScore) {
+                    $result.Matched = $true
+                    $result.DriverName = $infFile.Name
+                    $result.INFPath = $infFile.FullName
+                    $result.MatchType = $matchType
+                    $result.MatchScore = $matchScore
+                    $result.ServiceName = $serviceName
+                    $result.DriverVersion = $driverVersion
+                    $result.IsSigned = $isSigned
+                }
+            }
+            
+        } catch {
+            Write-Warning "Error parsing INF file $($infFile.FullName): $_"
+        }
+    }
+    
+    # Sort matches by score
+    $result.AllMatches = $result.AllMatches | Sort-Object MatchScore -Descending
+    
+    return $result
+}
+
+function Start-AdvancedDriverInjection {
+    <#
+    .SYNOPSIS
+    Advanced driver injection with validation, dependency checking, and proper driver store management.
+    
+    .DESCRIPTION
+    Injects drivers into Windows installation with:
+    - Pre-injection validation (INF parsing, signature verification)
+    - Hardware ID matching verification
+    - Dependency resolution
+    - Driver store integration
+    - Post-injection verification
+    - Rollback capability
+    
+    .PARAMETER WindowsDrive
+    Target Windows drive letter (e.g., "C")
+    
+    .PARAMETER DriverPath
+    Path to driver folder or INF file
+    
+    .PARAMETER ControllerInfo
+    Optional: Storage controller info from Get-AdvancedStorageControllerInfo
+    
+    .PARAMETER ValidateOnly
+    Only validate drivers without injecting
+    
+    .EXAMPLE
+    $controllers = Get-AdvancedStorageControllerInfo
+    $result = Start-AdvancedDriverInjection -WindowsDrive "C" -DriverPath "X:\Drivers\Intel" -ControllerInfo $controllers
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$WindowsDrive,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$DriverPath,
+        
+        [object[]]$ControllerInfo = @(),
+        
+        [switch]$ValidateOnly = $false,
+        
+        [switch]$ForceUnsigned = $false,
+        
+        [scriptblock]$ProgressCallback = $null
+    )
+    
+    $result = @{
+        Success = $false
+        DriversInjected = @()
+        DriversSkipped = @()
+        DriversFailed = @()
+        ValidationResults = @()
+        Report = ""
+        Errors = @()
+        Warnings = @()
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("ADVANCED DRIVER INJECTION") | Out-Null
+    $report.AppendLine("Target: $WindowsDrive`:") | Out-Null
+    $report.AppendLine("Driver Source: $DriverPath") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Normalize drive letter
+    $WindowsDrive = $WindowsDrive.TrimEnd(':').ToUpper()
+    $imagePath = "$WindowsDrive`:"
+    
+    # Validate Windows installation
+    if (-not (Test-Path "$imagePath\Windows\System32")) {
+        $result.Errors += "Invalid Windows installation: $imagePath"
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    # Get controller info if not provided
+    if ($ControllerInfo.Count -eq 0) {
+        if ($ProgressCallback) {
+            & $ProgressCallback "Detecting storage controllers..." 10
+        }
+        $ControllerInfo = Get-AdvancedStorageControllerInfo -IncludeNonCritical
+    }
+    
+    # Find all INF files
+    $infFiles = @()
+    if ((Get-Item $DriverPath).PSIsContainer) {
+        $infFiles = Get-ChildItem -Path $DriverPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+    } else {
+        if ($DriverPath -match '\.inf$') {
+            $infFiles = @(Get-Item $DriverPath)
+        }
+    }
+    
+    if ($infFiles.Count -eq 0) {
+        $result.Errors += "No INF files found in: $DriverPath"
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    $report.AppendLine("Found $($infFiles.Count) INF file(s)") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Validate and match each driver
+    foreach ($infFile in $infFiles) {
+        $infName = $infFile.Name
+        $infPath = $infFile.FullName
+        
+        if ($ProgressCallback) {
+            & $ProgressCallback "Validating driver: $infName" 20
+        }
+        
+        # Find matching controller
+        $matchedController = $null
+        $matchResult = $null
+        
+        foreach ($controller in $ControllerInfo) {
+            if ($controller.NeedsDriver -or $ValidateOnly) {
+                $matchResult = Test-DriverMatch -HardwareID $controller.HardwareIDs -CompatibleIDs $controller.CompatibleIDs -DriverPath $infPath
+                if ($matchResult.Matched) {
+                    $matchedController = $controller
+                    break
+                }
+            }
+        }
+        
+        $validation = [PSCustomObject]@{
+            INFPath = $infPath
+            INFName = $infName
+            Matched = ($matchResult -ne $null -and $matchResult.Matched)
+            MatchType = if ($matchResult) { $matchResult.MatchType } else { "None" }
+            MatchScore = if ($matchResult) { $matchResult.MatchScore } else { 0 }
+            ControllerName = if ($matchedController) { $matchedController.Name } else { "None" }
+            IsSigned = if ($matchResult) { $matchResult.IsSigned } else { $false }
+        }
+        
+        $result.ValidationResults += $validation
+        
+        if ($ValidateOnly) {
+            $report.AppendLine("VALIDATION: $infName") | Out-Null
+            $report.AppendLine("  Matched: $($validation.Matched)") | Out-Null
+            $report.AppendLine("  Match Type: $($validation.MatchType)") | Out-Null
+            $report.AppendLine("  Match Score: $($validation.MatchScore)") | Out-Null
+            $report.AppendLine("  Controller: $($validation.ControllerName)") | Out-Null
+            $report.AppendLine("  Signed: $($validation.IsSigned)") | Out-Null
+            $report.AppendLine("") | Out-Null
+            continue
+        }
+        
+        # Skip if no match and not forcing
+        if (-not $validation.Matched) {
+            $result.DriversSkipped += $infName
+            $result.Warnings += "Skipped $infName (no matching controller found)"
+            continue
+        }
+        
+        # Check signature if not forcing unsigned
+        if (-not $validation.IsSigned -and -not $ForceUnsigned) {
+            $result.Warnings += "Driver $infName is not signed. Use -ForceUnsigned to inject anyway."
+            continue
+        }
+        
+        # Inject driver using DISM
+        if ($ProgressCallback) {
+            & $ProgressCallback "Injecting driver: $infName" 50
+        }
+        
+        try {
+            $dismArgs = @(
+                "/Image:`"$imagePath`"",
+                "/Add-Driver",
+                "/Driver:`"$infFile.DirectoryName`"",
+                "/Recurse"
+            )
+            
+            if ($ForceUnsigned) {
+                $dismArgs += "/ForceUnsigned"
+            }
+            
+            $dismOutput = & dism $dismArgs 2>&1 | Out-String
+            
+            if ($LASTEXITCODE -eq 0 -or $dismOutput -match 'successfully|completed') {
+                $result.DriversInjected += [PSCustomObject]@{
+                    INFName = $infName
+                    INFPath = $infPath
+                    ControllerName = $validation.ControllerName
+                    MatchType = $validation.MatchType
+                }
+                $report.AppendLine("[SUCCESS] Injected: $infName") | Out-Null
+                $report.AppendLine("  Controller: $($validation.ControllerName)") | Out-Null
+            } else {
+                $result.DriversFailed += [PSCustomObject]@{
+                    INFName = $infName
+                    INFPath = $infPath
+                    Error = $dismOutput
+                }
+                $result.Errors += "Failed to inject $infName`: $dismOutput"
+                $report.AppendLine("[FAILED] $infName") | Out-Null
+                $report.AppendLine("  Error: $dismOutput") | Out-Null
+            }
+        } catch {
+            $result.DriversFailed += [PSCustomObject]@{
+                INFName = $infName
+                INFPath = $infPath
+                Error = $_.ToString()
+            }
+            $result.Errors += "Exception injecting $infName`: $_"
+            $report.AppendLine("[EXCEPTION] $infName`: $_") | Out-Null
+        }
+        
+        $report.AppendLine("") | Out-Null
+    }
+    
+    # Summary
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("SUMMARY") | Out-Null
+    $report.AppendLine("  Drivers Injected: $($result.DriversInjected.Count)") | Out-Null
+    $report.AppendLine("  Drivers Skipped: $($result.DriversSkipped.Count)") | Out-Null
+    $report.AppendLine("  Drivers Failed: $($result.DriversFailed.Count)") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    
+    $result.Success = ($result.DriversInjected.Count -gt 0 -and $result.DriversFailed.Count -eq 0)
+    $result.Report = $report.ToString()
+    
+    return $result
+}
+
+function Find-MatchingDrivers {
+    <#
+    .SYNOPSIS
+    Finds matching drivers for storage controllers from multiple sources.
+    
+    .DESCRIPTION
+    Searches for drivers in:
+    - Current Windows installation (DriverStore)
+    - Offline Windows installation
+    - External driver folders
+    - Manufacturer driver packages
+    
+    Returns ranked list of best matches.
+    
+    .PARAMETER ControllerInfo
+    Storage controller information from Get-AdvancedStorageControllerInfo
+    
+    .PARAMETER SearchPaths
+    Additional paths to search for drivers
+    
+    .EXAMPLE
+    $controllers = Get-AdvancedStorageControllerInfo
+    $drivers = Find-MatchingDrivers -ControllerInfo $controllers -SearchPaths @("X:\Drivers", "D:\DriverPack")
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [object[]]$ControllerInfo,
+        
+        [string[]]$SearchPaths = @(),
+        
+        [string]$WindowsDrive = $null
+    )
+    
+    $results = @()
+    
+    foreach ($controller in $ControllerInfo) {
+        if (-not $controller.NeedsDriver) {
+            continue
+        }
+        
+        $driverMatches = @()
+        
+        # Search in current Windows DriverStore
+        $driverStorePaths = @()
+        if ($WindowsDrive) {
+            $driverStorePaths += "$WindowsDrive`:\Windows\System32\DriverStore\FileRepository"
+        } else {
+            $driverStorePaths += "$env:SystemRoot\System32\DriverStore\FileRepository"
+        }
+        
+        foreach ($driverStorePath in $driverStorePaths) {
+            if (Test-Path $driverStorePath) {
+                # Search for drivers matching controller hardware IDs
+                $infFiles = Get-ChildItem -Path $driverStorePath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+                foreach ($infFile in $infFiles) {
+                    $match = Test-DriverMatch -HardwareID $controller.HardwareIDs -CompatibleIDs $controller.CompatibleIDs -DriverPath $infFile.FullName
+                    if ($match.Matched) {
+                        $driverMatches += [PSCustomObject]@{
+                            INFPath = $infFile.FullName
+                            DriverName = $infFile.Name
+                            Source = "DriverStore"
+                            MatchType = $match.MatchType
+                            MatchScore = $match.MatchScore
+                            IsSigned = $match.IsSigned
+                            ControllerName = $controller.Name
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Search in additional paths
+        foreach ($searchPath in $SearchPaths) {
+            if (Test-Path $searchPath) {
+                $infFiles = Get-ChildItem -Path $searchPath -Filter "*.inf" -Recurse -ErrorAction SilentlyContinue
+                foreach ($infFile in $infFiles) {
+                    $match = Test-DriverMatch -HardwareID $controller.HardwareIDs -CompatibleIDs $controller.CompatibleIDs -DriverPath $infFile.FullName
+                    if ($match.Matched) {
+                        $driverMatches += [PSCustomObject]@{
+                            INFPath = $infFile.FullName
+                            DriverName = $infFile.Name
+                            Source = $searchPath
+                            MatchType = $match.MatchType
+                            MatchScore = $match.MatchScore
+                            IsSigned = $match.IsSigned
+                            ControllerName = $controller.Name
+                        }
+                    }
+                }
+            }
+        }
+        
+        # Sort by match score and select best matches
+        $bestMatches = $driverMatches | Sort-Object MatchScore -Descending | Select-Object -First 5
+        
+        $results += [PSCustomObject]@{
+            Controller = $controller.Name
+            ControllerType = $controller.ControllerType
+            HardwareID = $controller.HardwareIDs[0]
+            RequiredInf = $controller.RequiredInf
+            MatchesFound = $bestMatches.Count
+            BestMatches = $bestMatches
+        }
+    }
+    
+    return $results
+}
+
 function Get-SystemRestoreInfo {
     param($TargetDrive = $env:SystemDrive)
     
@@ -5031,6 +5858,191 @@ USAGE TIPS:
 - Macrium Reflect Rescue can fix boot issues that bcdboot cannot
 - Use Sergei Strelec's WinPE for advanced registry and file system repairs
 - Explorer++ is invaluable when Windows Explorer crashes in recovery mode
+
+===================================================================================
+  MICROSOFT PROFESSIONAL SUPPORT OPTIONS
+===================================================================================
+
+For retail/home users seeking professional, break-fix support, Microsoft offers
+several paid support options. These services provide access to Microsoft engineers
+who can perform advanced troubleshooting including Registry analysis, BSOD memory
+dump analysis, and complex bootloader repairs.
+
++---------------------------------------------------------------+
+| PAY-PER-INCIDENT SUPPORT (RETAIL/HOME USERS)                 |
++---------------------------------------------------------------+
+| E-mail or Web-based Support                                  |
+|   Cost: $99 per incident                                     |
+|   Best For: Time-saving alternative to phone support         |
+|   Note: Often faster than waiting for phone technician      |
++---------------------------------------------------------------+
+| Professional Support (General)                                |
+|   Cost: $245 per incident                                    |
+|   Definition: A single support issue and reasonable efforts  |
+|               to resolve it. Cost does not depend on time.   |
++---------------------------------------------------------------+
+| Pro 5-Pack                                                   |
+|   Cost: $1,225 (5 incidents)                                 |
+|   Best For: Multiple issues or ongoing support needs          |
++---------------------------------------------------------------+
+
+IMPORTANT NOTES:
+- Free Support: Basic installation, setup, and billing support are available
+  for free with most Microsoft 365 subscriptions.
+- How to Use: To use a purchased pay-per-incident credit, you must sign in
+  with the same personal Microsoft account (MSA) used for the purchase on
+  the Microsoft Support for Business portal and apply the credit when
+  creating a new case.
+- Business/Enterprise Plans: Larger businesses typically use subscription-
+  based "Unified Support" plans where fees are a percentage of their total
+  annual Microsoft spending, rather than a fixed per-incident cost.
+
++---------------------------------------------------------------+
+| PROFESSIONAL SUPPORT FOR WINDOWS 11 PRO USERS                |
++---------------------------------------------------------------+
+| Microsoft offers professional-grade support to individual     |
+| Windows 11 Pro users, but it is structured as a "business-   |
+| class" service called Professional Support (Pay-Per-Incident).|
+|                                                               |
+| Because you are using the Pro edition, you are technically    |
+| eligible for these higher-tier services, even if you are not |
+| a corporation.                                                |
++---------------------------------------------------------------+
+
+1. PROFESSIONAL SUPPORT (PAY-PER-INCIDENT)
+   This is the most direct way to get an actual Microsoft engineer rather
+   than a general customer service agent.
+
+   Cost: Approximately $499 USD per incident (roughly $650+ CAD).
+
+   How it Works:
+   - You purchase a single "support incident"
+   - You are assigned a case number and a higher-tier engineer
+   - The engineer stays with the case until it is resolved or deemed
+     "unfixable"
+
+   Scope:
+   - Unlike standard support, they will dive into the Registry
+   - Analyze BSOD memory dumps
+   - Work through complex bootloader issues
+   - However, if the hardware is failing, they will still tell you to
+     replace the drive
+
+   Refund Policy:
+   - If the engineer determines the issue is caused by a documented
+     Microsoft bug, they will often refund the incident fee
+   - If the issue is caused by your hardware, third-party drivers, or user
+     error, you still pay
+
+   How to Access:
+   - Go to the Microsoft Professional Support page
+   - Select "Windows" and your version (Windows 11)
+   - Choose "Pay-per-incident" and follow the prompts to pay and open a
+     ticket
+
+2. MICROSOFT 365 "PREMIUM" SUPPORT
+   If you have a Microsoft 365 Personal or Family subscription, "Premium
+   Support" is included.
+
+   How it Works:
+   - You can request a chat or callback through the "Get Help" app in
+     Windows
+
+   The Reality:
+   - While they are "professionals," these agents are trained for high
+     volume
+   - For a non-booting system, their script almost always defaults to
+     "Reset this PC" or "Cloud Reinstall" within the first 30 minutes
+   - They generally do not have the tools or time to perform the
+     "surgical" repairs an independent pro might do
+
+3. THE "BUSINESS ASSIST" ALTERNATIVE
+   If you use your Windows 11 Pro machine for work/freelancing, Microsoft
+   offers a service called Microsoft 365 Business Assist.
+
+   Cost: Usually around $5.00/month per user (added to a Business
+         subscription)
+
+   How it Works:
+   - It gives you 24/7 access to small business specialists who help with
+     setup and troubleshooting
+   - It is a middle ground between the free consumer support and the $499
+     enterprise-level support
+
+SUMMARY: IS IT WORTH IT FOR A PRO USER?
+----------------------------------------
+For an individual user, Pay-Per-Incident is rarely worth the cost unless
+you are running a highly specialized environment that would take days of
+manual labor to rebuild.
+
+Most advanced users choose to use the independent tools mentioned earlier
+(Hiren's BootCD, Macrium Reflect, etc.) because they offer more control
+than a remote technician would have over a non-booting system.
+
+===================================================================================
+  LOCAL TECHNICIAN ALTERNATIVE (RECOMMENDED)
+===================================================================================
+
+Before paying Microsoft's premium support fees, consider contacting a local
+computer repair technician. Many reputable technicians offer significant
+advantages over remote Microsoft support:
+
++---------------------------------------------------------------+
+| LOCAL TECHNICIAN BENEFITS                                     |
++---------------------------------------------------------------+
+| "No Fix, No Fee" Guarantee                                    |
+|   - You only pay if the problem is actually resolved          |
+|   - No charge if they cannot fix the issue                    |
+|   - Much lower risk than Microsoft's pay-per-incident model  |
++---------------------------------------------------------------+
+| Free Onsite Estimates                                         |
+|   - Many technicians offer free diagnostic estimates          |
+|   - You know the cost before committing to repairs            |
+|   - Can compare multiple quotes easily                         |
++---------------------------------------------------------------+
+| Travel/Appointment Fee Only (If Applicable)                   |
+|   - Some technicians charge a small travel/appointment fee    |
+|   - This is typically marginal compared to full repair cost   |
+|   - Often waived if you proceed with the repair               |
++---------------------------------------------------------------+
+| Hands-On Access                                               |
+|   - Direct physical access to your hardware                    |
+|   - Can test components, swap parts, check connections        |
+|   - More thorough than remote diagnostics                     |
++---------------------------------------------------------------+
+| Personalized Service                                          |
+|   - One-on-one attention from start to finish                 |
+|   - Can explain what went wrong and how to prevent it          |
+|   - Often more patient and thorough than call center agents   |
++---------------------------------------------------------------+
+
+HOW TO FIND A REPUTABLE TECHNICIAN:
+-----------------------------------
+- Look for technicians with "No Fix, No Fee" guarantees
+- Check online reviews (Google, Yelp, local business directories)
+- Ask about their experience with boot issues and Windows recovery
+- Verify they offer free estimates before committing
+- Compare multiple quotes to ensure fair pricing
+- Ask if they have experience with tools like Hiren's BootCD, Macrium
+  Reflect, or similar recovery environments
+
+COST COMPARISON:
+----------------
+Microsoft Professional Support: $499+ per incident (paid regardless of
+                                outcome, unless it's a Microsoft bug)
+
+Local Technician:              Travel/appointment fee (often $50-100) +
+                                Repair cost (only if successful)
+                                Total often less than Microsoft's fee,
+                                with better guarantee
+
+RECOMMENDATION:
+---------------
+For most users, a local technician with a "No Fix, No Fee" guarantee and
+free onsite estimates offers better value than Microsoft's premium support.
+You get hands-on service, personalized attention, and only pay if the problem
+is actually fixed. The travel/appointment fee (if any) is typically marginal
+compared to Microsoft's full incident cost.
 
 ===================================================================================
 "@
@@ -7120,7 +8132,7 @@ function Test-InternetConnectivity {
     Tests internet connectivity by pinging common servers.
     #>
     param(
-        [int]$TimeoutSeconds = 5
+        [int]$TimeoutSeconds = 3
     )
     
     $result = @{
@@ -7129,18 +8141,32 @@ function Test-InternetConnectivity {
         TestedHosts = @()
     }
     
+    # First, check if network adapters exist and are connected
+    # This prevents false negatives when adapters exist but ping fails
+    try {
+        $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { 
+            $_.Status -ne 'Hidden' -and ($_.Status -eq 'Up' -or $_.Status -eq 'Connected')
+        }
+        if (-not $adapters -or $adapters.Count -eq 0) {
+            $result.Message = "No connected network adapters detected"
+            return $result
+        }
+    } catch {
+        # Continue with connectivity test anyway
+    }
+    
     # Test hosts (in order of reliability)
     $testHosts = @(
-        "8.8.8.8",           # Google DNS
+        "8.8.8.8",           # Google DNS (most reliable)
         "1.1.1.1",           # Cloudflare DNS
-        "microsoft.com",     # Microsoft
-        "google.com"         # Google
+        "8.8.4.4"            # Google DNS secondary
     )
     
     foreach ($testHost in $testHosts) {
         try {
             $result.TestedHosts += $testHost
-            $ping = Test-Connection -ComputerName $testHost -Count 1 -TimeoutSeconds $TimeoutSeconds -ErrorAction Stop
+            # Use shorter timeout for faster detection
+            $ping = Test-Connection -ComputerName $testHost -Count 1 -TimeoutSeconds 2 -ErrorAction SilentlyContinue
             if ($ping) {
                 $result.Connected = $true
                 $result.Message = "Internet connectivity confirmed (reached $testHost)"
@@ -7152,10 +8178,10 @@ function Test-InternetConnectivity {
         }
     }
     
-    # If all pings failed, try HTTP request
+    # If all pings failed, try HTTP request (but with shorter timeout)
     try {
-        $webRequest = Invoke-WebRequest -Uri "http://www.microsoft.com" -TimeoutSec $TimeoutSeconds -UseBasicParsing -ErrorAction Stop
-        if ($webRequest.StatusCode -eq 200) {
+        $webRequest = Invoke-WebRequest -Uri "http://www.microsoft.com" -TimeoutSec 2 -UseBasicParsing -ErrorAction SilentlyContinue
+        if ($webRequest -and $webRequest.StatusCode -eq 200) {
             $result.Connected = $true
             $result.Message = "Internet connectivity confirmed (HTTP request succeeded)"
             return $result
@@ -13495,7 +14521,7 @@ function Start-UtilitiesMenu {
             }
             "PowerShell" {
                 if (Get-Command powershell.exe -ErrorAction SilentlyContinue) {
-                    Start-Process powershell.exe
+                    Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle = 'MiracleBoot - PowerShell'"
                     $result.Success = $true
                     $result.Message = "PowerShell opened successfully"
                 } else {

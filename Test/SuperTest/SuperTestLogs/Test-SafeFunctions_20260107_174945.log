@@ -1,0 +1,17 @@
+﻿=== STDOUT ===
+========================================================================
+  SAFE FUNCTION TESTING - READ-ONLY OPERATIONS ONLY
+========================================================================
+
+Loading modules...
+
+
+=== STDERR ===
+Get-Content: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\Test-SafeFunctions.ps1:50
+Line |
+  50 |  . mbContent = Get-Content (Join-Path $ScriptDir "MiracleBoot.ps1") -Raw .
+     |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Cannot find path 'C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Test\MiracleBoot.ps1' because it does not exist.
+
+
+ExitCode: 1

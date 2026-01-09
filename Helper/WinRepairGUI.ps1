@@ -92,6 +92,18 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 
+# Load centralized logging system
+try {
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    if (Test-Path "$scriptRoot\ErrorLogging.ps1") {
+        . "$scriptRoot\ErrorLogging.ps1"
+        $null = Initialize-ErrorLogging -ScriptRoot $scriptRoot -RetentionDays 7
+        Add-MiracleBootLog -Level "INFO" -Message "WinRepairGUI.ps1 loaded" -Location "WinRepairGUI.ps1"
+    }
+} catch {
+    # Silently continue if logging fails
+}
+
 # Helper function to safely get controls with null checking
 # Note: This will be defined inside Start-GUI to access $W directly
 
@@ -100,7 +112,7 @@ function Start-GUI {
     $XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="Miracle Boot v7.2.0 - Advanced Recovery"
+ Title="Miracle Boot v7.2.0 - Advanced Recovery (Cursor)"
  Width="1200" Height="850" WindowStartupLocation="CenterScreen" Background="#F0F0F0">
 <Grid>
     <Grid.RowDefinitions>
@@ -123,6 +135,9 @@ function Start-GUI {
         <Button Content="Network Diagnostics" Name="BtnNetworkDiagnostics" Width="150" Height="25" Margin="2" ToolTip="Comprehensive network diagnostics and driver management"/>
         <Button Content="Keyboard Symbols" Name="BtnKeyboardSymbols" Width="130" Height="25" Margin="2" ToolTip="Keyboard symbol helper and ALT code reference"/>
         <Button Content="ChatGPT Help" Name="BtnChatGPT" Width="100" Height="25" Margin="2" ToolTip="Open ChatGPT for boot assistance help"/>
+        <Button Name="BtnSwitchToTUI" Width="35" Height="25" Margin="2" ToolTip="Switch to Command Line Mode (TUI)" Background="#2D2D30" Foreground="White" FontFamily="Consolas" FontSize="12" Padding="0">
+            <TextBlock Text="&gt;_" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        </Button>
         <Separator Margin="10,0"/>
         <TextBlock Name="NetworkStatus" Text="Network: Unknown" VerticalAlignment="Center" Margin="5,0" Foreground="Gray"/>
         <TextBlock Name="EnvStatus" Text="Environment: Detecting..." VerticalAlignment="Center" Margin="10,0" Foreground="Gray"/>
@@ -275,11 +290,22 @@ function Start-GUI {
             <Grid Margin="10">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 
-                <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                <!-- One-Click Repair Button -->
+                <Border Grid.Row="0" Margin="0,0,0,15" Background="#E8F5E9" BorderBrush="#4CAF50" BorderThickness="2">
+                    <StackPanel Margin="15">
+                        <TextBlock Text="🚀 ONE-CLICK REPAIR" FontSize="18" FontWeight="Bold" Foreground="#2E7D32" Margin="0,0,0,5"/>
+                        <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#1B5E20" Margin="0,0,0,10"/>
+                        <Button Content="REPAIR MY PC" Name="BtnOneClickRepair" Height="50" Background="#4CAF50" Foreground="White" FontSize="16" FontWeight="Bold" Cursor="Hand" Margin="0,5"/>
+                        <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#2E7D32" Margin="0,5,0,0" FontStyle="Italic"/>
+                    </StackPanel>
+                </Border>
+                
+                <StackPanel Grid.Row="1" Margin="0,0,0,10">
                     <CheckBox Name="ChkTestMode" Content="Test Mode (Preview commands only - will not execute)" IsChecked="True" FontWeight="Bold" Foreground="#d78700" Margin="5"/>
                     <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="Gray" Margin="5,0,0,5" TextWrapping="Wrap"/>
                 </StackPanel>
@@ -645,6 +671,44 @@ try {
     throw "Failed to parse XAML: $_"
 }
 
+# Helper function to safely get controls with null checking
+# MUST be defined here (right after $W is created) because it's called during event handler setup
+function Get-Control {
+    param([string]$Name, [switch]$Silent)  # Silent flag to suppress logging for optional controls
+    if (-not $W) {
+        if (-not $Silent) {
+            Add-MiracleBootLog -Level "WARNING" -Message "Window object not available" -Location "Get-Control" -NoConsole
+        }
+        return $null
+    }
+    $control = $W.FindName($Name)
+    if (-not $control) {
+        if (-not $Silent) {
+            Add-MiracleBootLog -Level "WARNING" -Message "Control '$Name' not found in XAML" -Location "Get-Control" -Data @{ControlName=$Name} -NoConsole
+        }
+    }
+    return $control
+}
+
+# Helper function to safely wire up event handlers with null checking
+function Connect-EventHandler {
+    param(
+        [string]$ControlName,
+        [string]$EventName,
+        [scriptblock]$Handler
+    )
+    $control = Get-Control -Name $ControlName
+    if ($control) {
+        try {
+            $control.$EventName.Add($Handler)
+        } catch {
+            Write-Warning "Failed to wire up $EventName event for '$ControlName': $_"
+        }
+    } else {
+        Write-Warning "Skipping event handler for '$ControlName' - control not found in XAML"
+    }
+}
+
 # Load LogAnalysis module
 $logAnalysisPath = Join-Path $PSScriptRoot "LogAnalysis.ps1"
 if (Test-Path $logAnalysisPath) {
@@ -729,7 +793,7 @@ $btnPowerShell = $W.FindName("BtnPowerShell")
 if ($btnPowerShell) {
     $btnPowerShell.Add_Click({
         try {
-            Start-Process powershell.exe -ErrorAction SilentlyContinue
+            Start-Process powershell.exe -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle = 'MiracleBoot - PowerShell'" -ErrorAction SilentlyContinue
         } catch {
             [System.Windows.MessageBox]::Show("PowerShell not available.", "Error", "OK", "Error")
         }
@@ -848,7 +912,9 @@ if ($btnEnableNetwork) {
 }
 
 # ChatGPT Help button
-$W.FindName("BtnNetworkDiagnostics").Add_Click({
+$btnNetworkDiagnostics = Get-Control -Name "BtnNetworkDiagnostics"
+if ($btnNetworkDiagnostics) {
+    $btnNetworkDiagnostics.Add_Click({
     try {
         if (Get-Command Invoke-NetworkDiagnostics -ErrorAction SilentlyContinue) {
             Update-StatusBar -Message "Running network diagnostics..." -ShowProgress
@@ -882,9 +948,12 @@ $W.FindName("BtnNetworkDiagnostics").Add_Click({
         [System.Windows.MessageBox]::Show("Error running network diagnostics: $_", "Error", "OK", "Error")
         Update-StatusBar -Message "Network diagnostics failed" -HideProgress
     }
-})
+    })
+}
 
-$W.FindName("BtnKeyboardSymbols").Add_Click({
+$btnKeyboardSymbols = Get-Control -Name "BtnKeyboardSymbols"
+if ($btnKeyboardSymbols) {
+    $btnKeyboardSymbols.Add_Click({
     try {
         if (Get-Command Show-SymbolHelperGUI -ErrorAction SilentlyContinue) {
             Show-SymbolHelperGUI
@@ -902,9 +971,12 @@ $W.FindName("BtnKeyboardSymbols").Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show("Error launching keyboard symbol helper: $_", "Error", "OK", "Error")
     }
-})
+    })
+}
 
-$W.FindName("BtnChatGPT").Add_Click({
+$btnChatGPT = Get-Control -Name "BtnChatGPT"
+if ($btnChatGPT) {
+    $btnChatGPT.Add_Click({
     try {
         Update-StatusBar -Message "Opening ChatGPT help..." -ShowProgress
         $result = Open-ChatGPTHelp
@@ -939,21 +1011,129 @@ $W.FindName("BtnChatGPT").Add_Click({
         Update-StatusBar -Message "Error opening ChatGPT: $_" -HideProgress
         [System.Windows.MessageBox]::Show("Error opening ChatGPT help: $_", "Error", "OK", "Error")
     }
-})
+    })
+}
 
-# Initialize network status
+$btnSwitchToTUI = Get-Control -Name "BtnSwitchToTUI"
+if ($btnSwitchToTUI) {
+    $btnSwitchToTUI.Add_Click({
+    $result = [System.Windows.MessageBox]::Show(
+        "Switch to Command Line Mode (TUI)?`n`nThis will close the GUI and open the text-based interface.`n`nContinue?",
+        "Switch to Command Line Mode",
+        "YesNo",
+        "Question"
+    )
+    
+    if ($result -eq "Yes") {
+        try {
+            Update-StatusBar -Message "Switching to command line mode..." -ShowProgress
+            $W.Close()
+            
+            # Load TUI module and start it
+            $tuiPath = Join-Path $PSScriptRoot "WinRepairTUI.ps1"
+            if (Test-Path $tuiPath) {
+                . $tuiPath
+                Start-TUI
+            } else {
+                Write-Host "Error: WinRepairTUI.ps1 not found at $tuiPath" -ForegroundColor Red
+                Write-Host "Please run MiracleBoot.ps1 to access TUI mode." -ForegroundColor Yellow
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Error switching to command line mode: $_`n`nYou can manually run MiracleBoot.ps1 to access TUI mode.",
+                "Error",
+                "OK",
+                "Error"
+            )
+        }
+    }
+    })
+}
+
+# Initialize network status (with improved detection)
 try {
-    $internetTest = Test-InternetConnectivity -TimeoutSeconds 2
-    if ($internetTest.Connected) {
-        $W.FindName("NetworkStatus").Text = "Network: Connected"
-        $W.FindName("NetworkStatus").Foreground = "Green"
+    $networkStatusControl = Get-Control "NetworkStatus"
+    if ($networkStatusControl) {
+        try {
+            # Step 1: Check if network adapters exist (even if not connected)
+            $adaptersAvailable = $false
+            $adaptersConnected = $false
+            $hasInternet = $false
+            
+            # Try multiple methods to detect network adapters
+            try {
+                $netAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Hidden' }
+                if ($netAdapters) {
+                    $adaptersAvailable = $true
+                    $connectedAdapters = $netAdapters | Where-Object { $_.Status -eq 'Up' -or $_.Status -eq 'Connected' }
+                    if ($connectedAdapters) {
+                        $adaptersConnected = $true
+                    }
+                }
+            } catch {
+                # Fallback: Check with netsh
+                try {
+                    $netshOutput = netsh interface show interface 2>&1
+                    if ($netshOutput -match 'connected|disconnected|enabled|disabled') {
+                        $adaptersAvailable = $true
+                        if ($netshOutput -match 'connected') {
+                            $adaptersConnected = $true
+                        }
+                    }
+                } catch {
+                    # Try Get-NetworkAdapterStatus if NetworkDiagnostics is loaded
+                    if (Get-Command Get-NetworkAdapterStatus -ErrorAction SilentlyContinue) {
+                        try {
+                            $adapterStatus = Get-NetworkAdapterStatus -ErrorAction SilentlyContinue
+                            if ($adapterStatus -and $adapterStatus.Count -gt 0) {
+                                $adaptersAvailable = $true
+                                $connectedAdapters = $adapterStatus | Where-Object { $_.Connected -eq $true }
+                                if ($connectedAdapters) {
+                                    $adaptersConnected = $true
+                                }
+                            }
+                        } catch {
+                            # Continue with other checks
+                        }
+                    }
+                }
+            }
+            
+            # Step 2: If adapters are connected, test internet connectivity
+            if ($adaptersConnected) {
+                try {
+                    $internetTest = Test-InternetConnectivity -TimeoutSeconds 3 -ErrorAction SilentlyContinue
+                    if ($internetTest -and $internetTest.Connected) {
+                        $hasInternet = $true
+                    }
+                } catch {
+                    # Internet test failed, but adapter is connected
+                }
+            }
+            
+            # Step 3: Set status based on findings
+            if ($hasInternet) {
+                $networkStatusControl.Text = "Network: Connected"
+                $networkStatusControl.Foreground = "Green"
+            } elseif ($adaptersConnected) {
+                $networkStatusControl.Text = "Network: Connected (No Internet)"
+                $networkStatusControl.Foreground = "Orange"
+            } elseif ($adaptersAvailable) {
+                $networkStatusControl.Text = "Network: Available"
+                $networkStatusControl.Foreground = "Yellow"
+            } else {
+                $networkStatusControl.Text = "Network: Not Found"
+                $networkStatusControl.Foreground = "Gray"
+            }
+        } catch {
+            $networkStatusControl.Text = "Network: Unknown"
+            $networkStatusControl.Foreground = "Gray"
+        }
     } else {
-        $W.FindName("NetworkStatus").Text = "Network: Unknown"
-        $W.FindName("NetworkStatus").Foreground = "Gray"
+        Write-Warning "NetworkStatus control not found in XAML"
     }
 } catch {
-    $W.FindName("NetworkStatus").Text = "Network: Unknown"
-    $W.FindName("NetworkStatus").Foreground = "Gray"
+    Write-Warning "Error initializing network status: $_"
 }
 
 # Populate drive combo (with null checks)
@@ -1013,7 +1193,7 @@ try {
     function Update-CurrentOSLabel {
         try {
             $diagDriveCombo = Get-Control "DiagDriveCombo"
-            if ($diagDriveCombo) {
+            if ($diagDriveCombo -and $diagDriveCombo.SelectedItem) {
                 $selected = $diagDriveCombo.SelectedItem
                 $drive = $currentSystemDrive
                 if ($selected) {
@@ -1130,21 +1310,11 @@ try {
 # Store BCD entries globally for real-time updates
 $script:BCDEntriesCache = $null
 
-# Helper function to safely get controls with null checking
-function Get-Control {
-    param([string]$Name)
-    if (-not $W) {
-        Write-Warning "Window object not available"
-        return $null
-    }
-    $control = $W.FindName($Name)
-    if (-not $control) {
-        Write-Warning "Control '$Name' not found in XAML"
-    }
-    return $control
-}
-
 # Helper function to update status bar with enhanced progress tracking
+# Global status bar state for elapsed time tracking
+$script:StatusBarStartTime = $null
+$script:StatusBarElapsedTimer = $null
+
 function Update-StatusBar {
     param(
         [string]$Message = "Ready",
@@ -1153,17 +1323,71 @@ function Update-StatusBar {
         [int]$Percentage = -1,
         [string]$Stage = "",
         [string]$CurrentOperation = "",
-        [TimeSpan]$EstimatedTimeRemaining = $null
+        [Nullable[TimeSpan]]$EstimatedTimeRemaining = $null
     )
+    
+    # Start elapsed time tracking when progress begins
+    if ($ShowProgress -and -not $script:StatusBarStartTime) {
+        $script:StatusBarStartTime = Get-Date
+        # Clear any existing timer
+        if ($script:StatusBarElapsedTimer) {
+            $script:StatusBarElapsedTimer.Stop()
+            $script:StatusBarElapsedTimer.Dispose()
+        }
+        # Create timer for periodic updates
+        $script:StatusBarElapsedTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:StatusBarElapsedTimer.Interval = [TimeSpan]::FromSeconds(1)
+        $script:StatusBarElapsedTimer.Add_Tick({
+            if ($script:StatusBarStartTime -and $W) {
+                $elapsed = (Get-Date) - $script:StatusBarStartTime
+                $minutes = [math]::Floor($elapsed.TotalMinutes)
+                $seconds = [math]::Floor($elapsed.TotalSeconds % 60)
+                $W.Dispatcher.Invoke([action]{
+                    $statusBarControl = Get-Control "StatusBarText"
+                    if ($statusBarControl) {
+                        $currentText = $statusBarControl.Text
+                        # Update elapsed time if message hasn't changed
+                        if ($currentText -match "Elapsed:") {
+                            $statusBarControl.Text = $currentText -replace "Elapsed: \d+m \d+s", "Elapsed: ${minutes}m ${seconds}s"
+                        } elseif ($currentText -notmatch "Elapsed:") {
+                            $statusBarControl.Text = "$currentText | Elapsed: ${minutes}m ${seconds}s"
+                        }
+                    }
+                }, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        })
+        $script:StatusBarElapsedTimer.Start()
+    }
+    
+    # Stop elapsed time tracking when progress ends
+    if ($HideProgress) {
+        if ($script:StatusBarElapsedTimer) {
+            $script:StatusBarElapsedTimer.Stop()
+            $script:StatusBarElapsedTimer.Dispose()
+            $script:StatusBarElapsedTimer = $null
+        }
+        $script:StatusBarStartTime = $null
+    }
     
     # Use dispatcher to ensure UI updates on UI thread
     $W.Dispatcher.Invoke([action]{
-        $W.FindName("StatusBarText").Text = $Message
+        $statusBarControl = Get-Control "StatusBarText"
+        if ($statusBarControl) {
+            # Add elapsed time if progress is active
+            if ($ShowProgress -and $script:StatusBarStartTime) {
+                $elapsed = (Get-Date) - $script:StatusBarStartTime
+                $minutes = [math]::Floor($elapsed.TotalMinutes)
+                $seconds = [math]::Floor($elapsed.TotalSeconds % 60)
+                $statusBarControl.Text = "$Message | Elapsed: ${minutes}m ${seconds}s"
+            } else {
+                $statusBarControl.Text = $Message
+            }
+        }
         
-        $progressBar = $W.FindName("StatusBarProgressBar")
-        $progressText = $W.FindName("StatusBarProgress")
+        $progressBar = Get-Control "StatusBarProgressBar"
+        $progressText = Get-Control "StatusBarProgress"
         
-        if ($ShowProgress) {
+        if ($ShowProgress -and $progressBar -and $progressText) {
             $progressBar.Visibility = "Visible"
             
             # If percentage is provided, use determinate progress bar
@@ -1193,13 +1417,19 @@ function Update-StatusBar {
                     }
                 }
                 
-                $progressText.Text = $progressTextParts -join " "
+                if ($progressText) {
+                    $progressText.Text = $progressTextParts -join " "
+                }
             } else {
                 # No percentage available, use indeterminate progress bar
-                $progressBar.IsIndeterminate = $true
-                $progressText.Text = "Working..."
+                if ($progressBar) {
+                    $progressBar.IsIndeterminate = $true
+                }
+                if ($progressText) {
+                    $progressText.Text = "Working..."
+                }
             }
-        } elseif ($HideProgress) {
+        } elseif ($HideProgress -and $progressBar -and $progressText) {
             $progressBar.Visibility = "Collapsed"
             $progressBar.IsIndeterminate = $true
             $progressBar.Value = 0
@@ -1209,6 +1439,89 @@ function Update-StatusBar {
     
     # Force UI update
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+# Helper function to wrap long operations with heartbeat updates
+function Start-OperationWithHeartbeat {
+    <#
+    .SYNOPSIS
+        Wraps a long-running operation with periodic heartbeat updates to prevent UI from appearing frozen.
+    
+    .DESCRIPTION
+        Executes a scriptblock in a background runspace and provides periodic "Still working..." updates
+        every few seconds to keep the UI responsive and inform users the operation is still running.
+    
+    .PARAMETER ScriptBlock
+        The operation to execute
+    
+    .PARAMETER OperationName
+        Display name for the operation
+    
+    .PARAMETER HeartbeatInterval
+        Seconds between heartbeat updates (default: 5)
+    
+    .EXAMPLE
+        Start-OperationWithHeartbeat -ScriptBlock { Start-Sleep -Seconds 30 } -OperationName "Disk Check"
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$ScriptBlock,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$OperationName,
+        
+        [int]$HeartbeatInterval = 5
+    )
+    
+    $startTime = Get-Date
+    $lastHeartbeat = Get-Date
+    
+    # Create runspace for background execution
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.ApartmentState = "STA"
+    $runspace.ThreadOptions = "ReuseThread"
+    $runspace.Open()
+    
+    # Create PowerShell instance
+    $psInstance = [PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+    
+    # Add the scriptblock
+    $null = $psInstance.AddScript($ScriptBlock)
+    
+    # Start operation asynchronously
+    $asyncResult = $psInstance.BeginInvoke()
+    
+    # Monitor and provide heartbeat updates
+    while (-not $asyncResult.IsCompleted) {
+        Start-Sleep -Milliseconds 500
+        
+        $elapsed = (Get-Date) - $startTime
+        $minutes = [math]::Floor($elapsed.TotalMinutes)
+        $seconds = [math]::Floor($elapsed.TotalSeconds % 60)
+        
+        # Send heartbeat every N seconds
+        if (((Get-Date) - $lastHeartbeat).TotalSeconds -ge $HeartbeatInterval) {
+            $heartbeatMsg = "Still working on: $OperationName... (${minutes}m ${seconds}s elapsed)"
+            $W.Dispatcher.Invoke([action]{
+                Update-StatusBar -Message $heartbeatMsg -ShowProgress
+            }, [System.Windows.Threading.DispatcherPriority]::Background)
+            $lastHeartbeat = Get-Date
+        }
+        
+        # Allow UI to process events
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    
+    # Get result
+    $result = $psInstance.EndInvoke($asyncResult)
+    
+    # Cleanup
+    $psInstance.Dispose()
+    $runspace.Close()
+    $runspace.Dispose()
+    
+    return $result
 }
 
 # Helper function to create progress callback for repair operations
@@ -1560,54 +1873,72 @@ modify critical boot settings that affect system startup.
 # Helper function to update Boot Menu Simulator
 function Update-BootMenuSimulator {
     param($Items)
-    $W.FindName("SimList").Items.Clear()
-    foreach ($item in $Items) {
-        if ($item.Description) {
-            $W.FindName("SimList").Items.Add($item.Description)
+    $simListControl = Get-Control "SimList"
+    if ($simListControl) {
+        $simListControl.Items.Clear()
+        foreach ($item in $Items) {
+            if ($item.Description) {
+                $simListControl.Items.Add($item.Description)
+            }
         }
     }
 }
 
 # BCD List selection - populate both basic and advanced editors
-$W.FindName("BCDList").Add_SelectionChanged({
-    $selected = $W.FindName("BCDList").SelectedItem
-    if ($selected) {
-        $W.FindName("EditId").Text = $selected.Id
-        $W.FindName("EditDescription").Text = $selected.Description
-        $W.FindName("EditName").Text = $selected.Description
-        
-        # Populate Advanced Properties Grid
-        if ($selected.EntryObject) {
-            $properties = @()
-            foreach ($key in $selected.EntryObject.Keys) {
-                if ($key -ne 'Id' -and $key -ne 'EntryType') {
-                    $properties += [PSCustomObject]@{
-                        Name = $key
-                        Value = $selected.EntryObject[$key]
+$bcdListControl = Get-Control "BCDList"
+if ($bcdListControl) {
+    $bcdListControl.Add_SelectionChanged({
+        $selected = $bcdListControl.SelectedItem
+        if ($selected) {
+            $editIdControl = Get-Control "EditId"
+            $editDescControl = Get-Control "EditDescription"
+            $editNameControl = Get-Control "EditName"
+            
+            if ($editIdControl) { $editIdControl.Text = $selected.Id }
+            if ($editDescControl) { $editDescControl.Text = $selected.Description }
+            if ($editNameControl) { $editNameControl.Text = $selected.Description }
+            
+            # Populate Advanced Properties Grid
+            if ($selected.EntryObject) {
+                $properties = @()
+                foreach ($key in $selected.EntryObject.Keys) {
+                    if ($key -ne 'Id' -and $key -ne 'EntryType') {
+                        $properties += [PSCustomObject]@{
+                            Name = $key
+                            Value = $selected.EntryObject[$key]
+                        }
                     }
                 }
+                $propsGridControl = Get-Control "BCDPropertiesGrid"
+                if ($propsGridControl) {
+                    $propsGridControl.ItemsSource = $properties
+                }
             }
-            $W.FindName("BCDPropertiesGrid").ItemsSource = $properties
         }
-    }
-})
+    })
+}
 
 # BCD Backup button
-$W.FindName("BtnBCDBackup").Add_Click({
-    try {
-        $backup = Export-BCDBackup
-        if ($backup.Success) {
-            [System.Windows.MessageBox]::Show("BCD backup created successfully!`n`nLocation: $($backup.Path)", "Backup Complete", "OK", "Information")
-        } else {
-            [System.Windows.MessageBox]::Show("Failed to create backup: $($backup.Error)", "Error", "OK", "Error")
+$btnBCDBackup = Get-Control -Name "BtnBCDBackup"
+if ($btnBCDBackup) {
+    $btnBCDBackup.Add_Click({
+        try {
+            $backup = Export-BCDBackup
+            if ($backup.Success) {
+                [System.Windows.MessageBox]::Show("BCD backup created successfully!`n`nLocation: $($backup.Path)", "Backup Complete", "OK", "Information")
+            } else {
+                [System.Windows.MessageBox]::Show("Failed to create backup: $($backup.Error)", "Error", "OK", "Error")
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Error creating backup: $_", "Error", "OK", "Error")
         }
-    } catch {
-        [System.Windows.MessageBox]::Show("Error creating backup: $_", "Error", "OK", "Error")
-    }
-})
+    })
+}
 
 # Fix Duplicates button
-$W.FindName("BtnFixDuplicates").Add_Click({
+$btnFixDuplicates = Get-Control -Name "BtnFixDuplicates"
+if ($btnFixDuplicates) {
+    $btnFixDuplicates.Add_Click({
     $duplicates = Find-DuplicateBCEEntries
     if ($duplicates -and $duplicates.Count -gt 0) {
         $dupList = ""
@@ -1642,11 +1973,15 @@ $W.FindName("BtnFixDuplicates").Add_Click({
             "Information"
         )
     }
-})
+    })
+}
 
 # Sync BCD to All EFI Partitions
-$W.FindName("BtnSyncBCD").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
+$btnSyncBCD = Get-Control -Name "BtnSyncBCD"
+if ($btnSyncBCD) {
+    $btnSyncBCD.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
     $drive = "C"
     
     if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
@@ -1662,85 +1997,112 @@ $W.FindName("BtnSyncBCD").Add_Click({
         "Question"
     )
     
-    if ($result -eq "Yes") {
-        try {
-            $W.FindName("FixerOutput").Text = "Synchronizing BCD to all EFI partitions...`n"
-            $syncResult = Sync-BCDToAllEFIPartitions -SourceWindowsDrive $drive
-            
-            $output = "Synchronization Complete`n"
-            $output += "===============================================================`n"
-            $output += "$($syncResult.Message)`n`n"
-            
-            foreach ($res in $syncResult.Results) {
-                if ($res.Success) {
-                    $output += "[SUCCESS] Drive $($res.Drive): Synced successfully`n"
-                } else {
-                    $output += "[FAILED] Drive $($res.Drive): $($res.Error)`n"
+        if ($result -eq "Yes") {
+            try {
+                $fixerOutput = Get-Control -Name "FixerOutput"
+                if ($fixerOutput) {
+                    $fixerOutput.Text = "Synchronizing BCD to all EFI partitions...`n"
                 }
+                $syncResult = Sync-BCDToAllEFIPartitions -SourceWindowsDrive $drive
+                
+                $output = "Synchronization Complete`n"
+                $output += "===============================================================`n"
+                $output += "$($syncResult.Message)`n`n"
+                
+                foreach ($res in $syncResult.Results) {
+                    if ($res.Success) {
+                        $output += "[SUCCESS] Drive $($res.Drive): Synced successfully`n"
+                    } else {
+                        $output += "[FAILED] Drive $($res.Drive): $($res.Error)`n"
+                    }
+                }
+                
+                if ($fixerOutput) {
+                    $fixerOutput.Text = $output
+                }
+                [System.Windows.MessageBox]::Show($syncResult.Message, "Synchronization Complete", "OK", "Information")
+            } catch {
+                [System.Windows.MessageBox]::Show("Error during synchronization: $_", "Error", "OK", "Error")
             }
-            
-            $W.FindName("FixerOutput").Text = $output
-            [System.Windows.MessageBox]::Show($syncResult.Message, "Synchronization Complete", "OK", "Information")
-        } catch {
-            [System.Windows.MessageBox]::Show("Error during synchronization: $_", "Error", "OK", "Error")
         }
-    }
-})
+    })
+}
 
 # Boot Diagnosis button (Boot Fixer tab)
-$W.FindName("BtnBootDiagnosis").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnBootDiagnosis = Get-Control -Name "BtnBootDiagnosis"
+if ($btnBootDiagnosis) {
+    $btnBootDiagnosis.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    $diagnosis = Get-BootDiagnosis -TargetDrive $drive
-    $W.FindName("FixerOutput").Text = $diagnosis
-    
-    # Switch to Boot Fixer tab to show the output
-    $bootFixerTab = $W.FindName("TabControl").Items | Where-Object { $_.Header -eq "Boot Fixer" }
-    if ($bootFixerTab) {
-        $W.FindName("TabControl").SelectedItem = $bootFixerTab
-    }
-    
-    [System.Windows.MessageBox]::Show(
-        "Boot diagnosis complete.`n`nResults are displayed in the 'Boot Fixer' tab below.`n`nScroll down in the output box to see the full diagnosis report.",
-        "Diagnosis Complete",
-        "OK",
-        "Information"
-    )
-})
+        
+        $diagnosis = Get-BootDiagnosis -TargetDrive $drive
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        if ($fixerOutput) {
+            $fixerOutput.Text = $diagnosis
+        }
+        
+        # Switch to Boot Fixer tab to show the output
+        $tabControl = Get-Control -Name "TabControl"
+        if ($tabControl) {
+            $bootFixerTab = $tabControl.Items | Where-Object { $_.Header -eq "Boot Fixer" }
+            if ($bootFixerTab) {
+                $tabControl.SelectedItem = $bootFixerTab
+            }
+        }
+        
+        [System.Windows.MessageBox]::Show(
+            "Boot diagnosis complete.`n`nResults are displayed in the 'Boot Fixer' tab below.`n`nScroll down in the output box to see the full diagnosis report.",
+            "Diagnosis Complete",
+            "OK",
+            "Information"
+        )
+    })
+}
 
 # Boot Diagnosis button (BCD Editor tab)
-$W.FindName("BtnBootDiagnosisBCD").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnBootDiagnosisBCD = Get-Control -Name "BtnBootDiagnosisBCD"
+if ($btnBootDiagnosisBCD) {
+    $btnBootDiagnosisBCD.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    $diagnosis = Get-BootDiagnosis -TargetDrive $drive
-    $W.FindName("BCDBox").Text = $diagnosis
-    
-    [System.Windows.MessageBox]::Show(
-        "Boot diagnosis complete.`n`nResults are displayed in the BCD output box below.",
-        "Diagnosis Complete",
-        "OK",
-        "Information"
-    )
-})
+        
+        $diagnosis = Get-BootDiagnosis -TargetDrive $drive
+        $bcdBox = Get-Control -Name "BCDBox"
+        if ($bcdBox) {
+            $bcdBox.Text = $diagnosis
+        }
+        
+        [System.Windows.MessageBox]::Show(
+            "Boot diagnosis complete.`n`nResults are displayed in the BCD output box below.",
+            "Diagnosis Complete",
+            "OK",
+            "Information"
+        )
+    })
+}
 
 # Update BCD Description with backup and BitLocker check
-$W.FindName("BtnUpdateBcd").Add_Click({
-    $id = $W.FindName("EditId").Text
-    $name = $W.FindName("EditName").Text
+$btnUpdateBcd = Get-Control -Name "BtnUpdateBcd"
+if ($btnUpdateBcd) {
+    $btnUpdateBcd.Add_Click({
+        $editId = Get-Control -Name "EditId"
+        $editName = Get-Control -Name "EditName"
+        $id = if ($editId) { $editId.Text } else { "" }
+        $name = if ($editName) { $editName.Text } else { "" }
     if ($id -and $name) {
         # Show comprehensive warning
         $warningInfo = Show-CommandWarning -CommandKey "bcd_description" -Command "Set-BCDDescription $id $name" -Description "Change BCD entry description" -IsGUI
@@ -1778,30 +2140,42 @@ $W.FindName("BtnUpdateBcd").Add_Click({
             [System.Windows.MessageBox]::Show("Entry Updated!`n`nBackup saved to: $($backup.Path)", "Success", "OK", "Information")
             
             # Update simulator in real-time
-            $selected = $W.FindName("BCDList").SelectedItem
+            $bcdList = Get-Control -Name "BCDList"
+            $selected = if ($bcdList) { $bcdList.SelectedItem } else { $null }
             if ($selected) {
                 $selected.Description = $name
                 $selected.DisplayText = $name
-                $W.FindName("BCDList").Items.Refresh()
-                Update-BootMenuSimulator ($W.FindName("BCDList").ItemsSource)
+                if ($bcdList) {
+                    $bcdList.Items.Refresh()
+                    Update-BootMenuSimulator ($bcdList.ItemsSource)
+                }
             }
             
-            $W.FindName("BtnBCD").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+            $btnBCD = Get-Control -Name "BtnBCD"
+            if ($btnBCD) {
+                $btnBCD.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+            }
         } else {
             [System.Windows.MessageBox]::Show("Failed to create backup. Update cancelled for safety.", "Error", "OK", "Error")
         }
     }
-})
+    })
+}
 
 # Save Advanced Properties
-$W.FindName("BtnSaveProperties").Add_Click({
-    $selected = $W.FindName("BCDList").SelectedItem
+$btnSaveProperties = Get-Control -Name "BtnSaveProperties"
+if ($btnSaveProperties) {
+    $btnSaveProperties.Add_Click({
+
+    $bcdList = Get-Control -Name "BCDList"
+    $selected = if ($bcdList) { $bcdList.SelectedItem } else { $null }
     if (-not $selected) {
         [System.Windows.MessageBox]::Show("Please select a BCD entry first.", "Warning", "OK", "Warning")
         return
     }
     
-    $properties = $W.FindName("BCDPropertiesGrid").ItemsSource
+    $bcdPropertiesGrid = Get-Control -Name "BCDPropertiesGrid"
+    $properties = if ($bcdPropertiesGrid) { $bcdPropertiesGrid.ItemsSource } else { $null }
     if (-not $properties) { return }
     
     # Create backup first
@@ -1837,124 +2211,626 @@ $W.FindName("BtnSaveProperties").Add_Click({
     } catch {
         [System.Windows.MessageBox]::Show("Error updating properties: $_", "Error", "OK", "Error")
     }
-})
+    })
+}
 
-$W.FindName("BtnSetDefault").Add_Click({
-    $id = $W.FindName("EditId").Text
-    if ($id) {
-        $command = "bcdedit /default $id"
-        $explanation = "Sets the selected boot entry as the default option that will boot automatically after the timeout period."
+$btnSetDefault = Get-Control -Name "BtnSetDefault"
+if ($btnSetDefault) {
+    $btnSetDefault.Add_Click({
+        $editId = Get-Control -Name "EditId"
+        $id = if ($editId) { $editId.Text } else { "" }
         
-        $testMode = Show-CommandPreview $command $null "Set Default Boot Entry"
-        
-        if ($testMode) {
-            Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
-            return
-        }
-        
-        try {
-            Update-StatusBar -Message "Setting default boot entry..." -ShowProgress
-            Set-BCDDefaultEntry $id
-            Update-StatusBar -Message "Default boot entry set - refreshing list..." -ShowProgress
+        if ($id) {
+            $command = "bcdedit /default $id"
+            $explanation = "Sets the selected boot entry as the default option that will boot automatically after the timeout period."
             
-            # Refresh BCD list to show the new default
-            $W.FindName("BtnBCD").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+            $testMode = Show-CommandPreview $command $null "Set Default Boot Entry"
             
-            Update-StatusBar -Message "Default boot entry updated" -HideProgress
-            [System.Windows.MessageBox]::Show("Default Boot Set to $id`n`nThe list has been refreshed to show the new default entry.", "Success", "OK", "Information")
-        } catch {
-            Update-StatusBar -Message "Failed to set default boot entry: $_" -HideProgress
-            [System.Windows.MessageBox]::Show("Error setting default boot entry: $_", "Error", "OK", "Error")
+            if ($testMode) {
+                Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
+                return
+            }
+            
+            try {
+                Update-StatusBar -Message "Setting default boot entry..." -ShowProgress
+                Set-BCDDefaultEntry $id
+                Update-StatusBar -Message "Default boot entry set - refreshing list..." -ShowProgress
+                
+                # Refresh BCD list to show the new default
+                $btnBCD = Get-Control -Name "BtnBCD"
+                if ($btnBCD) {
+                    $btnBCD.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                }
+                
+                Update-StatusBar -Message "Default boot entry updated" -HideProgress
+                [System.Windows.MessageBox]::Show("Default Boot Set to $id`n`nThe list has been refreshed to show the new default entry.", "Success", "OK", "Information")
+            } catch {
+                Update-StatusBar -Message "Failed to set default boot entry: $_" -HideProgress
+                [System.Windows.MessageBox]::Show("Error setting default boot entry: $_", "Error", "OK", "Error")
+            }
         }
-    }
-})
+    })
+}
 
-$W.FindName("BtnTimeout").Add_Click({
+$btnTimeout = Get-Control -Name "BtnTimeout"
+if ($btnTimeout) {
+    $btnTimeout.Add_Click({
+
     $t = $W.FindName("TxtTimeout").Text
     bcdedit /timeout $t
     [System.Windows.MessageBox]::Show("Timeout updated to $t seconds.", "Success", "OK", "Information")
-})
+    })
+}
 
 # Driver Diagnostics
-$W.FindName("BtnDetect").Add_Click({
-    $W.FindName("DrvBox").Text = "Scanning for storage driver errors...`n`n"
-    $result = Get-MissingStorageDevices
-    $W.FindName("DrvBox").Text = $result
-})
+$btnDetect = Get-Control -Name "BtnDetect"
+if ($btnDetect) {
+    $btnDetect.Add_Click({
+        $drvBox = Get-Control -Name "DrvBox"
+        if ($drvBox) {
+            $drvBox.Text = "Scanning for storage driver errors...`n`n"
+        }
+        $result = Get-MissingStorageDevices
+        if ($drvBox) {
+            $drvBox.Text = $result
+        }
+    })
+}
 
-$W.FindName("BtnScanDrivers").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
-    $drive = $null
-    
-    if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1] + ":"
-        }
-    }
-    
-    $W.FindName("DrvBox").Text = "Scanning for MISSING storage drivers...`n`n"
-    $W.FindName("DrvBox").Text += "Checking for problematic storage controllers first...`n"
-    
-    $scanResult = Scan-ForDrivers -SourceDrive $drive
-    
-    if ($scanResult.Found) {
-        $output = "`n[SUCCESS] SCAN COMPLETE`n"
-        $output += "===============================================================`n"
-        $output += "$($scanResult.Message)`n"
-        $output += "Source Location: $($scanResult.SearchPath)`n"
-        $output += "`nFound Drivers (matching missing devices):`n"
-        $output += "---------------------------------------------------------------`n"
+$btnScanDrivers = Get-Control -Name "BtnScanDrivers"
+if ($btnScanDrivers) {
+    $btnScanDrivers.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $drvBox = Get-Control -Name "DrvBox"
         
-        $num = 1
-        foreach ($driver in $scanResult.Drivers) {
-            $output += "$num. $($driver.Name)`n"
-            $output += "   Path: $($driver.Path)`n"
-            $output += "   Type: $($driver.Type)`n`n"
-            $num++
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = $null
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1] + ":"
+            }
         }
         
-        $W.FindName("DrvBox").Text = $output
-    } else {
-        $W.FindName("DrvBox").Text = "`n[INFO] SCAN RESULTS`n`n$($scanResult.Message)"
-    }
-})
+        if ($drvBox) {
+            $drvBox.Text = "Scanning for MISSING storage drivers...`n`n"
+            $drvBox.Text += "Checking for problematic storage controllers first...`n"
+        }
+        
+        $scanResult = Scan-ForDrivers -SourceDrive $drive
+        
+        if ($scanResult.Found) {
+            $output = "`n[SUCCESS] SCAN COMPLETE`n"
+            $output += "===============================================================`n"
+            $output += "$($scanResult.Message)`n"
+            $output += "Source Location: $($scanResult.SearchPath)`n"
+            $output += "`nFound Drivers (matching missing devices):`n"
+            $output += "---------------------------------------------------------------`n"
+            
+            $num = 1
+            foreach ($driver in $scanResult.Drivers) {
+                $output += "$num. $($driver.Name)`n"
+                $output += "   Path: $($driver.Path)`n"
+                $output += "   Type: $($driver.Type)`n`n"
+                $num++
+            }
+            
+            if ($drvBox) {
+                $drvBox.Text = $output
+            }
+        } else {
+            if ($drvBox) {
+                $drvBox.Text = "`n[INFO] SCAN RESULTS`n`n$($scanResult.Message)"
+            }
+        }
+    })
+}
 
-$W.FindName("BtnScanAllDrivers").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
-    $drive = $null
-    
-    if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1] + ":"
-        }
-    }
-    
-    $W.FindName("DrvBox").Text = "Scanning for ALL available storage drivers...`n`n"
-    $W.FindName("DrvBox").Text += "This may take a moment...`n"
-    
-    $scanResult = Scan-ForDrivers -SourceDrive $drive -ShowAll
-    
-    if ($scanResult.Found) {
-        $output = "`n[SUCCESS] SCAN COMPLETE`n"
-        $output += "===============================================================`n"
-        $output += "$($scanResult.Message)`n"
-        $output += "Source Location: $($scanResult.SearchPath)`n"
-        $output += "`nFound Drivers (ALL storage drivers):`n"
-        $output += "---------------------------------------------------------------`n"
+$btnScanAllDrivers = Get-Control -Name "BtnScanAllDrivers"
+if ($btnScanAllDrivers) {
+    $btnScanAllDrivers.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $drvBox = Get-Control -Name "DrvBox"
         
-        $num = 1
-        foreach ($driver in $scanResult.Drivers) {
-            $output += "$num. $($driver.Name)`n"
-            $output += "   Path: $($driver.Path)`n"
-            $output += "   Type: $($driver.Type)`n`n"
-            $num++
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = $null
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1] + ":"
+            }
         }
         
-        $W.FindName("DrvBox").Text = $output
-    } else {
-        $W.FindName("DrvBox").Text = "`n[FAILED] SCAN FAILED`n`n$($scanResult.Message)"
+        if ($drvBox) {
+            $drvBox.Text = "Scanning for ALL available storage drivers...`n`n"
+            $drvBox.Text += "This may take a moment...`n"
+        }
+        
+        $scanResult = Scan-ForDrivers -SourceDrive $drive -ShowAll
+        
+        if ($scanResult.Found) {
+            $output = "`n[SUCCESS] SCAN COMPLETE`n"
+            $output += "===============================================================`n"
+            $output += "$($scanResult.Message)`n"
+            $output += "Source Location: $($scanResult.SearchPath)`n"
+            $output += "`nFound Drivers (ALL storage drivers):`n"
+            $output += "---------------------------------------------------------------`n"
+            
+            $num = 1
+            foreach ($driver in $scanResult.Drivers) {
+                $output += "$num. $($driver.Name)`n"
+                $output += "   Path: $($driver.Path)`n"
+                $output += "   Type: $($driver.Type)`n`n"
+                $num++
+            }
+            
+            if ($drvBox) {
+                $drvBox.Text = $output
+            }
+        } else {
+            if ($drvBox) {
+                $drvBox.Text = "`n[FAILED] SCAN FAILED`n`n$($scanResult.Message)"
+            }
+        }
+    })
+}
+
+# Advanced Driver Tools (2025+ Systems) - Handler for advanced storage controller detection
+# Note: Add button to XAML with Name="BtnAdvancedControllerDetection" to enable
+if ($W.FindName("BtnAdvancedControllerDetection")) {
+    $btnAdvancedControllerDetection = Get-Control -Name "BtnAdvancedControllerDetection"
+    if ($btnAdvancedControllerDetection) {
+        $btnAdvancedControllerDetection.Add_Click({
+
+        $drvBox = Get-Control -Name "DrvBox"
+        if ($drvBox) {
+            $drvBox.Text = "Advanced Storage Controller Detection (2025+ Systems)`n"
+            $drvBox.Text += "===============================================================`n"
+            $drvBox.Text += "Detecting storage controllers using WMI, Registry, and PCI enumeration...`n`n"
+        }
+        
+        Update-StatusBar -Message "Detecting storage controllers..." -ShowProgress
+        
+        try {
+            $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical -Detailed
+            
+            if ($controllers.Count -eq 0) {
+                if ($drvBox) {
+                    $drvBox.Text += "No storage controllers detected.`n"
+                }
+            } else {
+                $output = "Found $($controllers.Count) storage controller(s):`n`n"
+                
+                foreach ($controller in $controllers) {
+                    $statusColor = if ($controller.HasDriver) { "[OK]" } else { "[MISSING]" }
+                    $criticalMark = if ($controller.IsBootCritical) { " [BOOT-CRITICAL]" } else { "" }
+                    
+                    $output += "Controller: $($controller.Name)$criticalMark`n"
+                    $output += "  Type: $($controller.ControllerType)`n"
+                    $output += "  Vendor: $($controller.Vendor)`n"
+                    $output += "  Status: $($controller.Status) $statusColor`n"
+                    $output += "  Has Driver: $($controller.HasDriver)`n"
+                    $output += "  Needs Driver: $($controller.NeedsDriver)`n"
+                    $output += "  Required INF: $($controller.RequiredInf)`n"
+                    if ($controller.HardwareIDs -and $controller.HardwareIDs.Count -gt 0) {
+                        $output += "  Hardware ID: $($controller.HardwareIDs[0])`n"
+                    }
+                    $output += "`n"
+                }
+                
+                $needsDriver = ($controllers | Where-Object { $_.NeedsDriver }).Count
+                $bootCritical = ($controllers | Where-Object { $_.IsBootCritical }).Count
+                
+                $output += "Summary:`n"
+                $output += "  Total Controllers: $($controllers.Count)`n"
+                $output += "  Boot-Critical: $bootCritical`n"
+                $output += "  Need Drivers: $needsDriver`n"
+                
+                if ($drvBox) {
+                    $drvBox.Text += $output
+                }
+            }
+            
+            Update-StatusBar -Message "Storage controller detection complete" -HideProgress
+        } catch {
+            if ($drvBox) {
+                $drvBox.Text += "Error: $_`n"
+            }
+            Update-StatusBar -Message "Error detecting storage controllers: $_" -HideProgress
+        }
+        })
     }
-})
+}
+
+# Advanced Driver Matching & Injection - Handler
+# Note: Add button to XAML with Name="BtnAdvancedDriverInjection" to enable
+if ($W.FindName("BtnAdvancedDriverInjection")) {
+    $btnAdvancedDriverInjection = Get-Control -Name "BtnAdvancedDriverInjection"
+    if ($btnAdvancedDriverInjection) {
+        $btnAdvancedDriverInjection.Add_Click({
+
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        # Show dialog for driver path
+        $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderDialog.Description = "Select folder containing driver INF files"
+        $folderDialog.ShowNewFolderButton = $false
+        
+        if ($folderDialog.ShowDialog() -eq "OK") {
+            $driverPath = $folderDialog.SelectedPath
+            
+            $drvBox = Get-Control -Name "DrvBox"
+            if ($drvBox) {
+                $drvBox.Text = "Advanced Driver Matching & Injection`n"
+                $drvBox.Text += "===============================================================`n"
+                $drvBox.Text += "Target: $drive`: | Source: $driverPath`n`n"
+            }
+            
+            Update-StatusBar -Message "Detecting storage controllers..." -ShowProgress
+            
+            try {
+                $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical
+                
+                $progressCallback = {
+                    param($message, $percent)
+                    $W.Dispatcher.Invoke([action]{
+                        $drvBoxInner = Get-Control -Name "DrvBox"
+                        if ($drvBoxInner) {
+                            $drvBoxInner.Text += "$message ($percent%)`n"
+                            $drvBoxInner.ScrollToEnd()
+                        }
+                        Update-StatusBar -Message $message -ShowProgress
+                    }, [System.Windows.Threading.DispatcherPriority]::Input)
+                }
+                
+                $result = Start-AdvancedDriverInjection -WindowsDrive $drive -DriverPath $driverPath -ControllerInfo $controllers -ProgressCallback $progressCallback
+                
+                if ($drvBox) {
+                    $drvBox.Text += "`n$($result.Report)`n"
+                }
+                
+                if ($result.Success) {
+                    Update-StatusBar -Message "Driver injection completed successfully" -HideProgress
+                    [System.Windows.MessageBox]::Show("Successfully injected $($result.DriversInjected.Count) driver(s).", "Success", "OK", "Information")
+                } else {
+                    Update-StatusBar -Message "Driver injection completed with errors" -HideProgress
+                    [System.Windows.MessageBox]::Show("Driver injection completed with $($result.DriversFailed.Count) error(s). Check the output for details.", "Warning", "OK", "Warning")
+                }
+            } catch {
+                if ($drvBox) {
+                    $drvBox.Text += "Error: $_`n"
+                }
+                Update-StatusBar -Message "Error: $_" -HideProgress
+                [System.Windows.MessageBox]::Show("Error during driver injection: $_", "Error", "OK", "Error")
+            }
+        }
+        })
+    }
+}
+
+# Find Matching Drivers - Handler
+# Note: Add button to XAML with Name="BtnFindMatchingDrivers" to enable
+if ($W.FindName("BtnFindMatchingDrivers")) {
+    $btnFindMatchingDrivers = Get-Control -Name "BtnFindMatchingDrivers"
+    if ($btnFindMatchingDrivers) {
+        $btnFindMatchingDrivers.Add_Click({
+
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = $null
+        
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        $drvBox = Get-Control -Name "DrvBox"
+        if ($drvBox) {
+            $drvBox.Text = "Find Matching Drivers for Controllers`n"
+            $drvBox.Text += "===============================================================`n"
+            $drvBox.Text += "Detecting storage controllers...`n`n"
+        }
+        
+        Update-StatusBar -Message "Detecting storage controllers..." -ShowProgress
+        
+        try {
+            $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical
+            
+            if ($controllers.Count -eq 0) {
+                if ($drvBox) {
+                    $drvBox.Text += "No storage controllers detected.`n"
+                }
+                Update-StatusBar -Message "No controllers found" -HideProgress
+                return
+            }
+            
+            # Show dialog for additional search paths
+            $searchPaths = @()
+            $addMore = [System.Windows.MessageBox]::Show("Add additional driver search paths?", "Search Paths", "YesNo", "Question")
+            
+            while ($addMore -eq "Yes") {
+                $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+                $folderDialog.Description = "Select additional driver search folder (or Cancel to finish)"
+                if ($folderDialog.ShowDialog() -eq "OK") {
+                    $searchPaths += $folderDialog.SelectedPath
+                    $addMore = [System.Windows.MessageBox]::Show("Add another search path?", "Search Paths", "YesNo", "Question")
+                } else {
+                    $addMore = "No"
+                }
+            }
+            
+            if ($drvBox) {
+                $drvBox.Text += "Searching for matching drivers...`n`n"
+            }
+            Update-StatusBar -Message "Searching for matching drivers..." -ShowProgress
+            
+            $matches = Find-MatchingDrivers -ControllerInfo $controllers -SearchPaths $searchPaths -WindowsDrive $drive
+            
+            $output = "Driver Matching Results:`n"
+            $output += "===============================================================`n`n"
+            
+            foreach ($match in $matches) {
+                $output += "Controller: $($match.Controller)`n"
+                $output += "  Type: $($match.ControllerType)`n"
+                $output += "  Hardware ID: $($match.HardwareID)`n"
+                $output += "  Required INF: $($match.RequiredInf)`n"
+                $output += "  Matches Found: $($match.MatchesFound)`n"
+                
+                if ($match.BestMatches.Count -gt 0) {
+                    $output += "`n  Best Matches:`n"
+                    foreach ($bestMatch in $match.BestMatches) {
+                        $output += "    - $($bestMatch.DriverName)`n"
+                        $output += "      Source: $($bestMatch.Source)`n"
+                        $output += "      Match: $($bestMatch.MatchType) (Score: $($bestMatch.MatchScore))`n"
+                        $output += "      Signed: $($bestMatch.IsSigned)`n"
+                    }
+                } else {
+                    $output += "  No matching drivers found.`n"
+                    $output += "  Recommendation: Download $($match.RequiredInf) from manufacturer`n"
+                }
+                $output += "`n"
+            }
+            
+            if ($drvBox) {
+                $drvBox.Text += $output
+            }
+            Update-StatusBar -Message "Driver matching complete" -HideProgress
+        } catch {
+            if ($drvBox) {
+                $drvBox.Text += "Error: $_`n"
+            }
+            Update-StatusBar -Message "Error: $_" -HideProgress
+        }
+        })
+    }
+}
+
+# One-Click Repair Handler
+$btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
+if ($btnOneClickRepair) {
+    $btnOneClickRepair.Add_Click({
+        $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        
+        # Disable button during repair
+        $btnOneClickRepair.IsEnabled = $false
+        
+        try {
+            # Update status
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Starting automated repair... Please wait."
+            }
+            Update-StatusBar -Message "One-Click Repair: Starting diagnostics..." -ShowProgress
+            
+            # Step 1: Hardware Diagnostics
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Step 1/5: Running hardware diagnostics (S.M.A.R.T., disk health)..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Checking hardware health..." -ShowProgress
+            
+            $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+            
+            $drive = $env:SystemDrive.TrimEnd(':')
+            $diskHealth = Test-DiskHealth -WindowsDrive $drive
+            
+            if ($fixerOutput) {
+                $fixerOutput.Text = "ONE-CLICK REPAIR - AUTOMATED DIAGNOSIS AND REPAIR`n"
+                $fixerOutput.Text += "===============================================================`n`n"
+                $fixerOutput.Text += "Step 1: Hardware Diagnostics`n"
+                $fixerOutput.Text += "---------------------------------------------------------------`n"
+                if ($diskHealth.DiskHealthy) {
+                    $fixerOutput.Text += "[OK] Disk health check passed`n"
+                } else {
+                    $fixerOutput.Text += "[WARNING] Disk health issues detected:`n"
+                    foreach ($issue in $diskHealth.Issues) {
+                        $fixerOutput.Text += "  - $issue`n"
+                    }
+                    if (-not $diskHealth.CanProceedWithSoftwareRepair) {
+                        $fixerOutput.Text += "`n[CRITICAL] Hardware issues detected. Software repairs NOT recommended.`n"
+                        $fixerOutput.Text += "Please backup data and replace hardware before continuing.`n"
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "CRITICAL: Hardware failure detected. Backup data immediately!"
+                        }
+                        Update-StatusBar -Message "One-Click Repair: Hardware failure detected - STOPPED" -HideProgress
+                        return
+                    }
+                }
+                $fixerOutput.Text += "`n"
+            }
+            
+            # Step 2: Check for missing storage drivers
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Step 2/5: Checking for missing storage drivers..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Checking storage drivers..." -ShowProgress
+            
+            $controllers = Get-StorageControllers -WindowsDrive $drive
+            $missingDrivers = $controllers | Where-Object { -not $_.DriverLoaded }
+            
+            if ($fixerOutput) {
+                $fixerOutput.Text += "Step 2: Storage Driver Check`n"
+                $fixerOutput.Text += "---------------------------------------------------------------`n"
+                if ($missingDrivers.Count -eq 0) {
+                    $fixerOutput.Text += "[OK] All storage drivers are loaded`n"
+                } else {
+                    $fixerOutput.Text += "[WARNING] Missing storage drivers detected:`n"
+                    foreach ($controller in $missingDrivers) {
+                        $fixerOutput.Text += "  - $($controller.FriendlyName) (Hardware ID: $($controller.HardwareID))`n"
+                    }
+                    $fixerOutput.Text += "`nNote: Driver injection may be needed if boot fails.`n"
+                }
+                $fixerOutput.Text += "`n"
+            }
+            
+            # Step 3: BCD Integrity Check
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Step 3/5: Checking Boot Configuration Data (BCD)..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Checking BCD integrity..." -ShowProgress
+            
+            try {
+                $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                if ($bcdCheck -match "The boot configuration data store could not be opened") {
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
+                        $fixerOutput.Text += "---------------------------------------------------------------`n"
+                        $fixerOutput.Text += "[ERROR] BCD is corrupted or missing`n"
+                        $fixerOutput.Text += "Action: Will attempt to rebuild BCD`n`n"
+                    }
+                    
+                    # Attempt BCD rebuild
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Step 3/5: Rebuilding BCD..."
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Rebuilding BCD..." -ShowProgress
+                    $bcdRebuild = bootrec /rebuildbcd 2>&1 | Out-String
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "BCD Rebuild Output:`n$bcdRebuild`n`n"
+                    }
+                } else {
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
+                        $fixerOutput.Text += "---------------------------------------------------------------`n"
+                        $fixerOutput.Text += "[OK] BCD is accessible and appears healthy`n`n"
+                    }
+                }
+            } catch {
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
+                    $fixerOutput.Text += "---------------------------------------------------------------`n"
+                    $fixerOutput.Text += "[WARNING] Could not verify BCD: $_`n`n"
+                }
+            }
+            
+            # Step 4: Boot File Check
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Step 4/5: Checking boot files..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Checking boot files..." -ShowProgress
+            
+            $bootFiles = @("bootmgfw.efi", "winload.efi", "winload.exe")
+            $missingFiles = @()
+            foreach ($file in $bootFiles) {
+                $efiPath = "$drive`:\EFI\Microsoft\Boot\$file"
+                $winPath = "$drive`:\Windows\System32\$file"
+                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                    $missingFiles += $file
+                }
+            }
+            
+            if ($fixerOutput) {
+                $fixerOutput.Text += "Step 4: Boot File Check`n"
+                $fixerOutput.Text += "---------------------------------------------------------------`n"
+                if ($missingFiles.Count -eq 0) {
+                    $fixerOutput.Text += "[OK] All critical boot files are present`n"
+                } else {
+                    $fixerOutput.Text += "[WARNING] Missing boot files:`n"
+                    foreach ($file in $missingFiles) {
+                        $fixerOutput.Text += "  - $file`n"
+                    }
+                    $fixerOutput.Text += "Action: Attempting to repair boot files...`n"
+                    
+                    # Attempt boot file repair
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Step 4/5: Repairing boot files..."
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Repairing boot files..." -ShowProgress
+                    $bootFix = bootrec /fixboot 2>&1 | Out-String
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "Boot File Repair Output:`n$bootFix`n"
+                    }
+                }
+                $fixerOutput.Text += "`n"
+            }
+            
+            # Step 5: Final Summary
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "Step 5/5: Generating repair summary..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Generating summary..." -ShowProgress
+            
+            if ($fixerOutput) {
+                $fixerOutput.Text += "===============================================================`n"
+                $fixerOutput.Text += "REPAIR SUMMARY`n"
+                $fixerOutput.Text += "===============================================================`n`n"
+                
+                $issuesFound = 0
+                if (-not $diskHealth.DiskHealthy) { $issuesFound++ }
+                if ($missingDrivers.Count -gt 0) { $issuesFound++ }
+                if ($missingFiles.Count -gt 0) { $issuesFound++ }
+                
+                if ($issuesFound -eq 0) {
+                    $fixerOutput.Text += "[SUCCESS] No critical issues detected. Your system appears healthy.`n"
+                    $fixerOutput.Text += "If you're still experiencing boot problems, try:`n"
+                    $fixerOutput.Text += "  1. Running System File Checker (SFC)`n"
+                    $fixerOutput.Text += "  2. Running DISM repair`n"
+                    $fixerOutput.Text += "  3. Checking for Windows Updates`n"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "✅ Repair complete! No critical issues found."
+                    }
+                } else {
+                    $fixerOutput.Text += "[INFO] Found $issuesFound issue(s). Repairs have been attempted.`n"
+                    $fixerOutput.Text += "`nNEXT STEPS:`n"
+                    $fixerOutput.Text += "1. Restart your computer and test if it boots normally`n"
+                    $fixerOutput.Text += "2. If problems persist, consider:`n"
+                    $fixerOutput.Text += "   - Running an in-place repair installation`n"
+                    $fixerOutput.Text += "   - Checking hardware health (if not already done)`n"
+                    $fixerOutput.Text += "   - Injecting missing storage drivers`n"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "✅ Repair complete! Found $issuesFound issue(s) and attempted fixes."
+                    }
+                }
+                
+                $fixerOutput.ScrollToEnd()
+            }
+            
+            Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
+            
+        } catch {
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "❌ Error: $($_.Exception.Message)"
+            }
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`n[ERROR] One-Click Repair failed: $_`n"
+                $fixerOutput.Text += "Stack trace: $($_.ScriptStackTrace)`n"
+            }
+            Update-StatusBar -Message "One-Click Repair: Failed - $($_.Exception.Message)" -HideProgress
+        } finally {
+            # Re-enable button
+            $btnOneClickRepair.IsEnabled = $true
+        }
+    })
+}
 
 # Boot Fixer Functions - Enhanced with detailed command info
 function Show-CommandPreview {
@@ -1982,87 +2858,111 @@ function Show-CommandPreview {
         $output += "--- [EXECUTING COMMAND] ---`n"
     }
     
-    $W.FindName("FixerOutput").Text = $output
-    $W.FindName("FixerOutput").ScrollToEnd()
+    $fixerOutput = Get-Control -Name "FixerOutput"
+    if ($fixerOutput) {
+        $fixerOutput.Text = $output
+        $fixerOutput.ScrollToEnd()
+    }
     
     return $testMode
 }
 
-$W.FindName("BtnRebuildBCD").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    $command = "bcdboot $drive`:\Windows"
-    $explanation = Get-CommandExplanation "bcdboot"
-    $cmdInfo = Get-DetailedCommandInfo "bcdboot"
-    
-    $displayText = "COMMAND: $command`n`n"
-    if ($cmdInfo) {
-        $displayText += "WHY USE THIS:`n$($cmdInfo.Why)`n`n"
-        $displayText += "TECHNICAL ACTION:`n$($cmdInfo.What)`n"
-    } else {
-        $displayText += "EXPLANATION:`n$explanation"
-    }
-    $W.FindName("TxtRebuildBCD").Text = $displayText
-    
-    $testMode = Show-CommandPreview $command "bcdboot" "Rebuild BCD from Windows Installation"
-    
-    if (-not $testMode) {
-        # Show comprehensive warning
-        $warningInfo = Show-CommandWarning -CommandKey "bcdboot" -Command $command -Description "Rebuild BCD from Windows Installation" -IsGUI
+$btnRebuildBCD = Get-Control -Name "BtnRebuildBCD"
+if ($btnRebuildBCD) {
+    $btnRebuildBCD.Add_Click({
+        $driveCombo = Get-Control -Name "DriveCombo"
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        $txtRebuildBCD = Get-Control -Name "TxtRebuildBCD"
         
-        $warningMsg = "$($warningInfo.Message)`n`nDo you want to proceed?"
-        $result = [System.Windows.MessageBox]::Show(
-            $warningMsg,
-            $warningInfo.Title,
-            "YesNo",
-            "Warning"
-        )
+        $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
+        $drive = "C"
         
-        if ($result -eq "No") {
-            $W.FindName("FixerOutput").Text += "`nOperation cancelled by user.`n"
-            Update-StatusBar -Message "Operation cancelled" -HideProgress
-            return
-        }
-        
-        # BitLocker Safety Check
-        $bitlocker = Test-BitLockerStatus -TargetDrive $drive
-        if ($bitlocker.IsEncrypted) {
-            $result = [System.Windows.MessageBox]::Show(
-                "$($bitlocker.Warning)`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
-                "BitLocker Encryption Detected",
-                "YesNo",
-                "Warning"
-            )
-            if ($result -eq "No") {
-                $W.FindName("FixerOutput").Text += "`nOperation cancelled due to BitLocker encryption.`n"
-                Update-StatusBar -Message "Operation cancelled" -HideProgress
-                return
+        if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
             }
         }
         
-        try {
-            Update-StatusBar -Message "Executing BCD rebuild..." -ShowProgress
-            $result = Invoke-Expression $command 2>&1
-            $W.FindName("FixerOutput").Text += "`nOutput: $result`n"
-            Update-StatusBar -Message "BCD rebuild completed" -HideProgress
-        } catch {
-            $W.FindName("FixerOutput").Text += "`nError: $_`n"
-            Update-StatusBar -Message "BCD rebuild failed: $_" -HideProgress
+        $command = "bcdboot $drive`:\Windows"
+        $explanation = Get-CommandExplanation "bcdboot"
+        $cmdInfo = Get-DetailedCommandInfo "bcdboot"
+        
+        $displayText = "COMMAND: $command`n`n"
+        if ($cmdInfo) {
+            $displayText += "WHY USE THIS:`n$($cmdInfo.Why)`n`n"
+            $displayText += "TECHNICAL ACTION:`n$($cmdInfo.What)`n"
+        } else {
+            $displayText += "EXPLANATION:`n$explanation"
         }
-    } else {
-        Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
-    }
-})
+        if ($txtRebuildBCD) {
+            $txtRebuildBCD.Text = $displayText
+        }
+        
+        $testMode = Show-CommandPreview $command "bcdboot" "Rebuild BCD from Windows Installation"
+        
+        if (-not $testMode) {
+            # Show comprehensive warning
+            $warningInfo = Show-CommandWarning -CommandKey "bcdboot" -Command $command -Description "Rebuild BCD from Windows Installation" -IsGUI
+            
+            $warningMsg = "$($warningInfo.Message)`n`nDo you want to proceed?"
+            $result = [System.Windows.MessageBox]::Show(
+                $warningMsg,
+                $warningInfo.Title,
+                "YesNo",
+                "Warning"
+            )
+            
+            if ($result -eq "No") {
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "`nOperation cancelled by user.`n"
+                }
+                Update-StatusBar -Message "Operation cancelled" -HideProgress
+                return
+            }
+            
+            # BitLocker Safety Check
+            $bitlocker = Test-BitLockerStatus -TargetDrive $drive
+            if ($bitlocker.IsEncrypted) {
+                $result = [System.Windows.MessageBox]::Show(
+                    "$($bitlocker.Warning)`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
+                    "BitLocker Encryption Detected",
+                    "YesNo",
+                    "Warning"
+                )
+                if ($result -eq "No") {
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "`nOperation cancelled due to BitLocker encryption.`n"
+                    }
+                    Update-StatusBar -Message "Operation cancelled" -HideProgress
+                    return
+                }
+            }
+            
+            try {
+                Update-StatusBar -Message "Executing BCD rebuild..." -ShowProgress
+                $result = Invoke-Expression $command 2>&1
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "`nOutput: $result`n"
+                }
+                Update-StatusBar -Message "BCD rebuild completed" -HideProgress
+            } catch {
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "`nError: $_`n"
+                }
+                Update-StatusBar -Message "BCD rebuild failed: $_" -HideProgress
+            }
+        } else {
+            Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
+        }
+    })
+}
 
-$W.FindName("BtnFixBoot").Add_Click({
-    $selectedDrive = $W.FindName("DriveCombo").SelectedItem
+$btnFixBoot = Get-Control -Name "BtnFixBoot"
+if ($btnFixBoot) {
+    $btnFixBoot.Add_Click({
+
+    $driveCombo = Get-Control -Name "DriveCombo"
+    $selectedDrive = if ($driveCombo) { $driveCombo.SelectedItem } else { $null }
     $drive = "C"
     
     if ($selectedDrive -and $selectedDrive -ne "Auto-detect") {
@@ -2079,7 +2979,10 @@ $W.FindName("BtnFixBoot").Add_Click({
         $displayText += "WHY USE THIS:`n$($cmdInfo.Why)`n`n"
         $displayText += "TECHNICAL ACTION:`n$($cmdInfo.What)`n"
     }
-    $W.FindName("TxtFixBoot").Text = $displayText
+    $TxtFixBoot = Get-Control -Name "TxtFixBoot"
+    if ($TxtFixBoot) {
+        $TxtFixBoot.Text = $displayText
+    }
     
     $testMode = Show-CommandPreview $command "fixboot" "Fix Boot Files (bootrec)"
     
@@ -2095,8 +2998,11 @@ $W.FindName("BtnFixBoot").Add_Click({
             "Warning"
         )
         
+        $fixerOutput = Get-Control -Name "FixerOutput"
         if ($result -eq "No") {
-            $W.FindName("FixerOutput").Text += "`nOperation cancelled by user.`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nOperation cancelled by user.`n"
+            }
             Update-StatusBar -Message "Operation cancelled" -HideProgress
             return
         }
@@ -2111,7 +3017,9 @@ $W.FindName("BtnFixBoot").Add_Click({
                 "Warning"
             )
             if ($result -eq "No") {
-                $W.FindName("FixerOutput").Text += "`nOperation cancelled due to BitLocker encryption.`n"
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "`nOperation cancelled due to BitLocker encryption.`n"
+                }
                 Update-StatusBar -Message "Operation cancelled" -HideProgress
                 return
             }
@@ -2122,18 +3030,26 @@ $W.FindName("BtnFixBoot").Add_Click({
             $result1 = bootrec /fixboot 2>&1
             $result2 = bootrec /fixmbr 2>&1
             $result3 = bootrec /rebuildbcd 2>&1
-            $W.FindName("FixerOutput").Text += "`nOutput:`n$result1`n$result2`n$result3`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nOutput:`n$result1`n$result2`n$result3`n"
+            }
             Update-StatusBar -Message "Boot fix completed" -HideProgress
         } catch {
-            $W.FindName("FixerOutput").Text += "`nError: $_`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nError: $_`n"
+            }
             Update-StatusBar -Message "Boot fix failed: $_" -HideProgress
         }
     } else {
         Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
     }
-})
+    })
+}
 
-$W.FindName("BtnScanWindows").Add_Click({
+$btnScanWindows = Get-Control -Name "BtnScanWindows"
+if ($btnScanWindows) {
+    $btnScanWindows.Add_Click({
+
     $command = "bootrec /scanos"
     $cmdInfo = Get-DetailedCommandInfo "scanos"
     
@@ -2142,26 +3058,38 @@ $W.FindName("BtnScanWindows").Add_Click({
         $displayText += "WHY USE THIS:`n$($cmdInfo.Why)`n`n"
         $displayText += "TECHNICAL ACTION:`n$($cmdInfo.What)`n"
     }
-    $W.FindName("TxtScanWindows").Text = $displayText
+    $TxtScanWindows = Get-Control -Name "TxtScanWindows"
+    if ($TxtScanWindows) {
+        $TxtScanWindows.Text = $displayText
+    }
     
     $testMode = Show-CommandPreview $command "scanos" "Scan for Windows Installations"
     
     if (-not $testMode) {
+        $fixerOutput = Get-Control -Name "FixerOutput"
         try {
             Update-StatusBar -Message "Scanning for Windows installations..." -ShowProgress
             $result = bootrec /scanos 2>&1
-            $W.FindName("FixerOutput").Text += "`nOutput: $result`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nOutput: $result`n"
+            }
             Update-StatusBar -Message "Windows scan completed" -HideProgress
         } catch {
-            $W.FindName("FixerOutput").Text += "`nError: $_`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nError: $_`n"
+            }
             Update-StatusBar -Message "Windows scan failed: $_" -HideProgress
         }
     } else {
         Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
     }
-})
+    })
+}
 
-$W.FindName("BtnRebuildBCD2").Add_Click({
+$btnRebuildBCD2 = Get-Control -Name "BtnRebuildBCD2"
+if ($btnRebuildBCD2) {
+    $btnRebuildBCD2.Add_Click({
+
     $command = "bootrec /rebuildbcd"
     $cmdInfo = Get-DetailedCommandInfo "rebuildbcd"
     
@@ -2170,27 +3098,40 @@ $W.FindName("BtnRebuildBCD2").Add_Click({
         $displayText += "WHY USE THIS:`n$($cmdInfo.Why)`n`n"
         $displayText += "TECHNICAL ACTION:`n$($cmdInfo.What)`n"
     }
-    $W.FindName("TxtRebuildBCD2").Text = $displayText
+    $TxtRebuildBCD2 = Get-Control -Name "TxtRebuildBCD2"
+    if ($TxtRebuildBCD2) {
+        $TxtRebuildBCD2.Text = $displayText
+    }
     
     $testMode = Show-CommandPreview $command "rebuildbcd" "Rebuild BCD (bootrec)"
     
     if (-not $testMode) {
+        $fixerOutput = Get-Control -Name "FixerOutput"
         try {
             Update-StatusBar -Message "Rebuilding BCD..." -ShowProgress
             $result = bootrec /rebuildbcd 2>&1
-            $W.FindName("FixerOutput").Text += "`nOutput: $result`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nOutput: $result`n"
+            }
             Update-StatusBar -Message "BCD rebuild completed" -HideProgress
         } catch {
-            $W.FindName("FixerOutput").Text += "`nError: $_`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nError: $_`n"
+            }
             Update-StatusBar -Message "BCD rebuild failed: $_" -HideProgress
         }
     } else {
         Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
     }
-})
+    })
+}
 
-$W.FindName("BtnSetDefaultBoot").Add_Click({
-    $selected = $W.FindName("BCDList").SelectedItem
+$btnSetDefaultBoot = Get-Control -Name "BtnSetDefaultBoot"
+if ($btnSetDefaultBoot) {
+    $btnSetDefaultBoot.Add_Click({
+
+    $bcdList = Get-Control -Name "BCDList"
+    $selected = if ($bcdList) { $bcdList.SelectedItem } else { $null }
     if (-not $selected) {
         [System.Windows.MessageBox]::Show("Please select a BCD entry first in the BCD Editor tab.", "Warning", "OK", "Warning")
         return
@@ -2198,32 +3139,48 @@ $W.FindName("BtnSetDefaultBoot").Add_Click({
     
     $command = "bcdedit /default $($selected.Id)"
     $explanation = "Sets the selected boot entry as the default option that will boot automatically after the timeout period. This is useful when you have multiple Windows installations and want to change which one boots by default."
-    $W.FindName("TxtSetDefault").Text = "COMMAND: $command`nEntry: $($selected.Description)`n`nEXPLANATION:`n$explanation"
+    $TxtSetDefault = Get-Control -Name "TxtSetDefault"
+    if ($TxtSetDefault) {
+        $TxtSetDefault.Text = "COMMAND: $command`n"
+    }
     
     $testMode = Show-CommandPreview $command $null "Set Default Boot Entry"
     
     if (-not $testMode) {
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        $btnBCD = Get-Control -Name "BtnBCD"
         try {
             Set-BCDDefaultEntry $selected.Id
-            $W.FindName("FixerOutput").Text += "Default boot entry set successfully.`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "Default boot entry set successfully.`n"
+            }
             Update-StatusBar -Message "Default boot entry set successfully - refreshing list..." -ShowProgress
             
             # Refresh BCD list to show the new default
-            $W.FindName("BtnBCD").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+            if ($btnBCD) {
+                $btnBCD.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+            }
             
             Update-StatusBar -Message "Default boot entry updated" -HideProgress
         } catch {
-            $W.FindName("FixerOutput").Text += "Error: $_`n"
+            if ($fixerOutput) {
+                $fixerOutput.Text += "Error: $_`n"
+            }
             Update-StatusBar -Message "Failed to set default boot entry: $_" -HideProgress
         }
     } else {
         Update-StatusBar -Message "Command preview complete (Test Mode)" -HideProgress
     }
-})
+    })
+}
 
 # Diagnostics Tab Handlers
-$W.FindName("BtnCheckRestore").Add_Click({
-    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+$btnCheckRestore = Get-Control -Name "BtnCheckRestore"
+if ($btnCheckRestore) {
+    $btnCheckRestore.Add_Click({
+
+    $diagDriveCombo = Get-Control -Name "DiagDriveCombo"
+    $selectedDrive = if ($diagDriveCombo) { $diagDriveCombo.SelectedItem } else { $null }
     $drive = $env:SystemDrive.TrimEnd(':')
     
     if ($selectedDrive) {
@@ -2232,7 +3189,10 @@ $W.FindName("BtnCheckRestore").Add_Click({
         }
     }
     
-    $W.FindName("DiagBox").Text = "Checking System Restore status for drive $drive`:...`n`n"
+    $diagBox = Get-Control -Name "DiagBox"
+    if ($diagBox) {
+        $diagBox.Text = "Checking System Restore status for drive $drive`:...`n`n"
+    }
     $restoreInfo = Get-SystemRestoreInfo -TargetDrive $drive
     
     $output = "SYSTEM RESTORE DIAGNOSTICS`n"
@@ -2260,11 +3220,18 @@ $W.FindName("BtnCheckRestore").Add_Click({
         $output += "4. Enable System Protection`n"
     }
     
-    $W.FindName("DiagBox").Text = $output
-})
+    if ($diagBox) {
+        $diagBox.Text = $output
+    }
+    })
+}
 
-$W.FindName("BtnCreateRestorePoint").Add_Click({
-    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+$btnCreateRestorePoint = Get-Control -Name "BtnCreateRestorePoint"
+if ($btnCreateRestorePoint) {
+    $btnCreateRestorePoint.Add_Click({
+
+    $diagDriveCombo = Get-Control -Name "DiagDriveCombo"
+    $selectedDrive = if ($diagDriveCombo) { $diagDriveCombo.SelectedItem } else { $null }
     $drive = $env:SystemDrive.TrimEnd(':')
     
     if ($selectedDrive) {
@@ -2292,8 +3259,11 @@ $W.FindName("BtnCreateRestorePoint").Add_Click({
     }
     
     if (-not [string]::IsNullOrWhiteSpace($description)) {
+        $diagBox = Get-Control -Name "DiagBox"
         Update-StatusBar -Message "Creating restore point..." -ShowProgress
-        $W.FindName("DiagBox").Text = "Creating system restore point...`n`nPlease wait...`n"
+        if ($diagBox) {
+            $diagBox.Text = "Creating system restore point...`n`nPlease wait...`n"
+        }
         
         $result = Create-SystemRestorePoint -Description $description -OperationType "Manual"
         
@@ -2319,12 +3289,19 @@ $W.FindName("BtnCreateRestorePoint").Add_Click({
             Update-StatusBar -Message "Failed to create restore point" -HideProgress
         }
         
-        $W.FindName("DiagBox").Text = $output
+        if ($diagBox) {
+            $diagBox.Text = $output
+        }
     }
-})
+    })
+}
 
-$W.FindName("BtnListRestorePoints").Add_Click({
-    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+$btnListRestorePoints = Get-Control -Name "BtnListRestorePoints"
+if ($btnListRestorePoints) {
+    $btnListRestorePoints.Add_Click({
+
+    $diagDriveCombo = Get-Control -Name "DiagDriveCombo"
+    $selectedDrive = if ($diagDriveCombo) { $diagDriveCombo.SelectedItem } else { $null }
     $drive = $env:SystemDrive.TrimEnd(':')
     
     if ($selectedDrive) {
@@ -2333,8 +3310,11 @@ $W.FindName("BtnListRestorePoints").Add_Click({
         }
     }
     
+    $diagBox = Get-Control -Name "DiagBox"
     Update-StatusBar -Message "Retrieving restore points..." -ShowProgress
-    $W.FindName("DiagBox").Text = "Retrieving restore points for drive $drive`:...`n`n"
+    if ($diagBox) {
+        $diagBox.Text = "Retrieving restore points for drive $drive`:...`n`n"
+    }
     
     $restorePoints = Get-SystemRestorePoints -Limit 50
     
@@ -2359,11 +3339,20 @@ $W.FindName("BtnListRestorePoints").Add_Click({
         Update-StatusBar -Message "No restore points found" -HideProgress
     }
     
-    $W.FindName("DiagBox").Text = $output
-})
+    if ($diagBox) {
+        $diagBox.Text = $output
+    }
+    })
+}
 
-$W.FindName("BtnCheckReagentc").Add_Click({
-    $W.FindName("DiagBox").Text = "Checking Reagentc (Windows Recovery Environment) health...`n`n"
+$btnCheckReagentc = Get-Control -Name "BtnCheckReagentc"
+if ($btnCheckReagentc) {
+    $btnCheckReagentc.Add_Click({
+
+    $diagBox = Get-Control -Name "DiagBox"
+    if ($diagBox) {
+        $diagBox.Text = "Checking Reagentc (Windows Recovery Environment) health...`n`n"
+    }
     $reagentcHealth = Get-ReagentcHealth
     
     $output = "REAGENTC HEALTH CHECK`n"
@@ -2389,8 +3378,11 @@ $W.FindName("BtnCheckReagentc").Add_Click({
         $output += "WinRE appears to be properly configured.`n"
     }
     
-    $W.FindName("DiagBox").Text = $output
-})
+    if ($diagBox) {
+        $diagBox.Text = $output
+    }
+    })
+}
 
 $btnGetOSInfo = Get-Control "BtnGetOSInfo"
 if ($btnGetOSInfo) {
@@ -2585,15 +3577,21 @@ if ($btnGetOSInfo) {
         }
     }
     
-    $W.FindName("DiagBox").Text = $output
+    if ($diagBox) {
+        $diagBox.Text = $output
+    }
     })
 } else {
     Write-Warning "BtnGetOSInfo control not found in XAML"
 }
 
 # Install Failure Analysis button
-$W.FindName("BtnInstallFailure").Add_Click({
-    $selectedDrive = $W.FindName("DiagDriveCombo").SelectedItem
+$btnInstallFailure = Get-Control -Name "BtnInstallFailure"
+if ($btnInstallFailure) {
+    $btnInstallFailure.Add_Click({
+
+    $diagDriveCombo = Get-Control -Name "DiagDriveCombo"
+    $selectedDrive = if ($diagDriveCombo) { $diagDriveCombo.SelectedItem } else { $null }
     $drive = $env:SystemDrive.TrimEnd(':')
     
     if ($selectedDrive) {
@@ -2602,12 +3600,16 @@ $W.FindName("BtnInstallFailure").Add_Click({
         }
     }
     
+    $diagBox = Get-Control -Name "DiagBox"
     Update-StatusBar -Message "Analyzing Windows installation failure reasons..." -ShowProgress
-    $W.FindName("DiagBox").Text = "Analyzing Windows installation failure reasons for drive $drive`:...`n`nPlease wait...`n"
+    if ($diagBox) {
+        $diagBox.Text = "Analyzing Windows installation failure reasons for drive $drive`:...`n`nPlease wait...`n"
+    }
     
     $analysis = Get-WindowsInstallFailureReasons -TargetDrive $drive
-    
-    $W.FindName("DiagBox").Text = $analysis.Report
+    if ($DiagBox) {
+        $DiagBox.Text = $analysis.Report
+    }
     Update-StatusBar -Message "Install failure analysis complete" -HideProgress
     
     if ($analysis.FailureReasons.Count -gt 0) {
@@ -2625,309 +3627,698 @@ $W.FindName("BtnInstallFailure").Add_Click({
             "Information"
         )
     }
-})
+    })
+}
 
 # Diagnostics & Logs Tab Handlers
-$W.FindName("BtnDriverForensics").Add_Click({
-    $W.FindName("LogAnalysisBox").Text = "Running storage driver forensics analysis...`n`nScanning for missing devices and matching to INF files...`n"
-    
-    $forensics = Get-MissingDriverForensics
-    
-    $W.FindName("LogAnalysisBox").Text = $forensics
-})
-
-$W.FindName("BtnAnalyzeBootLog").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnDriverForensics = Get-Control -Name "BtnDriverForensics"
+if ($btnDriverForensics) {
+    $btnDriverForensics.Add_Click({
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Running storage driver forensics analysis...`n`nScanning for missing devices and matching to INF files...`n"
         }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Analyzing boot log from $drive`:...`n`n"
-    
-    $bootLog = Get-BootLogAnalysis -TargetDrive $drive
-    
-    $output = $bootLog.Summary
-    
-    if ($bootLog.Found) {
-        $output += "`n`nDETAILED DRIVER FAILURES:`n"
-        $output += "---------------------------------------------------------------`n"
-        if ($bootLog.FailedDrivers.Count -gt 0) {
-            $num = 1
-            foreach ($driver in $bootLog.FailedDrivers | Select-Object -First 20) {
-                $output += "$num. $driver`n"
-                $num++
+        
+        $forensics = Get-MissingDriverForensics
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $forensics
+        }
+    })
+}
+
+$btnAnalyzeBootLog = Get-Control -Name "BtnAnalyzeBootLog"
+if ($btnAnalyzeBootLog) {
+    $btnAnalyzeBootLog.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
             }
-        } else {
-            $output += "No driver failures recorded.`n"
         }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = $output
-})
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Analyzing boot log from $drive`:...`n`n"
+        }
+        
+        $bootLog = Get-BootLogAnalysis -TargetDrive $drive
+        
+        $output = $bootLog.Summary
+        
+        if ($bootLog.Found) {
+            $output += "`n`nDETAILED DRIVER FAILURES:`n"
+            $output += "---------------------------------------------------------------`n"
+            if ($bootLog.FailedDrivers.Count -gt 0) {
+                $num = 1
+                foreach ($driver in $bootLog.FailedDrivers | Select-Object -First 20) {
+                    $output += "$num. $driver`n"
+                    $num++
+                }
+            } else {
+                $output += "No driver failures recorded.`n"
+            }
+        }
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $output
+        }
+    })
+}
 
-$W.FindName("BtnAnalyzeEventLogs").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnAnalyzeEventLogs = Get-Control -Name "BtnAnalyzeEventLogs"
+if ($btnAnalyzeEventLogs) {
+    $btnAnalyzeEventLogs.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Analyzing event logs from $drive`:...`n`nThis may take a moment...`n"
-    
-    $eventLogs = Get-OfflineEventLogs -TargetDrive $drive
-    
-    if ($eventLogs.Success) {
-        $W.FindName("LogAnalysisBox").Text = $eventLogs.Summary
-    } else {
-        $W.FindName("LogAnalysisBox").Text = $eventLogs.Summary
-    }
-})
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Analyzing event logs from $drive`:...`n`nThis may take a moment...`n"
+        }
+        
+        $eventLogs = Get-OfflineEventLogs -TargetDrive $drive
+        
+        if ($logAnalysisBox) {
+            if ($eventLogs.Success) {
+                $logAnalysisBox.Text = $eventLogs.Summary
+            } else {
+                $logAnalysisBox.Text = $eventLogs.Summary
+            }
+        }
+    })
+}
 
 # Comprehensive Log Analysis button
-$W.FindName("BtnComprehensiveLogAnalysis").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    Update-StatusBar -Message "Gathering comprehensive log analysis from $drive`:..." -ShowProgress
-    $W.FindName("LogAnalysisBox").Text = "COMPREHENSIVE LOG ANALYSIS`n" +
-                                        "===============================================================`n" +
-                                        "Target Drive: $drive`:`n" +
-                                        "Analyzing all log tiers...`n`n" +
-                                        "This may take several moments...`n`n" +
-                                        "Please wait..."
-    
-    try {
-        $analysis = Get-ComprehensiveLogAnalysis -TargetDrive $drive
+$btnComprehensiveLogAnalysis = Get-Control -Name "BtnComprehensiveLogAnalysis"
+if ($btnComprehensiveLogAnalysis) {
+    $btnComprehensiveLogAnalysis.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
         
-        if ($analysis.Success) {
-            $output = $analysis.Report
-            if ($analysis.RootCauseSummary) {
-                $output += "`n`n" + $analysis.RootCauseSummary
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
             }
-            if ($analysis.Recommendations.Count -gt 0) {
-                $output += "`n`nRECOMMENDATIONS:`n"
-                $output += "-" * 80 + "`n"
-                $counter = 1
-                foreach ($rec in $analysis.Recommendations) {
-                    $output += "$counter. $rec`n"
-                    $counter++
+        }
+        
+        # Disable button during analysis
+        if ($btnComprehensiveLogAnalysis) {
+            $btnComprehensiveLogAnalysis.IsEnabled = $false
+        }
+        
+        # Progress steps for status updates
+        $progressSteps = @(
+            "Step 1/4: Gathering Tier 1 logs (crash dumps, memory dumps)...",
+            "Step 2/4: Gathering Tier 2 logs (boot pipeline, setup logs)...",
+            "Step 3/4: Gathering Tier 3 logs (system events, SRT trail)...",
+            "Step 4/4: Analyzing logs and generating report..."
+        )
+        
+        Update-StatusBar -Message $progressSteps[0] -ShowProgress
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "COMPREHENSIVE LOG ANALYSIS`n" +
+                                                "===============================================================`n" +
+                                                "Target Drive: $drive`:`n`n" +
+                                                $progressSteps[0] + "`n" +
+                                                "This may take several moments...`n`n" +
+                                                "Please wait..."
+        }
+        
+        try {
+            # Run analysis in background job to keep UI responsive
+            $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+            $analysisJob = Start-Job -ScriptBlock {
+                param($Drive, $ScriptRoot)
+                Set-Location $ScriptRoot
+                . "$ScriptRoot\Helper\LogAnalysis.ps1"
+                Get-ComprehensiveLogAnalysis -TargetDrive $Drive
+            } -ArgumentList $drive, $scriptRoot
+            
+            # Update status bar while job is running (simulate progress)
+            $stepIndex = 0
+            $lastUpdate = Get-Date
+            while ($analysisJob.State -eq 'Running') {
+                Start-Sleep -Milliseconds 500
+                
+                # Update status every 3 seconds to show progress
+                if (((Get-Date) - $lastUpdate).TotalSeconds -ge 3 -and $stepIndex -lt $progressSteps.Count - 1) {
+                    $stepIndex++
+                    $lastUpdate = Get-Date
+                    $W.Dispatcher.Invoke([action]{
+                        Update-StatusBar -Message $progressSteps[$stepIndex] -ShowProgress
+                        if ($logAnalysisBox) {
+                            $currentText = $logAnalysisBox.Text
+                            # Update the step in the text box
+                            $newText = $currentText -replace "Step \d+/4:.*", $progressSteps[$stepIndex]
+                            if ($newText -ne $currentText) {
+                                $logAnalysisBox.Text = $newText
+                                $logAnalysisBox.ScrollToEnd()
+                            }
+                        }
+                    }, [System.Windows.Threading.DispatcherPriority]::Background)
                 }
             }
-            $W.FindName("LogAnalysisBox").Text = $output
-            Update-StatusBar -Message "Comprehensive log analysis complete" -HideProgress
-        } else {
-            $W.FindName("LogAnalysisBox").Text = "Analysis completed with errors.`n`n$($analysis.Report)"
-            Update-StatusBar -Message "Log analysis completed with errors" -HideProgress
-        }
-    } catch {
-        $W.FindName("LogAnalysisBox").Text = "ERROR: Failed to perform comprehensive log analysis`n`n$($_.Exception.Message)`n`n$($_.ScriptStackTrace)"
-        Update-StatusBar -Message "Log analysis failed" -HideProgress
-    }
-})
-
-# Open Event Viewer button
-$W.FindName("BtnOpenEventViewer").Add_Click({
-    try {
-        $result = Open-EventViewer
-        if ($result.Success) {
-            Update-StatusBar -Message "Event Viewer opened" -HideProgress
-        } else {
-            [System.Windows.MessageBox]::Show(
-                "Failed to open Event Viewer: $($result.Message)",
-                "Error",
-                "OK",
-                "Error"
-            )
-        }
-    } catch {
-        [System.Windows.MessageBox]::Show(
-            "Failed to open Event Viewer: $_",
-            "Error",
-            "OK",
-            "Error"
-        )
-    }
-})
-
-# Crash Dump Analyzer button
-$W.FindName("BtnCrashDumpAnalyzer").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    # Check for MEMORY.DMP first
-    $memoryDump = "$drive`:\Windows\MEMORY.DMP"
-    $dumpPath = ""
-    
-    if (Test-Path $memoryDump) {
-        $result = [System.Windows.MessageBox]::Show(
-            "MEMORY.DMP found at:`n$memoryDump`n`nDo you want to analyze this dump file?`n`n(Click No to open Crash Analyzer without a file)",
-            "Crash Dump Found",
-            "YesNo",
-            "Question"
-        )
-        if ($result -eq "Yes") {
-            $dumpPath = $memoryDump
-        }
-    }
-    
-    try {
-        $result = Start-CrashAnalyzer -DumpPath $dumpPath
-        if ($result.Success) {
-            Update-StatusBar -Message $result.Message -HideProgress
-        } else {
-            [System.Windows.MessageBox]::Show(
-                "Failed to launch Crash Analyzer: $($result.Message)`n`nPlease ensure crashanalyze.exe is available in Helper\CrashAnalyzer\",
-                "Error",
-                "OK",
-                "Error"
-            )
-        }
-    } catch {
-        [System.Windows.MessageBox]::Show(
-            "Failed to launch Crash Analyzer: $_",
-            "Error",
-            "OK",
-            "Error"
-        )
-    }
-})
-
-$W.FindName("BtnLookupErrorCode").Add_Click({
-    $errorCode = $W.FindName("ErrorCodeInput").Text.Trim()
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    if ([string]::IsNullOrWhiteSpace($errorCode) -or $errorCode -eq "0x") {
-        [System.Windows.MessageBox]::Show(
-            "Please enter an error code to look up.`n`nExamples:`n- 0xc000000e`n- 0x80070002`n- 0x0000007B",
-            "No Error Code Entered",
-            "OK",
-            "Warning"
-        )
-        return
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Looking up error code: $errorCode`n`nPlease wait...`n"
-    
-    try {
-        $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
-        $W.FindName("LogAnalysisBox").Text = $errorInfo.Report
-    } catch {
-        $W.FindName("LogAnalysisBox").Text = "Error looking up error code: $_`n`nPlease verify the error code format and try again."
-    }
-})
-
-$W.FindName("BtnBootChainAnalysis").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Analyzing boot chain for drive $drive`:...`n`nThis will identify where Windows failed in the boot process...`n`nPlease wait...`n"
-    
-    try {
-        $chainAnalysis = Get-BootChainAnalysis -TargetDrive $drive
-        $W.FindName("LogAnalysisBox").Text = $chainAnalysis.Report
-    } catch {
-        $W.FindName("LogAnalysisBox").Text = "Error analyzing boot chain: $_"
-    }
-})
-
-$W.FindName("BtnFullBootDiagnosis").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Running comprehensive automated boot diagnosis for $drive`:...`n`nPlease wait...`n"
-    
-    # Run enhanced automated diagnosis
-    $diagnosis = Run-BootDiagnosis -Drive $drive
-    
-    $output = $diagnosis.Report
-    
-    # Add boot log summary if available
-    $bootLog = Get-BootLogAnalysis -TargetDrive $drive
-    if ($bootLog.Found) {
-        $output += "`n`n"
-        $output += "===============================================================`n"
-        $output += "BOOT LOG SUMMARY`n"
-        $output += "===============================================================`n"
-        $output += "Boot log found. Critical missing drivers: $($bootLog.MissingDrivers.Count)`n"
-        if ($bootLog.MissingDrivers.Count -gt 0) {
-            $output += "Critical drivers that failed to load:`n"
-            foreach ($driver in $bootLog.MissingDrivers) {
-                $output += "  - $driver`n"
+            
+            # Get results
+            $analysis = Receive-Job -Job $analysisJob -Wait
+            Remove-Job -Job $analysisJob -Force
+            
+            if ($analysis.Success) {
+                $output = $analysis.Report
+                if ($analysis.RootCauseSummary) {
+                    $output += "`n`n" + $analysis.RootCauseSummary
+                }
+                if ($analysis.Recommendations.Count -gt 0) {
+                    $output += "`n`nRECOMMENDATIONS:`n"
+                    $output += "-" * 80 + "`n"
+                    $counter = 1
+                    foreach ($rec in $analysis.Recommendations) {
+                        $output += "$counter. $rec`n"
+                        $counter++
+                    }
+                }
+                if ($logAnalysisBox) {
+                    $logAnalysisBox.Text = $output
+                }
+                Update-StatusBar -Message "[SUCCESS] Comprehensive log analysis complete - $($analysis.Tier1.LogFilesFound.Count + $analysis.Tier2.LogFilesFound.Count + $analysis.Tier3.LogFilesFound.Count) log files analyzed" -HideProgress
+            } else {
+                if ($logAnalysisBox) {
+                    $logAnalysisBox.Text = "Analysis completed with errors.`n`n$($analysis.Report)"
+                }
+                Update-StatusBar -Message "[WARNING] Log analysis completed with errors - check output for details" -HideProgress
+            }
+        } catch {
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "ERROR: Failed to perform comprehensive log analysis`n`n$($_.Exception.Message)`n`n$($_.ScriptStackTrace)"
+            }
+            Update-StatusBar -Message "[ERROR] Log analysis failed - see error details above" -HideProgress
+        } finally {
+            # Re-enable button
+            if ($btnComprehensiveLogAnalysis) {
+                $btnComprehensiveLogAnalysis.IsEnabled = $true
+            }
+            # Clean up job if it still exists
+            if ($analysisJob) {
+                Remove-Job -Job $analysisJob -Force -ErrorAction SilentlyContinue
             }
         }
-    }
-    
-    # Add event log summary if available
-    $eventLogs = Get-OfflineEventLogs -TargetDrive $drive
-    if ($eventLogs.Success) {
-        $output += "`n`n"
-        $output += "===============================================================`n"
-        $output += "EVENT LOG SUMMARY`n"
-        $output += "===============================================================`n"
-        $output += "Recent shutdowns: $($eventLogs.ShutdownEvents.Count)`n"
-        $output += "BSOD events: $($eventLogs.BSODInfo.Count)`n"
-        $output += "Recent errors: $($eventLogs.RecentErrors.Count)`n"
-        if ($eventLogs.BSODInfo.Count -gt 0) {
-            $output += "`nMost recent BSOD:`n"
-            $latestBSOD = $eventLogs.BSODInfo | Sort-Object Time -Descending | Select-Object -First 1
-            $output += "  Stop Code: $($latestBSOD.StopCode)`n"
-            $output += "  $($latestBSOD.Explanation)`n"
-        }
-    }
-    
-    # Show critical issues warning if found
-    if ($diagnosis.HasCriticalIssues) {
-        $output += "`n`n"
-        $output += "===============================================================`n"
-        $output += "[WARN] CRITICAL ISSUES DETECTED - IMMEDIATE ACTION REQUIRED`n"
-        $output += "===============================================================`n"
-        $output += "Review the issues above and follow the recommended actions.`n"
-        $output += "Use the Boot Fixer tab to apply repairs.`n"
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = $output
-})
+    })
+}
 
-$W.FindName("BtnHardwareSupport").Add_Click({
-    $W.FindName("LogAnalysisBox").Text = "Gathering hardware information and support links...`n`n"
+# Open Event Viewer button
+$btnOpenEventViewer = Get-Control -Name "BtnOpenEventViewer"
+if ($btnOpenEventViewer) {
+    $btnOpenEventViewer.Add_Click({
+        try {
+            $result = Open-EventViewer
+            if ($result.Success) {
+                Update-StatusBar -Message "Event Viewer opened" -HideProgress
+            } else {
+                [System.Windows.MessageBox]::Show(
+                    "Failed to open Event Viewer: $($result.Message)",
+                    "Error",
+                    "OK",
+                    "Error"
+                )
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Failed to open Event Viewer: $_",
+                "Error",
+                "OK",
+                "Error"
+            )
+        }
+    })
+}
+
+# Crash Dump Analyzer button
+$btnCrashDumpAnalyzer = Get-Control -Name "BtnCrashDumpAnalyzer"
+if ($btnCrashDumpAnalyzer) {
+    $btnCrashDumpAnalyzer.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        # Check for MEMORY.DMP first
+        $memoryDump = "$drive`:\Windows\MEMORY.DMP"
+        $dumpPath = ""
+        
+        if (Test-Path $memoryDump) {
+            $result = [System.Windows.MessageBox]::Show(
+                "MEMORY.DMP found at:`n$memoryDump`n`nDo you want to analyze this dump file?`n`n(Click No to open Crash Analyzer without a file)",
+                "Crash Dump Found",
+                "YesNo",
+                "Question"
+            )
+            if ($result -eq "Yes") {
+                $dumpPath = $memoryDump
+            }
+        }
+        
+        try {
+            $result = Start-CrashAnalyzer -DumpPath $dumpPath
+            if ($result.Success) {
+                Update-StatusBar -Message $result.Message -HideProgress
+            } else {
+                # Show alternatives if crashanalyze.exe failed
+                $altMethods = if ($result.AlternativeMethods) { "`n`nAlternative Methods:`n" + ($result.AlternativeMethods -join "`n") } else { "" }
+                [System.Windows.MessageBox]::Show(
+                    "$($result.Message)$altMethods",
+                    "Crash Analyzer - Alternative Methods Available",
+                    "OK",
+                    "Information"
+                )
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Failed to launch Crash Analyzer: $_`n`nAlternative: Install WinDbg from Windows SDK or use Event Viewer for .evtx files.",
+                "Error",
+                "OK",
+                "Error"
+            )
+        }
+    })
+}
+
+# Safe event handler wiring for BtnLookupErrorCode (optional control - use Silent flag)
+$btnLookupErrorCode = Get-Control -Name "BtnLookupErrorCode" -Silent
+if ($btnLookupErrorCode) {
+    $btnLookupErrorCode.Add_Click({
+        $errorCodeInput = Get-Control -Name "ErrorCodeInput"
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        if (-not $errorCodeInput -or -not $logAnalysisBox) {
+            [System.Windows.MessageBox]::Show(
+                "Required controls not found in XAML. Error code lookup feature unavailable.",
+                "Feature Unavailable",
+                "OK",
+                "Warning"
+            )
+            return
+        }
+        
+        $errorCode = $errorCodeInput.Text.Trim()
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($errorCode) -or $errorCode -eq "0x") {
+            [System.Windows.MessageBox]::Show(
+                "Please enter an error code to look up.`n`nExamples:`n- 0xc000000e`n- 0x80070002`n- 0x0000007B",
+                "No Error Code Entered",
+                "OK",
+                "Warning"
+            )
+            return
+        }
+        
+        $logAnalysisBox.Text = "Looking up error code: $errorCode`n`nPlease wait...`n"
+        
+        try {
+            $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
+            $logAnalysisBox.Text = $errorInfo.Report
+        } catch {
+            $logAnalysisBox.Text = "Error looking up error code: $_`n`nPlease verify the error code format and try again."
+        }
+    })
+}
+
+$btnBootChainAnalysis = Get-Control -Name "BtnBootChainAnalysis" -Silent
+if ($btnBootChainAnalysis) {
+    $btnBootChainAnalysis.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Analyzing boot chain for drive $drive`:...`n`nThis will identify where Windows failed in the boot process...`n`nPlease wait...`n"
+        }
+        
+        try {
+            $chainAnalysis = Get-BootChainAnalysis -TargetDrive $drive
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = $chainAnalysis.Report
+            }
+        } catch {
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "Error analyzing boot chain: $_"
+            }
+        }
+    })
+}
+
+$btnFullBootDiagnosis = Get-Control -Name "BtnFullBootDiagnosis"
+if ($btnFullBootDiagnosis) {
+    $btnFullBootDiagnosis.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Running comprehensive automated boot diagnosis for $drive`:...`n`nInitializing boot stack analysis...`n"
+        }
+        
+        # Define boot stack phases for visualization
+        $bootPhases = @(
+            @{ Name = "Phase 1: BIOS/UEFI Initialization"; Description = "Hardware detection and initialization" },
+            @{ Name = "Phase 2: Boot Manager (bootmgr)"; Description = "Boot Configuration Data (BCD) loading" },
+            @{ Name = "Phase 3: Boot Loader (winload.exe)"; Description = "Windows boot loader execution" },
+            @{ Name = "Phase 4: Kernel Initialization"; Description = "Windows kernel (ntoskrnl.exe) starting" },
+            @{ Name = "Phase 5: Driver Loading"; Description = "System drivers initialization" },
+            @{ Name = "Phase 6: Session Manager"; Description = "Session Manager (smss.exe) starting" },
+            @{ Name = "Phase 7: Windows Logon"; Description = "User logon process" }
+        )
+        
+        # Show initial boot stack
+        $bootStackText = "`n═══════════════════════════════════════════════════════════`n"
+        $bootStackText += "                    BOOT STACK ANALYSIS`n"
+        $bootStackText += "═══════════════════════════════════════════════════════════`n`n"
+        foreach ($phase in $bootPhases) {
+            $bootStackText += "  [  ] $($phase.Name)`n"
+            $bootStackText += "      -> $($phase.Description)`n`n"
+        }
+        $bootStackText += "═══════════════════════════════════════════════════════════`n`n"
+        $bootStackText += "Analyzing boot process...`n`n"
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $bootStackText
+            $logAnalysisBox.ScrollToEnd()
+        }
+        
+        # Progress callback for boot diagnosis (capture variables from outer scope)
+        $progressCallback = {
+            param($progress)
+            if ($logAnalysisBox) {
+                $currentPhase = if ($progress.Stage) { $progress.Stage } else { 0 }
+                $percentage = if ($progress.Percentage) { $progress.Percentage } else { 0 }
+                
+                # Update boot stack visualization
+                $bootStackText = "`n===============================================================`n"
+                $bootStackText += "                    BOOT STACK ANALYSIS`n"
+                $bootStackText += "                    Progress: $percentage%`n"
+                $bootStackText += "===============================================================`n`n"
+                
+                for ($i = 0; $i -lt $bootPhases.Count; $i++) {
+                    $phase = $bootPhases[$i]
+                    $status = " "
+                    $statusColor = ""
+                    
+                    if ($i -lt $currentPhase) {
+                        $status = "[OK]"
+                        $statusColor = "PASSED"
+                    } elseif ($i -eq $currentPhase) {
+                        $status = "[>>]"
+                        $statusColor = "CHECKING"
+                    } else {
+                        $status = "[  ]"
+                        $statusColor = "PENDING"
+                    }
+                    
+                    $bootStackText += "  $status $($phase.Name) - $statusColor`n"
+                    $bootStackText += "      -> $($phase.Description)`n`n"
+                }
+                
+                $bootStackText += "===============================================================`n`n"
+                if ($progress.CurrentOperation) {
+                    $bootStackText += "Current: $($progress.CurrentOperation)`n"
+                }
+                
+                $logAnalysisBox.Dispatcher.Invoke([action]{
+                    $logAnalysisBox.Text = $bootStackText
+                    $logAnalysisBox.ScrollToEnd()
+                }, [System.Windows.Threading.DispatcherPriority]::Render)
+            }
+        }
+        
+        # Run enhanced automated diagnosis with progress
+        Update-StatusBar -Message "Running boot diagnosis..." -ShowProgress -Percentage 0 -Stage "Initializing"
+        
+        # Run diagnosis in background job to allow progress updates
+        $diagnosisJob = Start-Job -ScriptBlock {
+            param($drive, $scriptRoot)
+            Set-Location $scriptRoot
+            . "$scriptRoot\Helper\WinRepairCore.ps1"
+            Run-BootDiagnosis -Drive $drive
+        } -ArgumentList $drive, $PSScriptRoot
+        
+        # Monitor progress and update boot stack display
+        $phaseIndex = 0
+        $maxPhases = $bootPhases.Count
+        while ($diagnosisJob.State -eq "Running") {
+            Start-Sleep -Milliseconds 800
+            $phaseIndex = [math]::Min($phaseIndex + 1, $maxPhases - 1)
+            $percentage = [math]::Round((($phaseIndex + 1) / $maxPhases) * 100)
+            
+            $progress = @{
+                Stage = $phaseIndex
+                Percentage = $percentage
+                CurrentOperation = $bootPhases[$phaseIndex].Name
+            }
+            & $progressCallback $progress
+            
+            Update-StatusBar -Message "Analyzing: $($bootPhases[$phaseIndex].Name)" -ShowProgress -Percentage $percentage -Stage $phaseIndex
+        }
+        
+        # Get diagnosis results
+        $diagnosis = Receive-Job $diagnosisJob -ErrorAction SilentlyContinue
+        Remove-Job $diagnosisJob -ErrorAction SilentlyContinue
+        
+        # Show final boot stack with all phases checked
+        $finalProgress = @{
+            Stage = $maxPhases - 1
+            Percentage = 100
+            CurrentOperation = "Analysis Complete"
+        }
+        & $progressCallback $finalProgress
+        
+        $output = $diagnosis.Report
+        
+        # Add boot log summary if available
+        $bootLog = Get-BootLogAnalysis -TargetDrive $drive
+        if ($bootLog.Found) {
+            $output += "`n`n"
+            $output += "===============================================================`n"
+            $output += "BOOT LOG SUMMARY`n"
+            $output += "===============================================================`n"
+            $output += "Boot log found. Critical missing drivers: $($bootLog.MissingDrivers.Count)`n"
+            if ($bootLog.MissingDrivers.Count -gt 0) {
+                $output += "Critical drivers that failed to load:`n"
+                foreach ($driver in $bootLog.MissingDrivers) {
+                    $output += "  - $driver`n"
+                }
+            }
+        }
+        
+        # Add event log summary if available
+        $eventLogs = Get-OfflineEventLogs -TargetDrive $drive
+        if ($eventLogs.Success) {
+            $output += "`n`n"
+            $output += "===============================================================`n"
+            $output += "EVENT LOG SUMMARY`n"
+            $output += "===============================================================`n"
+            $output += "Recent shutdowns: $($eventLogs.ShutdownEvents.Count)`n"
+            $output += "BSOD events: $($eventLogs.BSODInfo.Count)`n"
+            $output += "Recent errors: $($eventLogs.RecentErrors.Count)`n"
+            if ($eventLogs.BSODInfo.Count -gt 0) {
+                $output += "`nMost recent BSOD:`n"
+                $latestBSOD = $eventLogs.BSODInfo | Sort-Object Time -Descending | Select-Object -First 1
+                $output += "  Stop Code: $($latestBSOD.StopCode)`n"
+                $output += "  $($latestBSOD.Explanation)`n"
+            }
+        }
+        
+        # Show critical issues warning if found
+        if ($diagnosis.HasCriticalIssues) {
+            $output += "`n`n"
+            $output += "===============================================================`n"
+            $output += "[WARN] CRITICAL ISSUES DETECTED - IMMEDIATE ACTION REQUIRED`n"
+            $output += "===============================================================`n"
+            $output += "Review the issues above and follow the recommended actions.`n"
+            $output += "Use the Boot Fixer tab to apply repairs.`n"
+        }
+        
+        # Extract and save errors to file
+        $errorLines = @()
+        $errorPatterns = @(
+            "\[ERROR\]", "\[WARN\]", "\[CRITICAL\]", "\[FAIL\]",
+            "Failed", "Error:", "Exception", "Cannot", "Missing",
+            "Corrupted", "Not found", "Access denied", "Permission denied",
+            "Invalid", "Unable to", "Could not", "Does not exist"
+        )
+        $outputLines = $output -split "`n"
+        
+        foreach ($line in $outputLines) {
+            $trimmedLine = $line.Trim()
+            if ($trimmedLine.Length -eq 0) { continue }
+            
+            # Skip header lines and separators
+            if ($trimmedLine -match "^=+$" -or $trimmedLine -match "^BOOT STACK" -or $trimmedLine -match "^Progress:") {
+                continue
+            }
+            
+            foreach ($pattern in $errorPatterns) {
+                if ($trimmedLine -match $pattern -and $trimmedLine -notmatch "^\s*#") {
+                    $errorLines += $trimmedLine
+                    break
+                }
+            }
+        }
+        
+        # Remove duplicates while preserving order
+        $errorLines = $errorLines | Select-Object -Unique
+        
+        # Save errors to file if any found
+        $errorFilePath = $null
+        if ($errorLines.Count -gt 0) {
+            try {
+                # Create Logs directory if it doesn't exist
+                $logsDir = Join-Path $PSScriptRoot "Logs"
+                if (-not (Test-Path $logsDir)) {
+                    New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+                }
+                
+                # Create error log file with timestamp
+                $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+                $errorFileName = "BootDiagnosis_Errors_$timestamp.txt"
+                $errorFilePath = Join-Path $logsDir $errorFileName
+                
+                # Create error report
+                $errorReport = "BOOT DIAGNOSIS ERROR REPORT`n"
+                $errorReport += "===============================================================`n"
+                $errorReport += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n"
+                $errorReport += "Target Drive: $drive`:`n"
+                $errorReport += "Total Errors Found: $($errorLines.Count)`n"
+                $errorReport += "===============================================================`n`n"
+                $errorReport += "ERRORS DETECTED:`n"
+                $errorReport += "===============================================================`n`n"
+                
+                $errorNumber = 1
+                foreach ($errorLine in $errorLines) {
+                    $errorReport += "$errorNumber. $errorLine`n`n"
+                    $errorNumber++
+                }
+                
+                $errorReport += "`n`n===============================================================`n"
+                $errorReport += "FULL DIAGNOSIS OUTPUT:`n"
+                $errorReport += "===============================================================`n`n"
+                $errorReport += $output
+                
+                # Save to file
+                Set-Content -Path $errorFilePath -Value $errorReport -Encoding UTF8
+                
+                # Add message to output showing where errors were saved
+                $output += "`n`n"
+                $output += "═══════════════════════════════════════════════════════════`n"
+                $output += "                    ERROR LOG SAVED`n"
+                $output += "═══════════════════════════════════════════════════════════`n"
+                $output += "`n$($errorLines.Count) error(s) detected and saved to:`n`n"
+                $output += "File: $errorFilePath`n`n"
+                $output += "The error log contains:`n"
+                $output += "  • All detected errors and warnings`n"
+                $output += "  • Full diagnosis output for reference`n"
+                $output += "  • Timestamp and target drive information`n`n"
+                $output += "You will be prompted to open this file after this message.`n"
+                
+            } catch {
+                $output += "`n`n[WARNING] Could not save error log: $_`n"
+            }
+        }
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $output
+            $logAnalysisBox.ScrollToEnd()
+        }
+        
+        # Show message box with error count and file path
+        if ($errorLines.Count -gt 0 -and $errorFilePath) {
+            $message = "$($errorLines.Count) ERROR(S) DETECTED`n`n"
+            $message += "Error log has been saved to:`n`n"
+            $message += "File: $errorFilePath`n`n"
+            $message += "The error log file contains:`n"
+            $message += "  • All detected errors and warnings`n"
+            $message += "  • Full diagnosis output`n"
+            $message += "  • Timestamp and drive information`n`n"
+            $message += "Would you like to open the error log file now?"
+            
+            $result = [System.Windows.MessageBox]::Show(
+                $message,
+                "Errors Detected - Log File Saved",
+                "YesNo",
+                "Question"
+            )
+            
+            if ($result -eq "Yes") {
+                try {
+                    Start-Process notepad.exe -ArgumentList "`"$errorFilePath`""
+                } catch {
+                    try {
+                        Start-Process $errorFilePath
+                    } catch {
+                        [System.Windows.MessageBox]::Show(
+                            "Could not open error log file. Please open it manually:`n$errorFilePath",
+                            "Error",
+                            "OK",
+                            "Error"
+                        )
+                    }
+                }
+            }
+        }
+    })
+}
+
+$btnHardwareSupport = Get-Control -Name "BtnHardwareSupport"
+if ($btnHardwareSupport) {
+    $btnHardwareSupport.Add_Click({
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Gathering hardware information and support links...`n`n"
+        }
     
     $hwInfo = Get-HardwareSupportInfo
     
@@ -2987,16 +4378,30 @@ $W.FindName("BtnHardwareSupport").Add_Click({
         $output += "For storage drivers (VMD/RAID), use the 'Driver Forensics' button to identify required INF files.`n"
     }
     
-    $W.FindName("LogAnalysisBox").Text = $output
-})
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $output
+        }
+    })
+}
 
-$W.FindName("BtnRepairTips").Add_Click({
-    $tips = Get-UnofficialRepairTips
-    $W.FindName("LogAnalysisBox").Text = $tips
-})
+$btnRepairTips = Get-Control -Name "BtnRepairTips"
+if ($btnRepairTips) {
+    $btnRepairTips.Add_Click({
+        $tips = Get-UnofficialRepairTips
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $tips
+        }
+    })
+}
 
-$W.FindName("BtnGenRegScript").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+$btnGenRegScript = Get-Control -Name "BtnGenRegScript"
+if ($btnGenRegScript) {
+    $btnGenRegScript.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
     $drive = "C"
     
     if ($selectedDrive) {
@@ -3028,48 +4433,58 @@ $W.FindName("BtnGenRegScript").Add_Click({
     $output += "===============================================================`n`n"
     $output += $script
     
-    $W.FindName("LogAnalysisBox").Text = $output
-    
-    $result = [System.Windows.MessageBox]::Show(
-        "Script generated successfully!`n`nLocation: $scriptPath`n`nWould you like to open the script file location?",
-        "Script Generated",
-        "YesNo",
-        "Information"
-    )
-    
-    if ($result -eq "Yes") {
-        try {
-            Start-Process explorer.exe -ArgumentList "/select,`"$scriptPath`""
-        } catch {
-            [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $output
         }
-    }
-})
+        
+        $result = [System.Windows.MessageBox]::Show(
+            "Script generated successfully!`n`nLocation: $scriptPath`n`nWould you like to open the script file location?",
+            "Script Generated",
+            "YesNo",
+            "Information"
+        )
+        
+        if ($result -eq "Yes") {
+            try {
+                Start-Process explorer.exe -ArgumentList "/select,`"$scriptPath`""
+            } catch {
+                [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
+            }
+        }
+    })
+}
 
-$W.FindName("BtnOneClickFix").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnOneClickFix = Get-Control -Name "BtnOneClickFix"
+if ($btnOneClickFix) {
+    $btnOneClickFix.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    $result = [System.Windows.MessageBox]::Show(
-        "This will apply ALL registry overrides to enable In-Place Upgrade compatibility:`n`n" +
-        "- EditionID → Professional`n" +
-        "- InstallLanguage → 0409 (US English)`n" +
-        "- ProgramFilesDir → Reset to $drive`:\Program Files`n`n" +
-        "A full registry backup will be created first.`n`n" +
-        "Continue?",
-        "One-Click Registry Fixes",
-        "YesNo",
-        "Question"
-    )
-    
-    if ($result -eq "Yes") {
-        $W.FindName("LogAnalysisBox").Text = "Applying one-click registry fixes...`n`nPlease wait...`n"
+        
+        $result = [System.Windows.MessageBox]::Show(
+            "This will apply ALL registry overrides to enable In-Place Upgrade compatibility:`n`n" +
+            "- EditionID → Professional`n" +
+            "- InstallLanguage → 0409 (US English)`n" +
+            "- ProgramFilesDir → Reset to $drive`:\Program Files`n`n" +
+            "A full registry backup will be created first.`n`n" +
+            "Continue?",
+            "One-Click Registry Fixes",
+            "YesNo",
+            "Question"
+        )
+        
+        if ($result -eq "Yes") {
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "Applying one-click registry fixes...`n`nPlease wait...`n"
+            }
         
         $fixResults = Apply-OneClickRegistryFixes -TargetDrive $drive
         
@@ -3113,129 +4528,164 @@ $W.FindName("BtnOneClickFix").Add_Click({
         $output += "1. IMMEDIATELY run setup.exe from your Windows ISO`n"
         $output += "2. Do NOT reboot before running setup.exe`n"
         $output += "3. The 'Keep personal files and apps' option should now be available`n"
-        $output += "`nBackup location: $($fixResults.BackupPath)`n"
-        
-        $W.FindName("LogAnalysisBox").Text = $output
-        
-        if ($fixResults.Success) {
-            [System.Windows.MessageBox]::Show(
-                "Registry fixes applied successfully!`n`nNow run setup.exe from your Windows ISO IMMEDIATELY (do not reboot).",
-                "Success",
-                "OK",
-                "Information"
-            )
-        } else {
-            [System.Windows.MessageBox]::Show(
-                "Some fixes failed. See the output for details.",
-                "Partial Success",
-                "OK",
-                "Warning"
-            )
+            $output += "`nBackup location: $($fixResults.BackupPath)`n"
+            
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = $output
+            }
+            
+            if ($fixResults.Success) {
+                [System.Windows.MessageBox]::Show(
+                    "Registry fixes applied successfully!`n`nNow run setup.exe from your Windows ISO IMMEDIATELY (do not reboot).",
+                    "Success",
+                    "OK",
+                    "Information"
+                )
+            } else {
+                [System.Windows.MessageBox]::Show(
+                    "Some fixes failed. See the output for details.",
+                    "Partial Success",
+                    "OK",
+                    "Warning"
+                )
+            }
         }
-    }
-})
+    })
+}
 
-$W.FindName("BtnFilterForensics").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
-    $W.FindName("LogAnalysisBox").Text = "Analyzing filter drivers in SYSTEM registry hive...`n`nThis may take a moment...`n"
-    
-    $forensics = Get-FilterDriverForensics -TargetDrive $drive
-    
-    $W.FindName("LogAnalysisBox").Text = $forensics.Summary
-})
-
-$W.FindName("BtnRecommendedTools").Add_Click({
-    $tools = Get-RecommendedTools
-    $W.FindName("LogAnalysisBox").Text = $tools
-})
-
-$W.FindName("BtnExportDrivers").Add_Click({
-    $W.FindName("LogAnalysisBox").Text = "Exporting in-use drivers list...`n`nThis may take a moment...`n"
-    
-    # Let user choose save location
-    $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
-    $saveDialog.Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"
-    $saveDialog.FileName = "In-Use_Drivers_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-    $saveDialog.InitialDirectory = $env:USERPROFILE + "\Desktop"
-    $saveDialog.Title = "Save In-Use Drivers Export"
-    
-    $result = $saveDialog.ShowDialog()
-    
-    if ($result -eq "OK") {
-        $exportResult = Export-InUseDrivers -OutputPath $saveDialog.FileName
+$btnFilterForensics = Get-Control -Name "BtnFilterForensics"
+if ($btnFilterForensics) {
+    $btnFilterForensics.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
         
-        if ($exportResult.Success) {
-            $output = "IN-USE DRIVERS EXPORT COMPLETE`n"
-            $output += "===============================================================`n`n"
-            $output += "[SUCCESS] Driver list exported successfully!`n`n"
-            $output += "File Location: $($exportResult.Path)`n`n"
-            $output += "Export Statistics:`n"
-            $output += "  Total Devices: $($exportResult.DeviceCount)`n"
-            $output += "  Device Classes: $($exportResult.ClassCount)`n`n"
-            $output += "===============================================================`n"
-            $output += "WHAT'S IN THE FILE:`n"
-            $output += "===============================================================`n"
-            $output += "The exported file contains:`n`n"
-            $output += "1. All currently working (in-use) drivers from your PC`n"
-            $output += "2. Device names and hardware IDs`n"
-            $output += "3. Driver INF file paths and locations`n"
-            $output += "4. Driver versions and providers`n"
-            $output += "5. Organized by device class (Storage, Display, Network, etc.)`n`n"
-            $output += "===============================================================`n"
-            $output += "HOW TO USE:`n"
-            $output += "===============================================================`n"
-            $output += "1. Take this file to your installer/recovery environment`n"
-            $output += "2. Use the INF file paths to locate drivers in DriverStore`n"
-            $output += "3. Copy the driver folders to your recovery USB/ISO`n"
-            $output += "4. Use Hardware IDs to match drivers to devices`n`n"
-            $output += "TIP: Focus on critical drivers (Storage, Network, Display)`n"
-            $output += "     These are most likely needed for recovery operations.`n"
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
+        }
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Analyzing filter drivers in SYSTEM registry hive...`n`nThis may take a moment...`n"
+        }
+        
+        $forensics = Get-FilterDriverForensics -TargetDrive $drive
+        
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $forensics.Summary
+        }
+    })
+}
+
+$btnRecommendedTools = Get-Control -Name "BtnRecommendedTools"
+if ($btnRecommendedTools) {
+    $btnRecommendedTools.Add_Click({
+        $tools = Get-RecommendedTools
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $tools
+        }
+    })
+}
+
+$btnExportDrivers = Get-Control -Name "BtnExportDrivers"
+if ($btnExportDrivers) {
+    $btnExportDrivers.Add_Click({
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Exporting in-use drivers list...`n`nThis may take a moment...`n"
+        }
+        
+        # Let user choose save location
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"
+        $saveDialog.FileName = "In-Use_Drivers_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+        $saveDialog.InitialDirectory = $env:USERPROFILE + "\Desktop"
+        $saveDialog.Title = "Save In-Use Drivers Export"
+        
+        $result = $saveDialog.ShowDialog()
+        
+        if ($result -eq "OK") {
+            $exportResult = Export-InUseDrivers -OutputPath $saveDialog.FileName
             
-            $W.FindName("LogAnalysisBox").Text = $output
-            
-            $msgResult = [System.Windows.MessageBox]::Show(
-                "Driver export complete!`n`nFile saved to:`n$($exportResult.Path)`n`nWould you like to open the file location?",
-                "Export Complete",
-                "YesNo",
-                "Information"
-            )
-            
-            if ($msgResult -eq "Yes") {
-                try {
-                    Start-Process explorer.exe -ArgumentList "/select,`"$($exportResult.Path)`""
-                } catch {
-                    [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
+            if ($exportResult.Success) {
+                $output = "IN-USE DRIVERS EXPORT COMPLETE`n"
+                $output += "===============================================================`n`n"
+                $output += "[SUCCESS] Driver list exported successfully!`n`n"
+                $output += "File Location: $($exportResult.Path)`n`n"
+                $output += "Export Statistics:`n"
+                $output += "  Total Devices: $($exportResult.DeviceCount)`n"
+                $output += "  Device Classes: $($exportResult.ClassCount)`n`n"
+                $output += "===============================================================`n"
+                $output += "WHAT'S IN THE FILE:`n"
+                $output += "===============================================================`n"
+                $output += "The exported file contains:`n`n"
+                $output += "1. All currently working (in-use) drivers from your PC`n"
+                $output += "2. Device names and hardware IDs`n"
+                $output += "3. Driver INF file paths and locations`n"
+                $output += "4. Driver versions and providers`n"
+                $output += "5. Organized by device class (Storage, Display, Network, etc.)`n`n"
+                $output += "===============================================================`n"
+                $output += "HOW TO USE:`n"
+                $output += "===============================================================`n"
+                $output += "1. Take this file to your installer/recovery environment`n"
+                $output += "2. Use the INF file paths to locate drivers in DriverStore`n"
+                $output += "3. Copy the driver folders to your recovery USB/ISO`n"
+                $output += "4. Use Hardware IDs to match drivers to devices`n`n"
+                $output += "TIP: Focus on critical drivers (Storage, Network, Display)`n"
+                $output += "     These are most likely needed for recovery operations.`n"
+                
+                if ($logAnalysisBox) {
+                    $logAnalysisBox.Text = $output
                 }
+                
+                $msgResult = [System.Windows.MessageBox]::Show(
+                    "Driver export complete!`n`nFile saved to:`n$($exportResult.Path)`n`nWould you like to open the file location?",
+                    "Export Complete",
+                    "YesNo",
+                    "Information"
+                )
+                
+                if ($msgResult -eq "Yes") {
+                    try {
+                        Start-Process explorer.exe -ArgumentList "/select,`"$($exportResult.Path)`""
+                    } catch {
+                        [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
+                    }
+                }
+            } else {
+                $output = "EXPORT FAILED`n"
+                $output += "===============================================================`n`n"
+                $output += "[ERROR] Failed to export drivers: $($exportResult.Error)`n`n"
+                $output += "Please ensure you have write permissions to the selected location.`n"
+                
+                if ($logAnalysisBox) {
+                    $logAnalysisBox.Text = $output
+                }
+                [System.Windows.MessageBox]::Show(
+                    "Failed to export drivers.`n`nError: $($exportResult.Error)",
+                    "Export Failed",
+                    "OK",
+                    "Error"
+                )
             }
         } else {
-            $output = "EXPORT FAILED`n"
-            $output += "===============================================================`n`n"
-            $output += "[ERROR] Failed to export drivers: $($exportResult.Error)`n`n"
-            $output += "Please ensure you have write permissions to the selected location.`n"
-            
-            $W.FindName("LogAnalysisBox").Text = $output
-            [System.Windows.MessageBox]::Show(
-                "Failed to export drivers.`n`nError: $($exportResult.Error)",
-                "Export Failed",
-                "OK",
-                "Error"
-            )
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "Export cancelled by user."
+            }
         }
-    } else {
-        $W.FindName("LogAnalysisBox").Text = "Export cancelled by user."
-    }
-})
+    })
+}
 
-$W.FindName("BtnGenCleanupScript").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+$btnGenCleanupScript = Get-Control -Name "BtnGenCleanupScript"
+if ($btnGenCleanupScript) {
+    $btnGenCleanupScript.Add_Click({
+
+    $logDriveCombo = Get-Control -Name "LogDriveCombo"
+    $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
     $drive = "C"
     
     if ($selectedDrive) {
@@ -3267,7 +4717,9 @@ $W.FindName("BtnGenCleanupScript").Add_Click({
     $output += "===============================================================`n`n"
     $output += $script
     
-    $W.FindName("LogAnalysisBox").Text = $output
+    if ($logAnalysisBox) {
+        $logAnalysisBox.Text = $output
+    }
     
     $result = [System.Windows.MessageBox]::Show(
         "Cleanup script generated successfully!`n`nLocation: $scriptPath`n`nWould you like to open the script file location?",
@@ -3283,28 +4735,36 @@ $W.FindName("BtnGenCleanupScript").Add_Click({
             [System.Windows.MessageBox]::Show("Could not open file location.", "Error", "OK", "Error")
         }
     }
-})
+    })
+}
 
-$W.FindName("BtnInPlaceReadiness").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnInPlaceReadiness = Get-Control -Name "BtnInPlaceReadiness"
+if ($btnInPlaceReadiness) {
+    $btnInPlaceReadiness.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    Update-StatusBar -Message "Running in-place upgrade readiness check..." -ShowProgress
-    $W.FindName("LogAnalysisBox").Text = "Running comprehensive in-place upgrade readiness check...`n`n"
-    $W.FindName("LogAnalysisBox").Text += "Analyzing:`n"
-    $W.FindName("LogAnalysisBox").Text += "  - Boot log (nbtlog.txt)`n"
-    $W.FindName("LogAnalysisBox").Text += "  - Windows installation files (`$WINDOWS.~BT, `$Windows.~WS)`n"
-    $W.FindName("LogAnalysisBox").Text += "  - CBS logs and component store`n"
-    $W.FindName("LogAnalysisBox").Text += "  - Registry health`n"
-    $W.FindName("LogAnalysisBox").Text += "  - Setup logs`n"
-    $W.FindName("LogAnalysisBox").Text += "  - System file health`n`n"
-    $W.FindName("LogAnalysisBox").Text += "This may take a few minutes...`n`n"
+        
+        Update-StatusBar -Message "Running in-place upgrade readiness check..." -ShowProgress
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "Running comprehensive in-place upgrade readiness check...`n`n"
+            $logAnalysisBox.Text += "Analyzing:`n"
+            $logAnalysisBox.Text += "  - Boot log (nbtlog.txt)`n"
+            $logAnalysisBox.Text += "  - Windows installation files (`$WINDOWS.~BT, `$Windows.~WS)`n"
+            $logAnalysisBox.Text += "  - CBS logs and component store`n"
+            $logAnalysisBox.Text += "  - Registry health`n"
+            $logAnalysisBox.Text += "  - Setup logs`n"
+            $logAnalysisBox.Text += "  - System file health`n`n"
+            $logAnalysisBox.Text += "This may take a few minutes...`n`n"
+        }
     
     try {
         $readiness = Get-InPlaceUpgradeReadiness -TargetDrive $drive
@@ -3322,7 +4782,9 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
         }
         $output += "=" * 80 + "`n"
         
-        $W.FindName("LogAnalysisBox").Text = $output
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = $output
+        }
         
         if ($readiness.ReadyForInPlaceUpgrade) {
             Update-StatusBar -Message "System is ready for in-place upgrade" -HideProgress
@@ -3344,7 +4806,9 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
         }
     } catch {
         Update-StatusBar -Message "Error during readiness check: $_" -HideProgress
-        $W.FindName("LogAnalysisBox").Text = "ERROR: Failed to run in-place upgrade readiness check:`n`n$_"
+        if ($logAnalysisBox) {
+            $logAnalysisBox.Text = "ERROR: Failed to run in-place upgrade readiness check:`n`n$_"
+        }
         [System.Windows.MessageBox]::Show(
             "Error running readiness check: $_",
             "Error",
@@ -3352,51 +4816,62 @@ $W.FindName("BtnInPlaceReadiness").Add_Click({
             "Error"
         )
     }
-})
+    })
+}
 
-$W.FindName("BtnRepairInstallReady").Add_Click({
-    $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
-    $drive = "C"
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
+$btnRepairInstallReady = Get-Control -Name "BtnRepairInstallReady"
+if ($btnRepairInstallReady) {
+    $btnRepairInstallReady.Add_Click({
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        
+        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
+        $drive = "C"
+        
+        if ($selectedDrive) {
+            if ($selectedDrive -match '^([A-Z]):') {
+                $drive = $matches[1]
+            }
         }
-    }
-    
-    # Confirm action
-    $confirmMsg = "REPAIR-INSTALL READINESS ENGINE`n`n"
-    $confirmMsg += "This will:`n"
-    $confirmMsg += "  - Test eligibility for in-place upgrade (Keep apps + files)`n"
-    $confirmMsg += "  - Clear CBS blockers (pending reboots, component store issues)`n"
-    $confirmMsg += "  - Normalize setup state (registry keys, edition compatibility)`n"
-    $confirmMsg += "  - Repair WinRE registration`n`n"
-    $confirmMsg += "Target Drive: $drive`:`n`n"
-    $confirmMsg += "Continue?"
-    
-    $result = [System.Windows.MessageBox]::Show(
-        $confirmMsg,
-        "Repair-Install Readiness",
-        "YesNo",
-        "Question"
-    )
-    
-    if ($result -eq "Yes") {
-        Update-StatusBar -Message "Running repair-install readiness engine..." -ShowProgress
-        $W.FindName("LogAnalysisBox").Text = "REPAIR-INSTALL READINESS ENGINE`n"
-        $W.FindName("LogAnalysisBox").Text += "=" * 80 + "`n`n"
-        $W.FindName("LogAnalysisBox").Text += "Target Drive: $drive`:`n"
-        $W.FindName("LogAnalysisBox").Text += "Mode: $(if ((Get-EnvironmentType) -eq 'FullOS') { 'Online' } else { 'Offline' })`n`n"
-        $W.FindName("LogAnalysisBox").Text += "Running comprehensive checks and fixes...`n`n"
-        $W.FindName("LogAnalysisBox").Text += "This may take several minutes...`n`n"
+        
+        # Confirm action
+        $confirmMsg = "REPAIR-INSTALL READINESS ENGINE`n`n"
+        $confirmMsg += "This will:`n"
+        $confirmMsg += "  - Test eligibility for in-place upgrade (Keep apps + files)`n"
+        $confirmMsg += "  - Clear CBS blockers (pending reboots, component store issues)`n"
+        $confirmMsg += "  - Normalize setup state (registry keys, edition compatibility)`n"
+        $confirmMsg += "  - Repair WinRE registration`n`n"
+        $confirmMsg += "Target Drive: $drive`:`n`n"
+        $confirmMsg += "Continue?"
+        
+        $result = [System.Windows.MessageBox]::Show(
+            $confirmMsg,
+            "Repair-Install Readiness",
+            "YesNo",
+            "Question"
+        )
+        
+        if ($result -eq "Yes") {
+            Update-StatusBar -Message "Running repair-install readiness engine..." -ShowProgress
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "REPAIR-INSTALL READINESS ENGINE`n"
+                $logAnalysisBox.Text += "=" * 80 + "`n`n"
+                $logAnalysisBox.Text += "Target Drive: $drive`:`n"
+                $logAnalysisBox.Text += "Mode: $(if ((Get-EnvironmentType) -eq 'FullOS') { 'Online' } else { 'Offline' })`n`n"
+                $logAnalysisBox.Text += "Running comprehensive checks and fixes...`n`n"
+                $logAnalysisBox.Text += "This may take several minutes...`n`n"
+            }
         
         try {
             # Progress callback for status updates
             $progressCallback = {
                 param($message)
                 $W.Dispatcher.Invoke([action]{
-                    $W.FindName("LogAnalysisBox").Text += "$message`n"
-                    $W.FindName("LogAnalysisBox").ScrollToEnd()
+                    $logBox = Get-Control -Name "LogAnalysisBox"
+                    if ($logBox) {
+                        $logBox.Text += "$message`n"
+                        $logBox.ScrollToEnd()
+                    }
                     Update-StatusBar -Message $message -ShowProgress
                 }, [System.Windows.Threading.DispatcherPriority]::Input)
             }
@@ -3431,8 +4906,10 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
                 }
             }
             
-            $W.FindName("LogAnalysisBox").Text = $output
-            $W.FindName("LogAnalysisBox").ScrollToEnd()
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = $output
+                $logAnalysisBox.ScrollToEnd()
+            }
             
             # Show result dialog
             if ($readinessResult.Eligible) {
@@ -3457,7 +4934,9 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
             
             Update-StatusBar -Message "Repair-install readiness check complete" -HideProgress
         } catch {
-            $W.FindName("LogAnalysisBox").Text += "`n`n[ERROR] Failed: $_`n"
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text += "`n`n[ERROR] Failed: $_`n"
+            }
             Update-StatusBar -Message "Repair-install readiness check failed" -HideProgress
             [System.Windows.MessageBox]::Show(
                 "Error running repair-install readiness check:`n`n$_",
@@ -3466,12 +4945,15 @@ $W.FindName("BtnRepairInstallReady").Add_Click({
                 "Error"
             )
         }
-    } else {
-        Update-StatusBar -Message "Repair-install readiness check cancelled" -HideProgress
-    }
-})
+        } else {
+            Update-StatusBar -Message "Repair-install readiness check cancelled" -HideProgress
+        }
+    })
+}
 
-$W.FindName("BtnRepairTemplates").Add_Click({
+$btnRepairTemplates = Get-Control -Name "BtnRepairTemplates"
+if ($btnRepairTemplates) {
+    $btnRepairTemplates.Add_Click({
     if (-not (Get-Command Get-RepairTemplates -ErrorAction SilentlyContinue)) {
         [System.Windows.MessageBox]::Show(
             "Repair Templates feature not available.`n`nThis feature requires WinRepairCore.ps1 to be loaded.",
@@ -3560,7 +5042,8 @@ $W.FindName("BtnRepairTemplates").Add_Click({
             $templateWindow.Close()
             
             # Get drive
-            $selectedDrive = $W.FindName("LogDriveCombo").SelectedItem
+            $logDriveCombo = Get-Control -Name "LogDriveCombo"
+    $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
             $drive = "C"
             if ($selectedDrive) {
                 if ($selectedDrive -match '^([A-Z]):') {
@@ -3570,13 +5053,19 @@ $W.FindName("BtnRepairTemplates").Add_Click({
             
             # Execute template
             Update-StatusBar -Message "Executing repair template..." -ShowProgress
-            $W.FindName("LogAnalysisBox").Text = "Executing repair template...`n`n"
+            $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+            if ($logAnalysisBox) {
+                $logAnalysisBox.Text = "Executing repair template...`n`n"
+            }
             
             $progressCallback = {
                 param($message)
                 $W.Dispatcher.Invoke([action]{
-                    $W.FindName("LogAnalysisBox").Text += "$message`n"
-                    $W.FindName("LogAnalysisBox").ScrollToEnd()
+                    $logBox = Get-Control -Name "LogAnalysisBox"
+                    if ($logBox) {
+                        $logBox.Text += "$message`n"
+                        $logBox.ScrollToEnd()
+                    }
                     Update-StatusBar -Message $message -ShowProgress
                 }, [System.Windows.Threading.DispatcherPriority]::Input)
             }
@@ -3584,8 +5073,10 @@ $W.FindName("BtnRepairTemplates").Add_Click({
             try {
                 $result = Start-RepairTemplate -TemplateId $templateId -TargetDrive $drive -SkipConfirmation -ProgressCallback $progressCallback
                 
-                $W.FindName("LogAnalysisBox").Text = $result.Report
-                $W.FindName("LogAnalysisBox").ScrollToEnd()
+                if ($logAnalysisBox) {
+                    $logAnalysisBox.Text = $result.Report
+                    $logAnalysisBox.ScrollToEnd()
+                }
                 
                 if ($result.Success) {
                     [System.Windows.MessageBox]::Show(
@@ -3630,7 +5121,8 @@ $W.FindName("BtnRepairTemplates").Add_Click({
     
     $templateWindow.Content = $grid
     $templateWindow.ShowDialog() | Out-Null
-})
+    })
+}
 
 # Repair Install Forcer Handlers
 # Update mode description when radio buttons change
@@ -3663,7 +5155,10 @@ $W.FindName("RbOfflineMode").Add_Checked({
     }
 })
 
-$W.FindName("BtnBrowseISO").Add_Click({
+$btnBrowseISO = Get-Control -Name "BtnBrowseISO"
+if ($btnBrowseISO) {
+    $btnBrowseISO.Add_Click({
+
     $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $folderDialog.Description = "Select mounted ISO drive or extracted ISO folder"
     $folderDialog.RootFolder = "MyComputer"
@@ -3672,171 +5167,207 @@ $W.FindName("BtnBrowseISO").Add_Click({
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         $W.FindName("RepairISOPath").Text = $folderDialog.SelectedPath
     }
-})
+    })
+}
 
-$W.FindName("BtnShowInstructions").Add_Click({
-    $instructions = Get-RepairInstallInstructions
-    $W.FindName("RepairInstallOutput").Text = $instructions
-    $W.FindName("RepairInstallOutput").ScrollToEnd()
-})
+$btnShowInstructions = Get-Control -Name "BtnShowInstructions"
+if ($btnShowInstructions) {
+    $btnShowInstructions.Add_Click({
+        $repairInstallOutput = Get-Control -Name "RepairInstallOutput"
+        $instructions = Get-RepairInstallInstructions
+        if ($repairInstallOutput) {
+            $repairInstallOutput.Text = $instructions
+            $repairInstallOutput.ScrollToEnd()
+        }
+    })
+}
 
-$W.FindName("BtnCheckPrereq").Add_Click({
-    Update-StatusBar -Message "Checking prerequisites..." -ShowProgress
-    $isoPath = $W.FindName("RepairISOPath").Text
-    $isOffline = $W.FindName("RbOfflineMode").IsChecked
-    
-    if ([string]::IsNullOrWhiteSpace($isoPath)) {
-        $W.FindName("RepairInstallOutput").Text = "[ERROR] Please specify ISO path first.`n`nClick 'Browse...' to select mounted ISO drive or folder."
-        Update-StatusBar -Message "ISO path required" -HideProgress
-        return
-    }
-    
-    if ($isOffline) {
-        $offlineDrive = $W.FindName("RepairOfflineDrive").SelectedItem
-        if (-not $offlineDrive) {
-            $W.FindName("RepairInstallOutput").Text = "[ERROR] Please select offline Windows drive first."
-            Update-StatusBar -Message "Offline drive required" -HideProgress
+$btnCheckPrereq = Get-Control -Name "BtnCheckPrereq"
+if ($btnCheckPrereq) {
+    $btnCheckPrereq.Add_Click({
+        $repairISOPath = Get-Control -Name "RepairISOPath"
+        $rbOfflineMode = Get-Control -Name "RbOfflineMode"
+        $repairOfflineDrive = Get-Control -Name "RepairOfflineDrive"
+        $repairInstallOutput = Get-Control -Name "RepairInstallOutput"
+        
+        Update-StatusBar -Message "Checking prerequisites..." -ShowProgress
+        $isoPath = if ($repairISOPath) { $repairISOPath.Text } else { "" }
+        $isOffline = if ($rbOfflineMode) { $rbOfflineMode.IsChecked } else { $false }
+        
+        if ([string]::IsNullOrWhiteSpace($isoPath)) {
+            if ($repairInstallOutput) {
+                $repairInstallOutput.Text = "[ERROR] Please specify ISO path first.`n`nClick 'Browse...' to select mounted ISO drive or folder."
+            }
+            Update-StatusBar -Message "ISO path required" -HideProgress
             return
         }
-        if ($offlineDrive -match '^([A-Z]):') {
-            $offlineDrive = $matches[1]
+        
+        if ($isOffline) {
+            $offlineDrive = if ($repairOfflineDrive) { $repairOfflineDrive.SelectedItem } else { $null }
+            if (-not $offlineDrive) {
+                if ($repairInstallOutput) {
+                    $repairInstallOutput.Text = "[ERROR] Please select offline Windows drive first."
+                }
+                Update-StatusBar -Message "Offline drive required" -HideProgress
+                return
+            }
+            if ($offlineDrive -match '^([A-Z]):') {
+                $offlineDrive = $matches[1]
+            }
+            $prereq = Test-OfflineRepairInstallPrerequisites -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive
+        } else {
+            $prereq = Test-RepairInstallPrerequisites -ISOPath $isoPath
         }
-        $prereq = Test-OfflineRepairInstallPrerequisites -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive
-    } else {
-        $prereq = Test-RepairInstallPrerequisites -ISOPath $isoPath
-    }
-    
-    $output = "PREREQUISITE CHECK RESULTS`n"
-    $output += "===============================================================`n`n"
-    $output += "ISO Path: $isoPath`n`n"
-    
-    if ($isOffline) {
-        $output += "OFFLINE OS INFORMATION:`n"
-        $output += "---------------------------------------------------------------`n"
-        $output += "Offline Drive: $($W.FindName("RepairOfflineDrive").SelectedItem)`n"
-        $output += "Edition: $($prereq.OfflineOS.EditionID)`n"
-        $output += "Architecture: $($prereq.OfflineOS.Architecture)`n"
-        $output += "Build Number: $($prereq.OfflineOS.BuildNumber)`n"
-        $output += "Version: $($prereq.OfflineOS.Version)`n"
-        $output += "Language: $($prereq.OfflineOS.Language)`n`n"
-    } else {
-        $output += "CURRENT OS INFORMATION:`n"
-        $output += "---------------------------------------------------------------`n"
-        $output += "Edition: $($prereq.CurrentOS.EditionID)`n"
-        $output += "Architecture: $($prereq.CurrentOS.Architecture)`n"
-        $output += "Build Number: $($prereq.CurrentOS.BuildNumber)`n"
-        $output += "Version: $($prereq.CurrentOS.Version)`n"
-        $output += "Language: $($prereq.CurrentOS.Language)`n`n"
-    }
-    
-    if ($prereq.CanProceed) {
-        $output += "[SUCCESS] Prerequisites check PASSED`n"
+        
+        $output = "PREREQUISITE CHECK RESULTS`n"
         $output += "===============================================================`n`n"
-        $output += "You can proceed with repair install.`n`n"
-    } else {
-        $output += "[FAILED] Prerequisites check FAILED`n"
-        $output += "===============================================================`n`n"
-        $output += "BLOCKING ISSUES:`n"
-        foreach ($issue in $prereq.Issues) {
-            $output += "  - $issue`n"
+        $output += "ISO Path: $isoPath`n`n"
+        
+        if ($isOffline) {
+            $output += "OFFLINE OS INFORMATION:`n"
+            $output += "---------------------------------------------------------------`n"
+            $offlineDriveItem = if ($repairOfflineDrive) { $repairOfflineDrive.SelectedItem } else { "N/A" }
+            $output += "Offline Drive: $offlineDriveItem`n"
+            $output += "Edition: $($prereq.OfflineOS.EditionID)`n"
+            $output += "Architecture: $($prereq.OfflineOS.Architecture)`n"
+            $output += "Build Number: $($prereq.OfflineOS.BuildNumber)`n"
+            $output += "Version: $($prereq.OfflineOS.Version)`n"
+            $output += "Language: $($prereq.OfflineOS.Language)`n`n"
+        } else {
+            $output += "CURRENT OS INFORMATION:`n"
+            $output += "---------------------------------------------------------------`n"
+            $output += "Edition: $($prereq.CurrentOS.EditionID)`n"
+            $output += "Architecture: $($prereq.CurrentOS.Architecture)`n"
+            $output += "Build Number: $($prereq.CurrentOS.BuildNumber)`n"
+            $output += "Version: $($prereq.CurrentOS.Version)`n"
+            $output += "Language: $($prereq.CurrentOS.Language)`n`n"
         }
-        $output += "`n"
-    }
-    
-    if ($prereq.Warnings.Count -gt 0) {
-        $output += "WARNINGS:`n"
-        foreach ($warn in $prereq.Warnings) {
-            $output += "  [WARN] $warn`n"
+        
+        if ($prereq.CanProceed) {
+            $output += "[SUCCESS] Prerequisites check PASSED`n"
+            $output += "===============================================================`n`n"
+            $output += "You can proceed with repair install.`n`n"
+        } else {
+            $output += "[FAILED] Prerequisites check FAILED`n"
+            $output += "===============================================================`n`n"
+            $output += "BLOCKING ISSUES:`n"
+            foreach ($issue in $prereq.Issues) {
+                $output += "  - $issue`n"
+            }
+            $output += "`n"
         }
-        $output += "`n"
-    }
-    
-    if ($prereq.Recommendations.Count -gt 0) {
-        $output += "RECOMMENDATIONS:`n"
-        foreach ($rec in $prereq.Recommendations) {
-            $output += "  - $rec`n"
+        
+        if ($prereq.Warnings.Count -gt 0) {
+            $output += "WARNINGS:`n"
+            foreach ($warn in $prereq.Warnings) {
+                $output += "  [WARN] $warn`n"
+            }
+            $output += "`n"
         }
-        $output += "`n"
-    }
-    
-    $W.FindName("RepairInstallOutput").Text = $output
-    $W.FindName("RepairInstallOutput").ScrollToEnd()
-    Update-StatusBar -Message "Prerequisites check complete" -HideProgress
-})
+        
+        if ($prereq.Recommendations.Count -gt 0) {
+            $output += "RECOMMENDATIONS:`n"
+            foreach ($rec in $prereq.Recommendations) {
+                $output += "  - $rec`n"
+            }
+            $output += "`n"
+        }
+        
+        if ($repairInstallOutput) {
+            $repairInstallOutput.Text = $output
+            $repairInstallOutput.ScrollToEnd()
+        }
+        Update-StatusBar -Message "Prerequisites check complete" -HideProgress
+    })
+}
 
-$W.FindName("BtnStartRepair").Add_Click({
-    $isoPath = $W.FindName("RepairISOPath").Text
-    $isOffline = $W.FindName("RbOfflineMode").IsChecked
-    
-    if ([string]::IsNullOrWhiteSpace($isoPath)) {
-        [System.Windows.MessageBox]::Show(
-            "Please specify ISO path first.`n`nClick 'Browse...' to select mounted ISO drive or folder.",
-            "ISO Path Required",
-            "OK",
-            "Warning"
-        )
-        return
-    }
-    
-    if ($isOffline) {
-        $offlineDrive = $W.FindName("RepairOfflineDrive").SelectedItem
-        if (-not $offlineDrive) {
+$btnStartRepair = Get-Control -Name "BtnStartRepair"
+if ($btnStartRepair) {
+    $btnStartRepair.Add_Click({
+        $repairISOPath = Get-Control -Name "RepairISOPath"
+        $rbOfflineMode = Get-Control -Name "RbOfflineMode"
+        $repairOfflineDrive = Get-Control -Name "RepairOfflineDrive"
+        $chkSkipCompat = Get-Control -Name "ChkSkipCompat"
+        $chkDisableDynamicUpdate = Get-Control -Name "ChkDisableDynamicUpdate"
+        $chkForceEdition = Get-Control -Name "ChkForceEdition"
+        $repairInstallOutput = Get-Control -Name "RepairInstallOutput"
+        
+        $isoPath = if ($repairISOPath) { $repairISOPath.Text } else { "" }
+        $isOffline = if ($rbOfflineMode) { $rbOfflineMode.IsChecked } else { $false }
+        
+        if ([string]::IsNullOrWhiteSpace($isoPath)) {
             [System.Windows.MessageBox]::Show(
-                "Please select offline Windows drive first.",
-                "Offline Drive Required",
+                "Please specify ISO path first.`n`nClick 'Browse...' to select mounted ISO drive or folder.",
+                "ISO Path Required",
                 "OK",
                 "Warning"
             )
             return
         }
-        if ($offlineDrive -match '^([A-Z]):') {
-            $offlineDrive = $matches[1]
+        
+        if ($isOffline) {
+            $offlineDrive = if ($repairOfflineDrive) { $repairOfflineDrive.SelectedItem } else { $null }
+            if (-not $offlineDrive) {
+                [System.Windows.MessageBox]::Show(
+                    "Please select offline Windows drive first.",
+                    "Offline Drive Required",
+                    "OK",
+                    "Warning"
+                )
+                return
+            }
+            if ($offlineDrive -match '^([A-Z]):') {
+                $offlineDrive = $matches[1]
+            }
         }
-    }
-    
-    # Check prerequisites first
-    Update-StatusBar -Message "Checking prerequisites..." -ShowProgress
-    if ($isOffline) {
-        $prereq = Test-OfflineRepairInstallPrerequisites -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive
-    } else {
-        $prereq = Test-RepairInstallPrerequisites -ISOPath $isoPath
-    }
-    
-    if (-not $prereq.CanProceed) {
-        $W.FindName("RepairInstallOutput").Text = "PREREQUISITE CHECK FAILED`n" +
-                                                  "===============================================================`n`n" +
-                                                  "Cannot proceed with repair install:`n`n" +
-                                                  ($prereq.Issues -join "`n") +
-                                                  "`n`nPlease fix these issues and try again."
-        Update-StatusBar -Message "Prerequisites check failed" -HideProgress
-        return
-    }
-    
-    # Get options
-    $skipCompat = $W.FindName("ChkSkipCompat").IsChecked
-    $disableUpdate = $W.FindName("ChkDisableDynamicUpdate").IsChecked
-    $forceEdition = $W.FindName("ChkForceEdition").IsChecked
-    
-    # Prepare repair install
-    Update-StatusBar -Message "Preparing repair install..." -ShowProgress
-    if ($isOffline) {
-        $repairResult = Start-OfflineRepairInstall -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive -SkipCompatibility:$skipCompat -DisableDynamicUpdate:$disableUpdate
-    } else {
-        $repairResult = Start-RepairInstall -ISOPath $isoPath -SkipCompatibility:$skipCompat -DisableDynamicUpdate:$disableUpdate -ForceEdition:$forceEdition
-    }
-    
-    if (-not $repairResult.Success) {
-        $W.FindName("RepairInstallOutput").Text = $repairResult.Output
-        Update-StatusBar -Message "Failed to prepare repair install" -HideProgress
-        return
-    }
-    
-    # Show confirmation
-    $modeText = if ($isOffline) { "OFFLINE" } else { "ONLINE" }
-    $confirmMsg = "$modeText REPAIR INSTALL READY`n`n" +
-                 "Command: $($repairResult.Command)`n`n"
-    
-    if ($isOffline) {
+        
+        # Check prerequisites first
+        Update-StatusBar -Message "Checking prerequisites..." -ShowProgress
+        if ($isOffline) {
+            $prereq = Test-OfflineRepairInstallPrerequisites -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive
+        } else {
+            $prereq = Test-RepairInstallPrerequisites -ISOPath $isoPath
+        }
+        
+        if (-not $prereq.CanProceed) {
+            if ($repairInstallOutput) {
+                $repairInstallOutput.Text = "PREREQUISITE CHECK FAILED`n" +
+                                          "===============================================================`n`n" +
+                                          "Cannot proceed with repair install:`n`n" +
+                                          ($prereq.Issues -join "`n") +
+                                          "`n`nPlease fix these issues and try again."
+            }
+            Update-StatusBar -Message "Prerequisites check failed" -HideProgress
+            return
+        }
+        
+        # Get options
+        $skipCompat = if ($chkSkipCompat) { $chkSkipCompat.IsChecked } else { $false }
+        $disableUpdate = if ($chkDisableDynamicUpdate) { $chkDisableDynamicUpdate.IsChecked } else { $false }
+        $forceEdition = if ($chkForceEdition) { $chkForceEdition.IsChecked } else { $false }
+        
+        # Prepare repair install
+        Update-StatusBar -Message "Preparing repair install..." -ShowProgress
+        if ($isOffline) {
+            $repairResult = Start-OfflineRepairInstall -ISOPath $isoPath -OfflineWindowsDrive $offlineDrive -SkipCompatibility:$skipCompat -DisableDynamicUpdate:$disableUpdate
+        } else {
+            $repairResult = Start-RepairInstall -ISOPath $isoPath -SkipCompatibility:$skipCompat -DisableDynamicUpdate:$disableUpdate -ForceEdition:$forceEdition
+        }
+        
+        if (-not $repairResult.Success) {
+            if ($repairInstallOutput) {
+                $repairInstallOutput.Text = $repairResult.Output
+            }
+            Update-StatusBar -Message "Failed to prepare repair install" -HideProgress
+            return
+        }
+        
+        # Show confirmation
+        $modeText = if ($isOffline) { "OFFLINE" } else { "ONLINE" }
+        $confirmMsg = "$modeText REPAIR INSTALL READY`n`n" +
+                     "Command: $($repairResult.Command)`n`n"
+        
+        if ($isOffline) {
         $confirmMsg += "This will:`n" +
                       "  - Manipulate offline registry hives`n" +
                       "  - Launch Windows Setup against offline OS`n" +
@@ -3873,7 +5404,9 @@ $W.FindName("BtnStartRepair").Add_Click({
         $output += "System will restart shortly.`n"
         $output += "`nMonitor progress at: $($repairResult.LogPath)`n"
         
-        $W.FindName("RepairInstallOutput").Text = $output
+        if ($repairInstallOutput) {
+            $repairInstallOutput.Text = $output
+        }
         
         try {
             # Execute the setup command
@@ -3891,13 +5424,17 @@ $W.FindName("BtnStartRepair").Add_Click({
                 "Information"
             )
         } catch {
-            $W.FindName("RepairInstallOutput").Text += "`n`n[ERROR] Failed to start repair install: $_`n"
+            $repairInstallOutput = Get-Control -Name "RepairInstallOutput"
+            if ($repairInstallOutput) {
+                $repairInstallOutput.Text += "`n`n[ERROR] Failed to start repair install: $_`n"
+            }
             Update-StatusBar -Message "Failed to start repair install" -HideProgress
         }
-    } else {
-        Update-StatusBar -Message "Repair install cancelled" -HideProgress
-    }
-})
+        } else {
+            Update-StatusBar -Message "Repair install cancelled" -HideProgress
+        }
+    })
+}
 
 # #region agent log
 try {

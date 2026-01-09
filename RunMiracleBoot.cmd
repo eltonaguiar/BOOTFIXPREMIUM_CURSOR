@@ -35,7 +35,7 @@ if errorlevel 1 (
 REM Launch the PowerShell script
 echo Launching Miracle Boot (PowerShell mode)...
 echo.
-powershell.exe -ExecutionPolicy Bypass -NoProfile -File "%SCRIPT_DIR%MiracleBoot.ps1"
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '%SCRIPT_DIR%MiracleBoot.ps1'"
 
 if errorlevel 1 (
     echo.

@@ -188,13 +188,14 @@ function Start-TUI {
     do {
         Clear-Host
         Write-Host "===============================================================" -ForegroundColor Cyan
-        Write-Host "  MIRACLE BOOT v7.2.0 - MS-DOS STYLE MODE" -ForegroundColor Cyan
+        Write-Host "  MIRACLE BOOT v7.2.0 - MS-DOS STYLE MODE (Cursor)" -ForegroundColor Cyan
         Write-Host "  Environment: $envDisplay" -ForegroundColor Gray
         Write-Host "===============================================================" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "1) List Windows Volumes (Sorted)" -ForegroundColor White
         Write-Host "2) Scan Storage Drivers (Detailed)" -ForegroundColor White
         Write-Host "3) Inject Drivers Offline (DISM)" -ForegroundColor White
+        Write-Host "3A) Advanced Driver Tools (2025+ Systems)" -ForegroundColor Cyan
         Write-Host "4) Quick View BCD" -ForegroundColor White
         Write-Host "5) Edit BCD Entry" -ForegroundColor White
         Write-Host "6) Enable Network/Internet" -ForegroundColor Cyan
@@ -268,6 +269,187 @@ function Start-TUI {
                     } else {
                         Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
                         $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                    }
+                }
+            }
+            "3A" {
+                Write-Host "`nAdvanced Driver Tools (2025+ Systems)" -ForegroundColor Cyan
+                Write-Host "===============================================================" -ForegroundColor Gray
+                Write-Host "1) Advanced Storage Controller Detection" -ForegroundColor White
+                Write-Host "2) Advanced Driver Matching & Injection" -ForegroundColor White
+                Write-Host "3) Find Matching Drivers for Controllers" -ForegroundColor White
+                Write-Host "Q) Back to Main Menu" -ForegroundColor Yellow
+                Write-Host ""
+                
+                $subChoice = Read-Host "Select"
+                switch ($subChoice) {
+                    "1" {
+                        Write-Host "`nAdvanced Storage Controller Detection (2025+ Systems)" -ForegroundColor Cyan
+                Write-Host "===============================================================" -ForegroundColor Gray
+                Write-Host "Detecting storage controllers using WMI, Registry, and PCI enumeration..." -ForegroundColor Gray
+                Write-Host ""
+                
+                $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical -Detailed
+                
+                if ($controllers.Count -eq 0) {
+                    Write-Host "No storage controllers detected." -ForegroundColor Yellow
+                } else {
+                    Write-Host "Found $($controllers.Count) storage controller(s):" -ForegroundColor Green
+                    Write-Host ""
+                    
+                    foreach ($controller in $controllers) {
+                        $statusColor = if ($controller.HasDriver) { "Green" } else { "Red" }
+                        $criticalMark = if ($controller.IsBootCritical) { " [BOOT-CRITICAL]" } else { "" }
+                        
+                        Write-Host "Controller: $($controller.Name)" -ForegroundColor White
+                        Write-Host "  Type: $($controller.ControllerType)" -ForegroundColor Gray
+                        Write-Host "  Vendor: $($controller.Vendor)" -ForegroundColor Gray
+                        Write-Host "  Status: $($controller.Status)" -ForegroundColor $statusColor
+                        Write-Host "  Has Driver: $($controller.HasDriver)" -ForegroundColor $statusColor
+                        Write-Host "  Needs Driver: $($controller.NeedsDriver)" -ForegroundColor $(if ($controller.NeedsDriver) { "Red" } else { "Green" })
+                        Write-Host "  Boot Critical: $($controller.IsBootCritical)$criticalMark" -ForegroundColor $(if ($controller.IsBootCritical) { "Yellow" } else { "Gray" })
+                        Write-Host "  Required INF: $($controller.RequiredInf)" -ForegroundColor Gray
+                        if ($controller.HardwareIDs -and $controller.HardwareIDs.Count -gt 0) {
+                            Write-Host "  Hardware ID: $($controller.HardwareIDs[0])" -ForegroundColor Gray
+                        }
+                        Write-Host ""
+                    }
+                    
+                    # Show summary
+                    $needsDriver = ($controllers | Where-Object { $_.NeedsDriver }).Count
+                    $bootCritical = ($controllers | Where-Object { $_.IsBootCritical }).Count
+                    
+                    Write-Host "Summary:" -ForegroundColor Cyan
+                    Write-Host "  Total Controllers: $($controllers.Count)" -ForegroundColor White
+                    Write-Host "  Boot-Critical: $bootCritical" -ForegroundColor $(if ($bootCritical -gt 0) { "Yellow" } else { "Gray" })
+                    Write-Host "  Need Drivers: $needsDriver" -ForegroundColor $(if ($needsDriver -gt 0) { "Red" } else { "Green" })
+                }
+                
+                Write-Host ""
+                Write-Host "Press any key to continue..." -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                    }
+                    "2" {
+                        Write-Host "`nAdvanced Driver Matching & Injection" -ForegroundColor Cyan
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        
+                        $win = Read-Host "Target Windows drive letter (e.g. C)"
+                        $path = Read-Host "Path to driver folder or INF file"
+                        $validateOnly = (Read-Host "Validate only (don't inject)? (Y/N)") -eq 'Y'
+                        $forceUnsigned = $false
+                        
+                        if (-not $validateOnly) {
+                            $forceUnsigned = (Read-Host "Force unsigned drivers? (Y/N)") -eq 'Y'
+                        }
+                        
+                        if ($win -and $path) {
+                            Write-Host ""
+                            Write-Host "Detecting storage controllers..." -ForegroundColor Gray
+                            $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical
+                            
+                            Write-Host "Found $($controllers.Count) controller(s), $($controllers | Where-Object { $_.NeedsDriver } | Measure-Object).Count need drivers" -ForegroundColor Gray
+                            Write-Host ""
+                            
+                            if (-not $validateOnly) {
+                                $confirmed = Confirm-DestructiveOperation -CommandKey "advanced_driver_inject" -Command "Start-AdvancedDriverInjection -WindowsDrive $win -DriverPath $path" -Description "Advanced driver injection with validation"
+                                if (-not $confirmed) {
+                                    Write-Host "Operation cancelled. Press any key to continue..." -ForegroundColor Yellow
+                                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                                    break
+                                }
+                            }
+                            
+                            $progressCallback = {
+                                param($message, $percent)
+                                Write-Host "$message ($percent%)" -ForegroundColor Gray
+                            }
+                            
+                            $result = Start-AdvancedDriverInjection -WindowsDrive $win -DriverPath $path -ControllerInfo $controllers -ValidateOnly:$validateOnly -ForceUnsigned:$forceUnsigned -ProgressCallback $progressCallback
+                            
+                            Write-Host ""
+                            Write-Host $result.Report -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                            
+                            if ($result.Errors.Count -gt 0) {
+                                Write-Host ""
+                                Write-Host "Errors:" -ForegroundColor Red
+                                foreach ($err in $result.Errors) {
+                                    Write-Host "  - $err" -ForegroundColor Red
+                                }
+                            }
+                            
+                            Write-Host ""
+                            Write-Host "Press any key to continue..." -ForegroundColor Gray
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                        }
+                    }
+                    "3" {
+                        Write-Host "`nFind Matching Drivers for Controllers" -ForegroundColor Cyan
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        
+                        Write-Host "Detecting storage controllers..." -ForegroundColor Gray
+                        $controllers = Get-AdvancedStorageControllerInfo -IncludeNonCritical
+                        
+                        if ($controllers.Count -eq 0) {
+                            Write-Host "No storage controllers detected." -ForegroundColor Yellow
+                            Write-Host "Press any key to continue..." -ForegroundColor Gray
+                            $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                            break
+                        }
+                        
+                        $win = Read-Host "`nWindows drive to search (e.g. C, or press Enter to skip)"
+                        $searchPaths = @()
+                        
+                        do {
+                            $searchPath = Read-Host "Additional driver search path (or press Enter to finish)"
+                            if ($searchPath) {
+                                $searchPaths += $searchPath
+                            }
+                        } while ($searchPath)
+                        
+                        Write-Host ""
+                        Write-Host "Searching for matching drivers..." -ForegroundColor Gray
+                        
+                        $matches = Find-MatchingDrivers -ControllerInfo $controllers -SearchPaths $searchPaths -WindowsDrive $win
+                        
+                        Write-Host ""
+                        Write-Host "Driver Matching Results:" -ForegroundColor Cyan
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        
+                        foreach ($match in $matches) {
+                            Write-Host ""
+                            Write-Host "Controller: $($match.Controller)" -ForegroundColor White
+                            Write-Host "  Type: $($match.ControllerType)" -ForegroundColor Gray
+                            Write-Host "  Hardware ID: $($match.HardwareID)" -ForegroundColor Gray
+                            Write-Host "  Required INF: $($match.RequiredInf)" -ForegroundColor Gray
+                            Write-Host "  Matches Found: $($match.MatchesFound)" -ForegroundColor $(if ($match.MatchesFound -gt 0) { "Green" } else { "Red" })
+                            
+                            if ($match.BestMatches.Count -gt 0) {
+                                Write-Host ""
+                                Write-Host "  Best Matches:" -ForegroundColor Cyan
+                                foreach ($bestMatch in $match.BestMatches) {
+                                    $matchColor = switch ($bestMatch.MatchType) {
+                                        "Exact" { "Green" }
+                                        "Compatible" { "Yellow" }
+                                        default { "Gray" }
+                                    }
+                                    Write-Host "    - $($bestMatch.DriverName)" -ForegroundColor $matchColor
+                                    Write-Host "      Source: $($bestMatch.Source)" -ForegroundColor Gray
+                                    Write-Host "      Match: $($bestMatch.MatchType) (Score: $($bestMatch.MatchScore))" -ForegroundColor Gray
+                                    Write-Host "      Signed: $($bestMatch.IsSigned)" -ForegroundColor Gray
+                                    Write-Host "      Path: $($bestMatch.INFPath)" -ForegroundColor DarkGray
+                                }
+                            } else {
+                                Write-Host "  No matching drivers found." -ForegroundColor Red
+                                Write-Host "  Recommendation: Download $($match.RequiredInf) from manufacturer" -ForegroundColor Yellow
+                            }
+                        }
+                        
+                        Write-Host ""
+                        Write-Host "Press any key to continue..." -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                    }
+                    default {
+                        # Back to main menu
                     }
                 }
             }
@@ -355,6 +537,7 @@ function Start-TUI {
                 Write-Host "`nBOOT REPAIR OPTIONS" -ForegroundColor Cyan
                 Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
+                Write-Host "W) Boot Repair Wizard (Guided Step-by-Step)" -ForegroundColor Green
                 Write-Host "1) Rebuild BCD from Windows Installation (bcdboot)" -ForegroundColor White
                 Write-Host "2) Fix Boot Files (bootrec /fixboot)" -ForegroundColor White
                 Write-Host "3) Scan for Windows Installations (bootrec /scanos)" -ForegroundColor White
@@ -362,6 +545,20 @@ function Start-TUI {
                 Write-Host "B) Back to main menu" -ForegroundColor Yellow
                 Write-Host ""
                 $bootChoice = Read-Host "Select boot repair option"
+                
+                if ($bootChoice -match '^[Ww]') {
+                    # Launch Boot Repair Wizard
+                    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+                    $wizardPath = Join-Path $scriptRoot "BootRepairWizard.ps1"
+                    if (Test-Path $wizardPath) {
+                        & $wizardPath
+                    } else {
+                        Write-Host "`n[ERROR] Boot Repair Wizard not found at: $wizardPath" -ForegroundColor Red
+                        Write-Host "Press any key to continue..." -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                    }
+                    continue
+                }
                 
                 $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
