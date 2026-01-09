@@ -544,16 +544,52 @@ function Start-TUI {
                 Write-Host "4) Rebuild BCD (bootrec /rebuildbcd)" -ForegroundColor White
                 Write-Host "B) Back to main menu" -ForegroundColor Yellow
                 Write-Host ""
+                Write-Host "NOTE: Boot recovery operations may take longer on BitLocker-encrypted drives." -ForegroundColor Yellow
+                Write-Host "      This is normal - please be patient during the repair process." -ForegroundColor Yellow
+                Write-Host ""
                 $bootChoice = Read-Host "Select boot repair option"
                 
                 if ($bootChoice -match '^[Ww]') {
                     # Launch Boot Repair Wizard
-                    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+                    # Fix for WinPE: Handle null MyInvocation.MyCommand.Path
+                    $scriptRoot = $null
+                    if ($MyInvocation.MyCommand.Path) {
+                        $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+                    } elseif ($PSScriptRoot) {
+                        $scriptRoot = $PSScriptRoot
+                    } else {
+                        # Fallback: Try to get script root from current location
+                        $scriptRoot = Split-Path -Parent (Get-Location).Path
+                        # If we're in Helper directory, go up one level
+                        if ((Split-Path -Leaf $scriptRoot) -eq "Helper") {
+                            $scriptRoot = Split-Path -Parent $scriptRoot
+                        }
+                        # Try common locations
+                        $possiblePaths = @(
+                            (Join-Path $scriptRoot "Helper"),
+                            (Join-Path (Split-Path -Parent $scriptRoot) "Helper"),
+                            ".\Helper",
+                            "..\Helper"
+                        )
+                        foreach ($path in $possiblePaths) {
+                            if (Test-Path (Join-Path $path "BootRepairWizard.ps1")) {
+                                $scriptRoot = $path
+                                break
+                            }
+                        }
+                    }
+                    
                     $wizardPath = Join-Path $scriptRoot "BootRepairWizard.ps1"
+                    if (-not (Test-Path $wizardPath)) {
+                        # Try alternative: BootRepairWizard.ps1 in Helper subdirectory
+                        $wizardPath = Join-Path (Join-Path $scriptRoot "Helper") "BootRepairWizard.ps1"
+                    }
+                    
                     if (Test-Path $wizardPath) {
                         & $wizardPath
                     } else {
-                        Write-Host "`n[ERROR] Boot Repair Wizard not found at: $wizardPath" -ForegroundColor Red
+                        Write-Host "`n[ERROR] Boot Repair Wizard not found." -ForegroundColor Red
+                        Write-Host "Searched: $wizardPath" -ForegroundColor Gray
                         Write-Host "Press any key to continue..." -ForegroundColor Gray
                         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
                     }
@@ -569,7 +605,7 @@ function Start-TUI {
                 switch ($bootChoice) {
                     '1' {
                         $command = "bcdboot ${drive}:\Windows"
-                        $confirmed = Confirm-DestructiveOperation -CommandKey "bcdboot" -Command $command -Description "Rebuild BCD from Windows installation"
+                        $confirmed = Confirm-DestructiveOperation -CommandKey "bcdboot" -Command $command -Description "Rebuild BCD from Windows installation" -TargetDrive $drive
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = Invoke-Expression $command 2>&1
@@ -584,7 +620,7 @@ function Start-TUI {
                     }
                     '2' {
                         $command = "bootrec /fixboot"
-                        $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_fixboot" -Command $command -Description "Fix boot sector"
+                        $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_fixboot" -Command $command -Description "Fix boot sector" -TargetDrive $drive
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = bootrec /fixboot 2>&1
@@ -607,7 +643,7 @@ function Start-TUI {
                     }
                     '4' {
                         $command = "bootrec /rebuildbcd"
-                        $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_rebuildbcd" -Command $command -Description "Rebuild BCD"
+                        $confirmed = Confirm-DestructiveOperation -CommandKey "bootrec_rebuildbcd" -Command $command -Description "Rebuild BCD" -TargetDrive $drive
                         if ($confirmed) {
                             Write-Host "`nExecuting: $command" -ForegroundColor Gray
                             $output = bootrec /rebuildbcd 2>&1

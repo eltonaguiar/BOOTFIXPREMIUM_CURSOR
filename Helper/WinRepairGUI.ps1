@@ -2124,7 +2124,7 @@ if ($btnUpdateBcd) {
         $bitlocker = Test-BitLockerStatus -TargetDrive "C"
         if ($bitlocker.IsEncrypted) {
             $result = [System.Windows.MessageBox]::Show(
-                "$($bitlocker.Warning)`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
+                "$($bitlocker.Warning)`n`nNOTE: Boot recovery operations may take longer on BitLocker-encrypted drives. This is normal - please be patient.`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
                 "BitLocker Encryption Detected",
                 "YesNo",
                 "Warning"
@@ -2925,7 +2925,7 @@ if ($btnRebuildBCD) {
             $bitlocker = Test-BitLockerStatus -TargetDrive $drive
             if ($bitlocker.IsEncrypted) {
                 $result = [System.Windows.MessageBox]::Show(
-                    "$($bitlocker.Warning)`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
+                    "$($bitlocker.Warning)`n`nNOTE: Boot recovery operations may take longer on BitLocker-encrypted drives. This is normal - please be patient.`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
                     "BitLocker Encryption Detected",
                     "YesNo",
                     "Warning"
@@ -3012,7 +3012,7 @@ if ($btnFixBoot) {
         $bitlocker = Test-BitLockerStatus -TargetDrive $drive
         if ($bitlocker.IsEncrypted) {
             $result = [System.Windows.MessageBox]::Show(
-                "$($bitlocker.Warning)`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
+                "$($bitlocker.Warning)`n`nNOTE: Boot recovery operations may take longer on BitLocker-encrypted drives. This is normal - please be patient.`n`nDo you have your BitLocker recovery key available?`n`nClick 'Yes' to proceed anyway, or 'No' to cancel.",
                 "BitLocker Encryption Detected",
                 "YesNo",
                 "Warning"

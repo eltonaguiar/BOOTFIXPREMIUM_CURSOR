@@ -4148,7 +4148,10 @@ function Test-BCDPath {
 }
 
 function Test-BitLockerStatus {
-    param($TargetDrive = "C")
+    param(
+        [string]$TargetDrive = "C",
+        [int]$TimeoutSeconds = 5
+    )
     $status = @{
         IsEncrypted = $false
         ProtectionStatus = "Unknown"
@@ -4156,6 +4159,17 @@ function Test-BitLockerStatus {
         VolumeStatus = "Unknown"
         KeyProtectors = @()
         Warning = ""
+    }
+    
+    # Detect WinPE/WinRE environment - BitLocker checks are often slow or unavailable
+    $envType = Get-EnvironmentType
+    if ($envType -eq "WinPE" -or $envType -eq "WinRE") {
+        # In WinPE, BitLocker tools may not be available or may hang
+        # Return a generic warning instead of trying to check
+        $status.Warning = "WinPE/WinRE environment detected. BitLocker status check skipped.`n"
+        $status.Warning += "If your drive is BitLocker encrypted, ensure you have your recovery key (48-digit number) before proceeding.`n"
+        $status.Warning += "You can find it in: Microsoft Account > Devices > BitLocker recovery keys"
+        return $status
     }
     
     try {
@@ -4166,8 +4180,26 @@ function Test-BitLockerStatus {
             return $status
         }
         
-        # Get BitLocker status for the target drive
-        $bdeStatus = manage-bde -status "$TargetDrive`:" 2>&1
+        # Use a job with timeout to prevent hanging
+        $job = Start-Job -ScriptBlock {
+            param($drive)
+            manage-bde -status "${drive}:" 2>&1
+        } -ArgumentList $TargetDrive
+        
+        $bdeStatus = $null
+        $jobCompleted = Wait-Job -Job $job -Timeout $TimeoutSeconds
+        
+        if ($jobCompleted) {
+            $bdeStatus = Receive-Job -Job $job
+            Remove-Job -Job $job -Force
+        } else {
+            # Timeout - stop the job and return warning
+            Stop-Job -Job $job -Force
+            Remove-Job -Job $job -Force
+            $status.Warning = "BitLocker status check timed out after $TimeoutSeconds seconds.`n"
+            $status.Warning += "Assume drive may be encrypted and ensure you have your recovery key before proceeding."
+            return $status
+        }
         
         if ($bdeStatus -match "Conversion Status:\s*(\w+)") {
             $conversionStatus = $matches[1]
@@ -4200,27 +4232,42 @@ function Test-BitLockerStatus {
         if ($status.IsEncrypted) {
             $status.Warning = "WARNING: Drive $TargetDrive`: is BitLocker encrypted!`n"
             $status.Warning += "Modifying BCD or boot files may require your BitLocker recovery key.`n"
+            $status.Warning += "Boot recovery operations may take longer on encrypted drives - this is normal.`n"
             $status.Warning += "Ensure you have your recovery key (48-digit number) before proceeding.`n"
             $status.Warning += "You can find it in: Microsoft Account > Devices > BitLocker recovery keys"
         }
         
     } catch {
-        # Try alternative method using WMI
+        # Try alternative method using WMI with timeout
         try {
-            $bitlocker = Get-WmiObject -Namespace "Root\cimv2\security\microsoftvolumeencryption" -Class "Win32_EncryptableVolume" -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -eq "$TargetDrive`:" }
+            $wmiJob = Start-Job -ScriptBlock {
+                param($drive)
+                Get-WmiObject -Namespace "Root\cimv2\security\microsoftvolumeencryption" -Class "Win32_EncryptableVolume" -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -eq "${drive}:" }
+            } -ArgumentList $TargetDrive
             
-            if ($bitlocker) {
-                $protectionStatus = $bitlocker.GetProtectionStatus()
-                if ($protectionStatus.ProtectionStatus -eq 1) {
-                    $status.IsEncrypted = $true
-                    $status.ProtectionStatus = "Protected"
-                    $status.Warning = "WARNING: Drive $TargetDrive`: is BitLocker encrypted! Ensure you have your recovery key before proceeding."
+            $wmiCompleted = Wait-Job -Job $wmiJob -Timeout $TimeoutSeconds
+            
+            if ($wmiCompleted) {
+                $bitlocker = Receive-Job -Job $wmiJob
+                Remove-Job -Job $wmiJob -Force
+                
+                if ($bitlocker) {
+                    $protectionStatus = $bitlocker.GetProtectionStatus()
+                    if ($protectionStatus.ProtectionStatus -eq 1) {
+                        $status.IsEncrypted = $true
+                        $status.ProtectionStatus = "Protected"
+                        $status.Warning = "WARNING: Drive $TargetDrive`: is BitLocker encrypted! Ensure you have your recovery key before proceeding."
+                    } else {
+                        $status.IsEncrypted = $false
+                        $status.ProtectionStatus = "Not Protected"
+                    }
                 } else {
-                    $status.IsEncrypted = $false
-                    $status.ProtectionStatus = "Not Protected"
+                    $status.Warning = "Could not determine BitLocker status. Proceed with caution."
                 }
             } else {
-                $status.Warning = "Could not determine BitLocker status. Proceed with caution."
+                Stop-Job -Job $wmiJob -Force
+                Remove-Job -Job $wmiJob -Force
+                $status.Warning = "BitLocker status check timed out. Assume drive may be encrypted and proceed with caution."
             }
         } catch {
             $status.Warning = "BitLocker status check failed. Assume drive may be encrypted and proceed with caution."
@@ -8882,14 +8929,20 @@ function Get-CommandWarningDetails {
         "bcdboot" = @{
             Title = "HIGH RISK: Rebuild BCD"
             Risk = "This will overwrite your boot configuration. If the target Windows installation is incorrect, you may lose access to other operating systems."
-            Impact = "May change which Windows installation boots by default."
-            Recovery = "BCD backup should be created automatically."
+            Impact = "May change which Windows installation boots by default. Operations may take longer on BitLocker-encrypted drives."
+            Recovery = "BCD backup should be created automatically. Be patient if drive is encrypted - operations may take longer."
         }
         "bootrec_fixboot" = @{
             Title = "HIGH RISK: Fix Boot Sector"
             Risk = "This writes a new boot sector. If your system uses BitLocker, you may need the recovery key."
-            Impact = "Boot sector will be rewritten. BitLocker may require recovery key."
-            Recovery = "Have BitLocker recovery key ready if encryption is enabled."
+            Impact = "Boot sector will be rewritten. BitLocker may require recovery key. Operations may take longer on encrypted drives."
+            Recovery = "Have BitLocker recovery key ready if encryption is enabled. Be patient - operations may take longer on encrypted drives."
+        }
+        "bootrec_rebuildbcd" = @{
+            Title = "HIGH RISK: Rebuild BCD"
+            Risk = "This will rebuild the Boot Configuration Data. If your system uses BitLocker, you may need the recovery key."
+            Impact = "BCD will be rebuilt. BitLocker may require recovery key. Operations may take longer on encrypted drives."
+            Recovery = "Have BitLocker recovery key ready if encryption is enabled. Be patient - operations may take longer on encrypted drives."
         }
         "driver_inject" = @{
             Title = "HIGH RISK: Inject Drivers"
@@ -9276,7 +9329,8 @@ function Confirm-DestructiveOperation {
         [string]$Command = "",
         [string]$Description = "",
         [switch]$IsGUI,
-        [switch]$SkipBitLockerCheck = $false
+        [switch]$SkipBitLockerCheck = $false,
+        [string]$TargetDrive = $null
     )
     
     # Show warning
@@ -9294,19 +9348,43 @@ function Confirm-DestructiveOperation {
         Write-Host "Do you want to proceed? (Y/N): " -ForegroundColor Red -NoNewline
         
         # Check BitLocker if not skipped
+        # In WinPE/WinRE, skip BitLocker check to avoid lag (already handled in Test-BitLockerStatus)
         if (-not $SkipBitLockerCheck) {
-            $bitlocker = Test-BitLockerStatus -TargetDrive "C"
-            if ($bitlocker.IsEncrypted) {
-                Write-Host ""
-                Write-Host "[WARN] BITLOCKER ENCRYPTION DETECTED" -ForegroundColor Yellow
-                Write-Host $bitlocker.Warning -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "Do you have your BitLocker recovery key? (Y/N): " -ForegroundColor Yellow -NoNewline
-                $bitlockerConfirm = Read-Host
-                if ($bitlockerConfirm -ne 'Y' -and $bitlockerConfirm -ne 'y') {
-                    Write-Host "Operation cancelled." -ForegroundColor Red
-                    return $false
+            $envType = Get-EnvironmentType
+            # Determine target drive: use parameter if provided, extract from command, or default to C
+            $checkDrive = "C"
+            if ($TargetDrive) {
+                $checkDrive = $TargetDrive.TrimEnd(':').ToUpper()
+            } elseif ($Command -match '([A-Z]):') {
+                $checkDrive = $matches[1]
+            }
+            
+            # Only do quick check in FullOS, skip in WinPE/WinRE to avoid lag
+            if ($envType -eq "FullOS") {
+                $bitlocker = Test-BitLockerStatus -TargetDrive $checkDrive -TimeoutSeconds 3
+                if ($bitlocker.IsEncrypted) {
+                    Write-Host ""
+                    Write-Host "[WARN] BITLOCKER ENCRYPTION DETECTED" -ForegroundColor Yellow
+                    Write-Host $bitlocker.Warning -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "NOTE: Boot recovery operations may take longer on BitLocker-encrypted drives." -ForegroundColor Yellow
+                    Write-Host "      This is normal - please be patient during the repair process." -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "Do you have your BitLocker recovery key? (Y/N): " -ForegroundColor Yellow -NoNewline
+                    $bitlockerConfirm = Read-Host
+                    if ($bitlockerConfirm -ne 'Y' -and $bitlockerConfirm -ne 'y') {
+                        Write-Host "Operation cancelled." -ForegroundColor Red
+                        return $false
+                    }
                 }
+            } else {
+                # In WinPE/WinRE, show generic warning (BitLocker check skipped to avoid lag)
+                Write-Host ""
+                Write-Host "[WARN] WINPE/WINRE ENVIRONMENT" -ForegroundColor Yellow
+                Write-Host "If your drive is BitLocker encrypted, ensure you have your recovery key (48-digit number) before proceeding." -ForegroundColor Yellow
+                Write-Host "Boot recovery operations may take longer on encrypted drives - this is normal." -ForegroundColor Yellow
+                Write-Host "You can find it in: Microsoft Account > Devices > BitLocker recovery keys" -ForegroundColor Yellow
+                Write-Host ""
             }
         }
         

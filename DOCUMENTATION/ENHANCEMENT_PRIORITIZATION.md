@@ -24,6 +24,32 @@
 
 ## Phase 1: Critical Fixes & Foundation (P0)
 
+### Task 0.1: Precision Boot Issue Identification & Guided Fixes
+**Priority:** P0  
+**Impact:** Very High - Eliminates trial/error and accelerates successful boots  
+**Effort:** High  
+**Dependencies:** Existing boot repair commands (bcdboot/bootrec), log collectors
+
+**Goals:**
+- Precisely identify boot blockers (e.g., missing `winload.efi`, corrupt/absent BCD, wrong ESP mapping, bad partition GUIDs, EFI ACL/permission issues, Secure Boot/BitLocker blockers, bad boot sector/MBR vs UEFI mismatch).
+- Present exact remediation steps with the specific commands that will run.
+- Work in **CMD** and **GUI/TUI** with identical detection coverage.
+- Auto-scan all boot-related logs and offer to open them in Notepad for “technical users” (ask before scan; honor response).
+- Provide a small built-in search box to look up error strings/codes (e.g., `ntbtlog`, `SrtTrail`, `0xc0000225`).
+
+**Micro Tasks:**
+0.1.1 - Build a signature library: map error codes/messages/artifacts to diagnoses (missing `winload.efi`, missing/corrupt BCD, incorrect device/ESP, EFI permissions, bad GPT/MBR, damaged boot sector, rollback markers).  
+0.1.2 - Implement detection pipeline (shared Core): gather signals from `bcdedit`, `bcdboot /enum`, `diskpart /list`, `mountvol`, `reagentc /info`, `bootrec /scanos`, presence and hashes of `winload.efi`/`bootmgfw.efi`, and volume attributes.  
+0.1.3 - Log sweep: parse SrtTrail.txt, `ntbtlog.txt`, CBS/DISM/Setup/Panther rollback logs, `bootstat.dat` markers. Ask if user is “technical”; if yes, auto-open collected logs in Notepad after scan.  
+0.1.4 - Guided fixes (precision, not trial/error): for each detected issue, prepare the exact commands and prerequisites (e.g., `bcdboot X:\Windows /s Z: /f UEFI`, `bootrec /fixboot`, `bootsect /nt60`, copy `winload.efi` from WinRE/WinSxS, reset ACLs on EFI).  
+0.1.5 - Safety rails: pre-flight checks (mounted EFI, BitLocker suspended, correct OS volume), BCD snapshot before changes, rollback point.  
+0.1.6 - UI parity: add a “Detect & Fix Boot Issue” action in GUI/TUI and a `.CMD` entry point that runs the same detection core, renders findings, and prompts to execute the precise fix set.  
+0.1.7 - Inline search box: allow user to paste an error string/code and surface matching signatures and recommended commands.  
+0.1.8 - Results summary: show root cause, confidence score, commands to be executed, and post-check validation (re-run detection after fixes).  
+0.1.9 - Tests: synthetic scenarios (missing EFI file, corrupt BCD store, wrong ESP mapping, MBR vs UEFI mismatch), log-only detection cases, and regression tests for both `.CMD` and GUI/TUI flows.
+
+**Status:** 🚀 NEW (Highest priority; schedule before other P0 items)
+
 ### Task 1.1: Fix Status Bar Updates During Long Operations
 **Priority:** P0  
 **Impact:** High - Users see "Ready" during long operations  
@@ -334,6 +360,9 @@
 ---
 
 ## Implementation Order
+
+### Pre-Week: Precision Boot Identification (Critical)
+0. Task 0.1 - Precision Boot Issue Identification & Guided Fixes (NEW P0)
 
 ### Week 1: Foundation
 1. ✅ Task 1.2 - Add "Cursor" to titles (DONE)

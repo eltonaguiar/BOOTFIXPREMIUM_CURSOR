@@ -25,8 +25,36 @@ param(
 )
 
 # Load core modules
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-. "$scriptRoot\Helper\WinRepairCore.ps1" -ErrorAction Stop
+# Fix for WinPE: Handle null MyInvocation.MyCommand.Path
+$scriptRoot = $null
+if ($MyInvocation.MyCommand.Path) {
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+} elseif ($PSScriptRoot) {
+    $scriptRoot = $PSScriptRoot
+} else {
+    # Fallback: Try to get script root from current location
+    $scriptRoot = Split-Path -Parent (Get-Location).Path
+    # If we're in Helper directory, use it
+    if ((Split-Path -Leaf $scriptRoot) -ne "Helper") {
+        $scriptRoot = Join-Path $scriptRoot "Helper"
+    }
+}
+
+# Try to load WinRepairCore.ps1
+$corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+if (-not (Test-Path $corePath)) {
+    # Try parent directory
+    $corePath = Join-Path (Split-Path -Parent $scriptRoot) "Helper\WinRepairCore.ps1"
+}
+if (-not (Test-Path $corePath)) {
+    # Try current directory
+    $corePath = ".\WinRepairCore.ps1"
+    if (-not (Test-Path $corePath)) {
+        Write-Error "Cannot find WinRepairCore.ps1. Please ensure it's in the Helper directory."
+        exit 1
+    }
+}
+. $corePath -ErrorAction Stop
 
 function Show-BootRepairWizard {
     <#
@@ -56,6 +84,9 @@ function Show-BootRepairWizard {
     Write-Host ""
     Write-Host "This wizard will guide you through repairing your Windows boot system." -ForegroundColor White
     Write-Host "Each step will show you EXACTLY what will be executed before running it." -ForegroundColor White
+    Write-Host ""
+    Write-Host "NOTE: If your drive is BitLocker encrypted, boot recovery operations may take longer." -ForegroundColor Yellow
+    Write-Host "      This is normal - BitLocker encryption adds processing overhead to boot repairs." -ForegroundColor Yellow
     Write-Host ""
     
     # Backup reminder

@@ -42,6 +42,43 @@ This document outlines the implementation plan for **Miracle Boot v7.3.0**, focu
 
 ## Phase 1: Enhance Existing Features (Priority: CRITICAL)
 
+### 0.1 Precision Boot Issue Identification & Guided Repair (Priority: CRITICAL)
+**Status:** New must-have before other work  
+**Complexity:** High  
+**Impact:** Very High – Eliminates trial/error, increases first-pass boot success  
+**Estimated Time:** 3-4 days
+
+#### Objectives
+- Detect specific boot blockers (missing/corrupt `winload.efi`, missing/invalid BCD, wrong ESP mapping, EFI ACL issues, MBR vs UEFI mismatch, Secure Boot/BitLocker conflicts).
+- Present exact remediation commands and execute them safely in **CMD** and **GUI/TUI**.
+- Parse all boot-related logs and optionally open them in Notepad when the user confirms they are a “technical user”.
+- Provide an inline search box for users to paste error strings/codes (e.g., `ntbtlog`, `SrtTrail`, `0xc0000225`) and get mapped fixes.
+
+#### Implementation Tasks
+1. **Signature Library & Detection Core** (WinRepairCore.ps1)  
+   - Map error codes/messages/artifacts to diagnoses.  
+   - Collect signals from `bcdedit`, `bcdboot /enum`, `diskpart /list`, `mountvol`, `reagentc /info`, `bootrec /scanos`, presence/hashes of `winload.efi`/`bootmgfw.efi`, bootsector type.  
+2. **Log Sweep & Technical-User Flow** (shared core callable from `.CMD`, GUI, TUI)  
+   - Parse SrtTrail.txt, `ntbtlog.txt`, CBS/DISM/Setup/Panther/rollback logs, `bootstat.dat`.  
+   - Ask “Are you a technical user?”; if yes, auto-open collected logs in Notepad after scan.  
+3. **Guided Fix Recipes** (WinRepairCore.ps1 + WinRepairWizard.ps1 + WinRepairGUI.ps1/TUI)  
+   - Prepare commands per diagnosis (e.g., `bcdboot X:\Windows /s Z: /f UEFI`, `bootrec /fixboot`, `bootsect /nt60`, copy `winload.efi` from WinRE/WinSxS, reset EFI ACLs).  
+   - Pre-flight checks (EFI mounted, BitLocker suspended, correct OS volume), snapshot BCD before changes.  
+   - Post-verify by re-running detection.  
+4. **UI/CMD Parity & Search Box**  
+   - Add “Detect & Fix Boot Issue” entry in GUI/TUI menus and `.CMD` main menu.  
+   - Inline search box: user pastes error string/code → return best-match signature, confidence, and command set.  
+5. **Testing**  
+   - Synthetic cases: missing EFI file, corrupt BCD, wrong ESP, MBR vs UEFI mismatch, log-only detection.  
+   - Regression tests for `.CMD`, GUI, and TUI flows.
+
+#### Success Criteria
+- ✅ Specific root cause identified with confidence score.  
+- ✅ Exact commands shown before execution; user can approve.  
+- ✅ CMD and GUI/TUI produce identical diagnoses.  
+- ✅ Logs auto-open only when the user opts in as technical.  
+- ✅ Post-fix validation passes with no residual errors.
+
 ### 1.1 Enhanced Real-Time Progress Tracking
 **Status:** Infrastructure exists, needs UI integration  
 **Complexity:** Medium  
@@ -266,6 +303,11 @@ This document outlines the implementation plan for **Miracle Boot v7.3.0**, focu
 ---
 
 ## Implementation Timeline
+
+### Pre-Week 0: Precision Boot Identification
+- **Day 1-3**: Build detection core + signature library + log sweep + UI/CMD parity
+- **Day 4**: Guided fix recipes + search box + post-validation loop
+- **Day 5**: Synthetic scenario tests and regression passes (CMD + GUI + TUI)
 
 ### Week 1: Enhance Existing Features
 - **Day 1-2**: Enhanced Real-Time Progress Tracking
