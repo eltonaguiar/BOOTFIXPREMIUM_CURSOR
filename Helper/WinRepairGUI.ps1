@@ -1332,7 +1332,8 @@ function Update-StatusBar {
         # Clear any existing timer
         if ($script:StatusBarElapsedTimer) {
             $script:StatusBarElapsedTimer.Stop()
-            $script:StatusBarElapsedTimer.Dispose()
+            # DispatcherTimer doesn't have Dispose() - just stop and null it
+            $script:StatusBarElapsedTimer = $null
         }
         # Create timer for periodic updates
         $script:StatusBarElapsedTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -1363,7 +1364,7 @@ function Update-StatusBar {
     if ($HideProgress) {
         if ($script:StatusBarElapsedTimer) {
             $script:StatusBarElapsedTimer.Stop()
-            $script:StatusBarElapsedTimer.Dispose()
+            # DispatcherTimer doesn't have Dispose() - just stop and null it
             $script:StatusBarElapsedTimer = $null
         }
         $script:StatusBarStartTime = $null
