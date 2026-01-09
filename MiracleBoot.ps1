@@ -411,6 +411,17 @@ Write-Host "  Network: $($networkInfo.Message)" -ForegroundColor $(if ($networkI
 Write-Host "  Browser: $($browserInfo.Message)" -ForegroundColor $(if ($browserInfo.Available) { "Green" } else { "Yellow" })
 Write-Host ""
 
+# Safety interlock for live FullOS: require explicit confirmation before boot writes
+if ($envType -eq 'FullOS') {
+    if (-not $env:CI -and -not $env:TF_BUILD) {
+        $confirm = Read-Host "SAFETY WARNING: You are running in a live Windows session. Type 'BRICKME' to continue or press Enter to abort"
+        if ($confirm -ne 'BRICKME') {
+            Write-Host "Aborting by user choice. No changes made." -ForegroundColor Yellow
+            exit 1
+        }
+    }
+}
+
 if ($envType -eq 'FullOS') {
     Write-Host "Attempting to launch GUI mode..." -ForegroundColor Green
     

@@ -1,0 +1,80 @@
+QUICK START — MIRACLE BOOT PRECISION MODE (WinPE/WinRE/Live Windows)
+====================================================================
+
+What this is:
+- Fast steps to run Miracle Boot precision detection/repair from WinPE, WinRE, or a live Windows session.
+- Includes a safety interlock for live Windows: you must type BRICKME to proceed with destructive boot operations.
+
+Prereqs:
+- A USB with this toolkit copied (e.g., extracted from ZIP) or mapped network share.
+- Admin prompt (elevated) in WinPE/WinRE or Windows.
+- For WinPE/WinRE: ensure disks are online and volumes mounted.
+
+Commands by environment
+-----------------------
+WinPE (X:\):
+1) Plug in USB with toolkit (assume it mounts as Z:). Adjust if different.
+2) X:\> Z:
+3) Z:\> cd MiracleBoot_v7_1_1
+4) Z:\MiracleBoot_v7_1_1> RunMiracleBoot.cmd --precision --scan-logs=ask
+   - If asked for technical-user log viewing, answer Yes to open logs in Notepad.
+
+WinRE (booted from recovery):
+1) Shift+F10 to open cmd.
+2) Identify toolkit volume:  diskpart -> list vol -> exit.
+3) X:\> <drive>:
+4) <drive>:\> cd MiracleBoot_v7_1_1
+5) <drive>:\MiracleBoot_v7_1_1> RunMiracleBoot.cmd --precision --scan-logs=ask
+
+Live Windows (booted OS):
+1) Open elevated PowerShell or CMD.
+2) Navigate to toolkit folder.
+3) Run: RunMiracleBoot.cmd --precision --scan-logs=ask
+4) SAFETY INTERLOCK: Because you are in a booted OS, the tool will require you to type BRICKME and confirm you want to continue before any boot writes. If you are unsure, stop here.
+
+Optional GUI/TUI launch:
+- GUI:  powershell -ExecutionPolicy Bypass -File .\Helper\WinRepairGUI.ps1 --precision
+- TUI:  powershell -ExecutionPolicy Bypass -File .\Helper\WinRepairTUI.ps1 --precision
+
+Quick CLI aliases (JSON-friendly):
+- Precision quick scan to console (JSON): Invoke-PrecisionQuickScanCli -WindowsRoot C:\Windows -EspDriveLetter Z -IncludeBugcheck
+- Precision quick scan to file: Invoke-PrecisionQuickScan -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson -IncludeBugcheck -OutFile C:\Temp\precision-scan.json
+- Parity harness to file (TC-010 evidence): Invoke-PrecisionParityHarness -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson -OutFile C:\Temp\precision-parity.json
+- Parity harness to console (JSON): Invoke-PrecisionParityHarness -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson
+
+Precision shortcuts (GUI/TUI parity + JSON):
+- GUI (Diagnostics & Logs tab):
+  - “Precision Detection & Repair” (dry-run unless Test Mode off)
+  - “Export Precision Scan (JSON)” and “Save Precision JSON to File”
+  - “Precision Parity (CLI vs GUI/TUI)” and “Save Parity JSON to File” (TC-010 evidence)
+- TUI:
+  - Z) Precision Boot Scan
+  - Y) Precision Parity (CLI vs GUI/TUI baseline)
+  - X) Precision Quick Scan JSON export (optional file path)
+  - W2) Precision Parity JSON export (optional file path)
+- CLI smoke harness: `powershell -ExecutionPolicy Bypass -File .\Test\Invoke-PrecisionSmoke.ps1`
+- CI runner (disposable VM recommended): `powershell -ExecutionPolicy Bypass -File .\Test\Invoke-PrecisionCI.ps1 -WithFaults -LogDir C:\Temp\precision-ci`
+
+Hiren’s BootCD PE (prebuilt WinPE) setup:
+1) Download Hiren’s BootCD PE ISO from the official site.
+2) Create bootable USB (Rufus or Ventoy).
+3) Copy the MiracleBoot_v7_1_1 folder onto the same USB (or a second USB).
+4) Boot the target PC from the Hiren USB (UEFI preferred).
+5) In the Hiren environment, open Command Prompt.
+6) Locate the USB drive letter (usually D: or E:), then:
+   D:\> cd MiracleBoot_v7_1_1
+   D:\MiracleBoot_v7_1_1> RunMiracleBoot.cmd --precision --scan-logs=ask
+
+What precision mode will do (summary):
+- Detect missing/corrupt boot files (e.g., winload.efi, bootmgfw.efi).
+- Detect missing/invalid BCD and wrong ESP mapping.
+- Detect partition GUID/type issues, ACL/permission problems on EFI, MBR/UEFI mismatches.
+- Detect BitLocker/Secure Boot blockers and require suspension/explicit approval.
+- Offer to scan SrtTrail.txt, ntbtlog.txt, CBS/DISM/Setup/Panther logs and open them in Notepad if you confirm you are a technical user.
+- Present exact remediation commands with a dry-run preview; nothing runs without your confirmation.
+
+Safety notes:
+- Always let the tool snapshot BCD before applying fixes.
+- If BitLocker is ON, suspend protectors before writing boot files.
+- If Secure Boot is ON, only proceed with signed/expected binaries.
+- In a live OS session, do not continue unless you intentionally typed BRICKME when prompted.

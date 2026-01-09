@@ -330,6 +330,9 @@ function Start-GUI {
                             
                             <Button Content="6. Boot Diagnosis" Height="40" Name="BtnBootDiagnosis" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
                             <TextBlock Name="TxtBootDiagnosis" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to run comprehensive boot diagnosis"/>
+                            
+                            <Button Content="7. Precision Detection &amp; Repair (ordered plan)" Height="40" Name="BtnPrecisionScan" Background="#d78700" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtPrecisionScan" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Runs precision detection with dry-run preview by default. Uncheck Test Mode to apply fixes and honor BRICKME/BitLocker safeguards."/>
 </StackPanel>
                     </ScrollViewer>
                 </GroupBox>
@@ -400,6 +403,10 @@ function Start-GUI {
                         <Button Content="In-Place Upgrade Readiness" Height="35" Name="BtnInPlaceReadiness" Background="#dc3545" Foreground="White" Width="200" Margin="0,0,10,0"/>
                         <Button Content="Ensure Repair-Install Ready" Height="35" Name="BtnRepairInstallReady" Background="#dc3545" Foreground="White" Width="220" Margin="0,0,10,0"/>
                         <Button Content="Repair Templates" Height="35" Name="BtnRepairTemplates" Background="#6f42c1" Foreground="White" Width="180"/>
+                        <Button Content="Precision Parity (CLI vs GUI/TUI)" Height="35" Name="BtnPrecisionParity" Background="#d78700" Foreground="White" Width="230" Margin="10,0,0,0" ToolTip="Run precision scan baseline and compare outputs for parity (TC-010)"/>
+                        <Button Content="Export Precision Scan (JSON)" Height="35" Name="BtnPrecisionJson" Background="#2d7dd2" Foreground="White" Width="200" Margin="10,0,0,0" ToolTip="Run precision scan and export results as JSON for logs/automation"/>
+                        <Button Content="Save Precision JSON to File" Height="35" Name="BtnPrecisionJsonSave" Background="#1b4f72" Foreground="White" Width="210" Margin="10,0,0,0" ToolTip="Run precision scan and save JSON to a file (includes bugcheck)"/>
+                        <Button Content="Save Parity JSON to File" Height="35" Name="BtnPrecisionParitySave" Background="#5a2a83" Foreground="White" Width="200" Margin="10,0,0,0" ToolTip="Run parity harness and save JSON (TC-010 evidence)"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                         <Button Content="Comprehensive Log Analysis" Height="35" Name="BtnComprehensiveLogAnalysis" Background="#dc3545" Foreground="White" Width="250" Margin="0,0,10,0" FontWeight="Bold" ToolTip="Gather and analyze all important logs from all tiers"/>
@@ -427,7 +434,10 @@ function Start-GUI {
                 </Grid.RowDefinitions>
                 
                 <StackPanel Grid.Row="0" Margin="0,0,0,10">
-                    <TextBlock Text="Force Windows to perform a repair-only in-place upgrade from ISO" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="Force Windows to perform a repair-only in-place upgrade from ISO" FontWeight="Bold" FontSize="14" VerticalAlignment="Center"/>
+                        <Button Name="BtnRepairInstallInfo" Content="ⓘ" FontSize="16" FontWeight="Bold" Foreground="#0078D7" Background="Transparent" BorderThickness="0" Cursor="Hand" Width="30" Height="30" Margin="10,0,0,0" ToolTip="Click for detailed information about Repair Install Forcer"/>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
                         <RadioButton Name="RbOnlineMode" Content="Online Mode (Running Windows)" IsChecked="True" Margin="0,0,20,0"/>
                         <RadioButton Name="RbOfflineMode" Content="Offline Mode (Non-Booting PC - WinPE/WinRE)" Foreground="#d78700"/>
@@ -2064,6 +2074,81 @@ if ($btnBootDiagnosis) {
             "OK",
             "Information"
         )
+    })
+}
+
+# Precision Detection & Repair (ordered plan)
+$btnPrecisionScan = Get-Control -Name "BtnPrecisionScan"
+if ($btnPrecisionScan) {
+    $btnPrecisionScan.Add_Click({
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        $txtPrecisionScan = Get-Control -Name "TxtPrecisionScan"
+        $chkTestMode = Get-Control -Name "ChkTestMode"
+
+        # Ensure core is loaded (idempotent)
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            if ($fixerOutput) { $fixerOutput.Text = "Failed to load core engine: $_" }
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $apply = -not ($chkTestMode -and $chkTestMode.IsChecked)
+
+        $winDrive = [Microsoft.VisualBasic.Interaction]::InputBox("Target Windows drive letter (e.g. C):","Precision Scan","C")
+        if ([string]::IsNullOrWhiteSpace($winDrive)) { $winDrive = "C" }
+        $winDrive = $winDrive.TrimEnd(':').ToUpper()
+        $windowsRoot = "$winDrive`:\Windows"
+
+        $espLetter = [Microsoft.VisualBasic.Interaction]::InputBox("EFI System Partition letter (default Z):","Precision Scan","Z")
+        if ([string]::IsNullOrWhiteSpace($espLetter)) { $espLetter = "Z" }
+        $espLetter = $espLetter.TrimEnd(':').ToUpper()
+
+        $askLogsPrompt = [System.Windows.MessageBox]::Show(
+            "Offer to open logs after scan (SrtTrail, ntbtlog, CBS, DISM)?",
+            "Precision Scan",
+            "YesNo",
+            "Question"
+        )
+        $askLogs = ($askLogsPrompt -eq "Yes")
+
+        try {
+            Update-StatusBar -Message "Running precision scan..." -ShowProgress
+            $result = Start-PrecisionScan -WindowsRoot $windowsRoot -EspDriveLetter $espLetter -Apply:$apply -AskOpenLogs:$askLogs -PassThru -ActionLogPath "$env:TEMP\precision-actions.log" -ErrorAction Stop
+
+            $summary = "PRECISION SCAN (" + ($(if ($apply) { "APPLY" } else { "DRY-RUN" })) + ")`n"
+            $summary += "===============================================================`n"
+            $summary += "Windows: $windowsRoot  ESP: $espLetter`n`n"
+
+            if ($result -and $result.Detections -and $result.Detections.Count -gt 0) {
+                foreach ($det in $result.Detections) {
+                    $summary += "[$($det.Id)] $($det.Title)  (Category: $($det.Category))`n"
+                    foreach ($ev in $det.Evidence) { $summary += "  Evidence: $ev`n" }
+                    if ($det.Remediate) {
+                        $summary += "  Commands:`n"
+                        foreach ($cmd in $det.Remediate) { $summary += "    - $cmd`n" }
+                    }
+                    $summary += "`n"
+                }
+            } else {
+                $summary += "No issues detected by precision scan.`n"
+            }
+
+            if ($fixerOutput) {
+                $fixerOutput.Text = $summary
+                $fixerOutput.ScrollToEnd()
+            }
+            if ($txtPrecisionScan) {
+                $txtPrecisionScan.Text = "Last run: $(Get-Date -Format 'HH:mm:ss') on $windowsRoot (ESP $espLetter). Mode: " + ($(if ($apply) { "Apply" } else { "Dry-run" }))
+            }
+
+            Update-StatusBar -Message "Precision scan completed" -HideProgress
+        } catch {
+            if ($fixerOutput) { $fixerOutput.Text = "Precision scan failed: $_`n" }
+            Update-StatusBar -Message "Precision scan failed" -HideProgress
+            [System.Windows.MessageBox]::Show("Precision scan failed: $_","Error","OK","Error") | Out-Null
+        }
     })
 }
 
@@ -3928,6 +4013,14 @@ if ($btnCrashDumpAnalyzer) {
 $btnLookupErrorCode = Get-Control -Name "BtnLookupErrorCode" -Silent
 if ($btnLookupErrorCode) {
     $btnLookupErrorCode.Add_Click({
+        # Ensure core (precision helpers) is loaded
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
         $errorCodeInput = Get-Control -Name "ErrorCodeInput"
         $logDriveCombo = Get-Control -Name "LogDriveCombo"
         $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
@@ -3966,9 +4059,181 @@ if ($btnLookupErrorCode) {
         
         try {
             $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
-            $logAnalysisBox.Text = $errorInfo.Report
+            $report = ""
+            if ($errorInfo) { $report = $errorInfo.Report }
+
+            # Precision mapping
+            $prec = Search-PrecisionErrorCode -Code $errorCode
+            if ($prec) {
+                $report += "`n`nPRECISION MAPPING: $($prec.SuggestedTC)`nNotes: $($prec.Notes)`n"
+            }
+
+            # Minidump summary for quick triage
+            $dumps = Get-PrecisionDumpSummary -WindowsRoot "$drive`:\Windows" -Max 3
+            if ($dumps -and $dumps.Count -gt 0) {
+                $report += "`nRecent minidumps on $drive`::`n"
+                foreach ($d in $dumps) {
+                    $report += "  $($d.LastWriteTime)  $($d.SizeMB) MB  $($d.Path)`n"
+                }
+            }
+
+            # Recent BugCheck from System.evtx (offline-safe)
+            $bug = Get-PrecisionRecentBugcheck -WindowsRoot "$drive`:\Windows"
+            if ($bug -and $bug.Code) {
+                $hex = ("0x{0:X}" -f $bug.Code)
+                $report += "`nRecent BugCheck (System.evtx): $hex  Params: $($bug.Params -join ', ')`n"
+                $report += "Time: $($bug.TimeCreated)`n"
+            }
+
+            if (-not $report) { $report = "No data for error code $errorCode." }
+            $logAnalysisBox.Text = $report
         } catch {
             $logAnalysisBox.Text = "Error looking up error code: $_`n`nPlease verify the error code format and try again."
+        }
+    })
+}
+
+$btnPrecisionParity = Get-Control -Name "BtnPrecisionParity" -Silent
+if ($btnPrecisionParity) {
+    $btnPrecisionParity.Add_Click({
+        # Ensure core loaded
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        $drive = "C"
+        if ($logDriveCombo) {
+            $sel = $logDriveCombo.SelectedItem
+            if ($sel -and $sel -match '^([A-Z]):') { $drive = $matches[1] }
+        }
+        $windowsRoot = "$drive`:\Windows"
+
+        try {
+            $logAnalysisBox.Text = "Running precision parity harness for $windowsRoot (ESP Z)...`n`n"
+            $parity = Invoke-PrecisionParityHarness -WindowsRoot $windowsRoot -EspDriveLetter "Z" -ActionLogPath "$env:TEMP\precision-actions.log"
+            $report = "PRECISION PARITY (TC-010)`n"
+            $report += "=====================================`n"
+            $report += "CLI detections: $($parity.Cli.Detections.Count)`n"
+            if ($parity.Parity.Matches) {
+                $report += "Parity: MATCH (CLI vs GUI/TUI)`n"
+            } else {
+                $report += "Parity: DIFFERENCES`n"
+                $parity.Parity.Differences | ForEach-Object { $report += " - $_`n" }
+            }
+            if ($parity.Cli.Detections) {
+                $report += "`nDetections:`n"
+                foreach ($d in $parity.Cli.Detections) {
+                    $report += "[$($d.Id)] $($d.Title) (Cat: $($d.Category))`n"
+                }
+            }
+            $logAnalysisBox.Text = $report
+        } catch {
+            $logAnalysisBox.Text = "Precision parity harness failed: $_"
+        }
+    })
+}
+
+$btnPrecisionParitySave = Get-Control -Name "BtnPrecisionParitySave" -Silent
+if ($btnPrecisionParitySave) {
+    $btnPrecisionParitySave.Add_Click({
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $drive = "C"
+        if ($logDriveCombo) {
+            $sel = $logDriveCombo.SelectedItem
+            if ($sel -and $sel -match '^([A-Z]):') { $drive = $matches[1] }
+        }
+        $windowsRoot = "$drive`:\Windows"
+
+        $defaultPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "precision-parity.json"
+        $saveDlg = New-Object Microsoft.Win32.SaveFileDialog
+        $saveDlg.FileName = "precision-parity"
+        $saveDlg.DefaultExt = ".json"
+        $saveDlg.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
+        $saveDlg.InitialDirectory = Split-Path $defaultPath -Parent
+        $saveDlg.ShowDialog() | Out-Null
+        if (-not $saveDlg.FileName) { return }
+
+        try {
+            $null = Invoke-PrecisionParityHarness -WindowsRoot $windowsRoot -EspDriveLetter "Z" -AsJson -OutFile $saveDlg.FileName -ActionLogPath "$env:TEMP\precision-actions.log"
+            [System.Windows.MessageBox]::Show("Precision parity JSON saved to:`n$($saveDlg.FileName)","Parity JSON Saved","OK","Information") | Out-Null
+        } catch {
+            [System.Windows.MessageBox]::Show("Precision parity JSON save failed: $_","Error","OK","Error") | Out-Null
+        }
+    })
+}
+
+$btnPrecisionJson = Get-Control -Name "BtnPrecisionJson" -Silent
+if ($btnPrecisionJson) {
+    $btnPrecisionJson.Add_Click({
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
+        $drive = "C"
+        if ($logDriveCombo) {
+            $sel = $logDriveCombo.SelectedItem
+            if ($sel -and $sel -match '^([A-Z]):') { $drive = $matches[1] }
+        }
+        $windowsRoot = "$drive`:\Windows"
+
+        try {
+            $json = Invoke-PrecisionQuickScan -WindowsRoot $windowsRoot -EspDriveLetter "Z" -AsJson -IncludeBugcheck -ActionLogPath "$env:TEMP\precision-actions.log"
+            $logAnalysisBox.Text = $json
+        } catch {
+            $logAnalysisBox.Text = "Precision JSON export failed: $_"
+        }
+    })
+}
+
+$btnPrecisionJsonSave = Get-Control -Name "BtnPrecisionJsonSave" -Silent
+if ($btnPrecisionJsonSave) {
+    $btnPrecisionJsonSave.Add_Click({
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $logDriveCombo = Get-Control -Name "LogDriveCombo"
+        $drive = "C"
+        if ($logDriveCombo) {
+            $sel = $logDriveCombo.SelectedItem
+            if ($sel -and $sel -match '^([A-Z]):') { $drive = $matches[1] }
+        }
+        $windowsRoot = "$drive`:\Windows"
+
+        $defaultPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "precision-scan.json"
+        $saveDlg = New-Object Microsoft.Win32.SaveFileDialog
+        $saveDlg.FileName = "precision-scan"
+        $saveDlg.DefaultExt = ".json"
+        $saveDlg.Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*"
+        $saveDlg.InitialDirectory = Split-Path $defaultPath -Parent
+        $saveDlg.ShowDialog() | Out-Null
+        if (-not $saveDlg.FileName) { return }
+
+        try {
+            $null = Invoke-PrecisionQuickScan -WindowsRoot $windowsRoot -EspDriveLetter "Z" -AsJson -IncludeBugcheck -OutFile $saveDlg.FileName
+            [System.Windows.MessageBox]::Show("Precision scan JSON saved to:`n$($saveDlg.FileName)","Precision JSON Saved","OK","Information") | Out-Null
+        } catch {
+            [System.Windows.MessageBox]::Show("Precision JSON save failed: $_","Error","OK","Error") | Out-Null
         }
     })
 }
@@ -5126,6 +5391,86 @@ if ($btnRepairTemplates) {
 }
 
 # Repair Install Forcer Handlers
+# Information button handler
+$btnRepairInstallInfo = Get-Control -Name "BtnRepairInstallInfo"
+if ($btnRepairInstallInfo) {
+    $btnRepairInstallInfo.Add_Click({
+        try {
+            # Get current mode
+            $isOfflineMode = $W.FindName("RbOfflineMode").IsChecked
+            
+            # Get appropriate instructions
+            if ($isOfflineMode) {
+                $instructions = Get-OfflineRepairInstallInstructions
+                $title = "Offline Repair Install Forcer - Detailed Information"
+            } else {
+                $instructions = Get-RepairInstallInstructions
+                $title = "Repair Install Forcer - Detailed Information"
+            }
+            
+            # Create information window
+            $infoWindow = New-Object System.Windows.Window
+            $infoWindow.Title = $title
+            $infoWindow.Width = 900
+            $infoWindow.Height = 700
+            $infoWindow.WindowStartupLocation = "CenterOwner"
+            $infoWindow.Owner = $W
+            $infoWindow.ResizeMode = "CanResize"
+            
+            # Create content
+            $grid = New-Object System.Windows.Controls.Grid
+            $grid.Margin = New-Object System.Windows.Thickness(10)
+            
+            $rowDef1 = New-Object System.Windows.Controls.RowDefinition
+            $rowDef1.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+            $rowDef2 = New-Object System.Windows.Controls.RowDefinition
+            $rowDef2.Height = New-Object System.Windows.GridLength(0, [System.Windows.GridUnitType]::Auto)
+            
+            $grid.RowDefinitions.Add($rowDef1)
+            $grid.RowDefinitions.Add($rowDef2)
+            
+            # Text box for instructions
+            $textBox = New-Object System.Windows.Controls.TextBox
+            $textBox.Text = $instructions
+            $textBox.FontFamily = New-Object System.Windows.Media.FontFamily("Consolas")
+            $textBox.FontSize = 11
+            $textBox.IsReadOnly = $true
+            $textBox.TextWrapping = [System.Windows.TextWrapping]::Wrap
+            $textBox.VerticalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Auto
+            $textBox.HorizontalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Auto
+            $textBox.Background = [System.Windows.Media.Brushes]::White
+            $textBox.Foreground = [System.Windows.Media.Brushes]::Black
+            $textBox.Padding = New-Object System.Windows.Thickness(10)
+            $textBox.Margin = New-Object System.Windows.Thickness(0,0,0,10)
+            [System.Windows.Controls.Grid]::SetRow($textBox, 0)
+            $grid.Children.Add($textBox)
+            
+            # Close button
+            $closeBtn = New-Object System.Windows.Controls.Button
+            $closeBtn.Content = "Close"
+            $closeBtn.Width = 100
+            $closeBtn.Height = 30
+            $closeBtn.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+            $closeBtn.Margin = New-Object System.Windows.Thickness(0,0,0,0)
+            [System.Windows.Controls.Grid]::SetRow($closeBtn, 1)
+            $closeBtn.Add_Click({
+                $infoWindow.Close()
+            })
+            $grid.Children.Add($closeBtn)
+            
+            $infoWindow.Content = $grid
+            $infoWindow.ShowDialog() | Out-Null
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Error displaying information: $_",
+                "Error",
+                "OK",
+                "Error"
+            )
+        }
+    })
+}
+
 # Update mode description when radio buttons change
 $W.FindName("RbOnlineMode").Add_Checked({
     if ($W.FindName("RbOnlineMode").IsChecked) {

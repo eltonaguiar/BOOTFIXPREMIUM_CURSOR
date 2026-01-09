@@ -212,6 +212,10 @@ function Start-TUI {
         Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
         Write-Host "I) Boot Chain Analysis (View Startup/Boot Logs)" -ForegroundColor Cyan
         Write-Host "J) Look Up Windows Error Code (Get troubleshooting help)" -ForegroundColor Yellow
+        Write-Host "Z) Precision Boot Scan (ordered detection/remediation, dry-run default)" -ForegroundColor Yellow
+        Write-Host "Y) Precision Parity (CLI vs GUI/TUI baseline)" -ForegroundColor Yellow
+        Write-Host "X) Precision Quick Scan JSON export" -ForegroundColor Yellow
+        Write-Host "W2) Precision Parity JSON export" -ForegroundColor Yellow
         Write-Host "U) Comprehensive Log Analysis (All Tiers - Root Cause)" -ForegroundColor Red
         Write-Host "V) Open Event Viewer" -ForegroundColor Cyan
         Write-Host "W) Crash Dump Analyzer (crashanalyze.exe)" -ForegroundColor Magenta
@@ -785,6 +789,145 @@ function Start-TUI {
                 $c = 'B'
                 continue
             }
+            "Z" {
+                $win = Read-Host 'Target Windows drive letter (default C)'
+                if ([string]::IsNullOrWhiteSpace($win)) { $win = "C" }
+                $win = $win.TrimEnd(':').ToUpper()
+                $windowsRoot = "$win`:\Windows"
+
+                $esp = Read-Host 'EFI System Partition letter (default Z)'
+                if ([string]::IsNullOrWhiteSpace($esp)) { $esp = "Z" }
+                $esp = $esp.TrimEnd(':').ToUpper()
+
+                $applyResp = Read-Host 'Apply fixes? (Y/N, default N)'
+                $apply = ($applyResp -match '^(y|yes)$')
+
+                $logResp = Read-Host 'Offer to open logs after scan? (Y/N, default N)'
+                $askLogs = ($logResp -match '^(y|yes)$')
+
+                Write-Host ""
+                $result = Start-PrecisionScan -WindowsRoot $windowsRoot -EspDriveLetter $esp -Apply:$apply -AskOpenLogs:$askLogs -PassThru -ActionLogPath "$env:TEMP\precision-actions.log"
+
+                if ($result -and $result.Detections -and $result.Detections.Count -gt 0) {
+                    Write-Host "`nPRECISION DETECTIONS:" -ForegroundColor Cyan
+                    foreach ($det in $result.Detections) {
+                        Write-Host "[$($det.Id)] $($det.Title)  Category: $($det.Category)" -ForegroundColor Yellow
+                        foreach ($ev in $det.Evidence) { Write-Host "  Evidence: $ev" -ForegroundColor Gray }
+                        if ($det.Remediate) {
+                            Write-Host "  Remediation commands:" -ForegroundColor Cyan
+                            foreach ($cmd in $det.Remediate) { Write-Host "    - $cmd" -ForegroundColor Gray }
+                        }
+                    }
+                } else {
+                    Write-Host "`nNo issues detected by precision scan." -ForegroundColor Green
+                }
+
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "z" {
+                $c = 'Z'
+                continue
+            }
+            "Y" {
+                $win = Read-Host 'Target Windows drive letter (default C)'
+                if ([string]::IsNullOrWhiteSpace($win)) { $win = "C" }
+                $win = $win.TrimEnd(':').ToUpper()
+                $windowsRoot = "$win`:\Windows"
+
+                Write-Host ""
+                Write-Host "Running precision parity harness for $windowsRoot (ESP Z)..." -ForegroundColor Gray
+                try {
+                    $parity = Invoke-PrecisionParityHarness -WindowsRoot $windowsRoot -EspDriveLetter "Z" -ActionLogPath "$env:TEMP\precision-actions.log"
+                    # Basic parity assertion (CLI baseline vs this TUI call)
+                    $matches = $true
+                    if (-not $parity.Parity.Matches) { $matches = $false }
+
+                    if ($parity.Parity.Matches) {
+                        Write-Host "Parity: MATCH (CLI vs GUI/TUI)" -ForegroundColor Green
+                    } else {
+                        Write-Host "Parity differences:" -ForegroundColor Yellow
+                        foreach ($d in $parity.Parity.Differences) { Write-Host "  - $d" -ForegroundColor Yellow }
+                    }
+                    if ($parity.Cli.Detections) {
+                        Write-Host ""
+                        Write-Host "CLI Detections:" -ForegroundColor Cyan
+                        foreach ($det in $parity.Cli.Detections) {
+                            Write-Host "[$($det.Id)] $($det.Title) (Cat: $($det.Category))" -ForegroundColor White
+                        }
+                    }
+                } catch {
+                    Write-Host "Precision parity harness failed: $_" -ForegroundColor Red
+                }
+
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "y" {
+                $c = 'Y'
+                continue
+            }
+            "X" {
+                $win = Read-Host 'Target Windows drive letter (default C)'
+                if ([string]::IsNullOrWhiteSpace($win)) { $win = "C" }
+                $win = $win.TrimEnd(':').ToUpper()
+                $windowsRoot = "$win`:\Windows"
+
+                $save = Read-Host "Save to file? (path or press Enter for console only)"
+                $outFile = $null
+                if (-not [string]::IsNullOrWhiteSpace($save)) {
+                    $outFile = $save
+                }
+
+                Write-Host ""
+                Write-Host "Running precision quick scan (JSON) for $windowsRoot (ESP Z)..." -ForegroundColor Gray
+                try {
+                    $json = Invoke-PrecisionQuickScan -WindowsRoot $windowsRoot -EspDriveLetter "Z" -AsJson -IncludeBugcheck -OutFile $outFile
+                    if ($outFile) {
+                        Write-Host "JSON written to $outFile" -ForegroundColor Green
+                    } else {
+                        Write-Host $json
+                    }
+                } catch {
+                    Write-Host "Precision JSON export failed: $_" -ForegroundColor Red
+                }
+
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "x" {
+                $c = 'X'
+                continue
+            }
+            "W2" {
+                $win = Read-Host 'Target Windows drive letter (default C)'
+                if ([string]::IsNullOrWhiteSpace($win)) { $win = "C" }
+                $win = $win.TrimEnd(':').ToUpper()
+                $windowsRoot = "$win`:\Windows"
+
+                $outFile = Read-Host "Save parity JSON to file (path), or press Enter to print"
+                if ([string]::IsNullOrWhiteSpace($outFile)) { $outFile = $null }
+
+                Write-Host ""
+                Write-Host "Running precision parity harness (JSON) for $windowsRoot (ESP Z)..." -ForegroundColor Gray
+                try {
+                    $json = Invoke-PrecisionParityHarness -WindowsRoot $windowsRoot -EspDriveLetter "Z" -AsJson -OutFile $outFile -ActionLogPath "$env:TEMP\precision-actions.log"
+                    if ($outFile) {
+                        Write-Host "Parity JSON written to $outFile" -ForegroundColor Green
+                    } else {
+                        Write-Host $json
+                    }
+                } catch {
+                    Write-Host "Precision parity JSON export failed: $_" -ForegroundColor Red
+                }
+
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
             "C" {
                 $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
@@ -1085,8 +1228,36 @@ function Start-TUI {
                     Write-Host ""
                     
                     $errorInfo = Get-WindowsErrorCodeInfo -ErrorCode $errorCode -TargetDrive $drive
-                    
-                    Write-Host $errorInfo.Report
+                    if ($errorInfo) {
+                        Write-Host $errorInfo.Report
+                    }
+
+                    # Precision mapping
+                    $prec = Search-PrecisionErrorCode -Code $errorCode
+                    if ($prec) {
+                        Write-Host ""
+                        Write-Host "PRECISION MAPPING: $($prec.SuggestedTC)" -ForegroundColor Cyan
+                        Write-Host "Notes: $($prec.Notes)" -ForegroundColor Gray
+                    }
+
+                    # Minidump summary for quick triage
+                    $dumpSummary = Get-PrecisionDumpSummary -WindowsRoot "$drive`:\Windows" -Max 3
+                    if ($dumpSummary -and $dumpSummary.Count -gt 0) {
+                        Write-Host ""
+                        Write-Host "Recent minidumps on $drive`: (latest 3)" -ForegroundColor Cyan
+                        foreach ($d in $dumpSummary) {
+                            Write-Host "  $($d.LastWriteTime)  $($d.SizeMB) MB  $($d.Path)" -ForegroundColor Gray
+                        }
+                    }
+
+                    # Recent bugcheck from System.evtx (offline-safe)
+                    $bug = Get-PrecisionRecentBugcheck -WindowsRoot "$drive`:\Windows"
+                    if ($bug -and $bug.Code) {
+                        $hex = ("0x{0:X}" -f $bug.Code)
+                        Write-Host ""
+                        Write-Host "Recent BugCheck (System.evtx): $hex Params: $($bug.Params -join ', ')" -ForegroundColor Cyan
+                        Write-Host "Time: $($bug.TimeCreated)" -ForegroundColor Gray
+                    }
                     
                     Write-Host ""
                     Write-Host "Press any key to continue..." -ForegroundColor Gray
@@ -1559,6 +1730,39 @@ function Start-TUI {
                 continue
             }
             'S' {
+                # Check if we're in WinPE/WinRE - show offline repair install info option
+                $envType = Get-EnvironmentType
+                if ($envType -eq 'WinPE' -or $envType -eq 'WinRE') {
+                    Write-Host ''
+                    Write-Host 'REPAIR-INSTALL OPTIONS (WinPE/WinRE Environment)' -ForegroundColor Cyan
+                    Write-Host '===============================================================' -ForegroundColor Gray
+                    Write-Host ''
+                    Write-Host '1) Ensure Repair-Install Ready (Prepare system for repair install)' -ForegroundColor White
+                    Write-Host '2) View Offline Repair Install Information (How offline repair works)' -ForegroundColor Yellow
+                    Write-Host '0) Back to main menu' -ForegroundColor Gray
+                    Write-Host ''
+                    
+                    $subChoice = Read-Host 'Select option'
+                    
+                    if ($subChoice -eq '2') {
+                        Write-Host ''
+                        Write-Host 'OFFLINE REPAIR INSTALL FORCER - DETAILED INFORMATION' -ForegroundColor Yellow
+                        Write-Host '===============================================================' -ForegroundColor Gray
+                        Write-Host ''
+                        
+                        $instructions = Get-OfflineRepairInstallInstructions
+                        Write-Host $instructions
+                        
+                        Write-Host ''
+                        Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                        continue
+                    } elseif ($subChoice -eq '0' -or [string]::IsNullOrWhiteSpace($subChoice)) {
+                        continue
+                    }
+                    # If choice is '1' or invalid, fall through to normal repair-install readiness
+                }
+                
                 $drive = Read-Host 'Target Windows drive letter (e.g. C or press Enter for C)'
                 if ([string]::IsNullOrWhiteSpace($drive)) {
                     $drive = 'C'

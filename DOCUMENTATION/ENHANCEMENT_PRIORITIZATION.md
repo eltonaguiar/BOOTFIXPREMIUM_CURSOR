@@ -83,6 +83,31 @@
 
 ---
 
+### Task 1.4: Precision UX surface (Parity/JSON shortcuts)
+**Priority:** P1  
+**Impact:** Medium - Faster diagnostics/export; TC-010 evidence capture  
+**Effort:** Medium  
+**Dependencies:** Precision core already shipped
+
+**Micro Tasks:**
+- 1.4.1 - GUI: buttons for Precision Detection, Precision Parity, Export/Save Precision JSON, Save Parity JSON ✅
+- 1.4.2 - TUI: menu entries Z (scan), Y (parity), X (scan JSON), W2 (parity JSON) ✅
+- 1.4.3 - CLI: aliases `Invoke-PrecisionQuickScanCli`, `Invoke-PrecisionQuickScan -AsJson/-OutFile`, `Invoke-PrecisionParityHarness -AsJson/-OutFile` ✅
+- 1.4.4 - Docs: QUICK_START and precision test plan updated with GUI/TUI/CLI flows ✅
+
+**Status:** ✅ COMPLETED
+
+**Minimal smoke commands (keep handy for quick checks):**
+- CLI dry-run precision: `Start-PrecisionScan -WindowsRoot C:\Windows -EspDriveLetter Z`
+- CLI apply precision: `Start-PrecisionScan -WindowsRoot C:\Windows -EspDriveLetter Z -Apply`
+- CLI JSON precision: `Invoke-PrecisionQuickScanCli -WindowsRoot C:\Windows -EspDriveLetter Z -IncludeBugcheck`
+- CLI parity JSON: `Invoke-PrecisionParityHarness -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson -OutFile parity.json`
+- GUI: Diagnostics & Logs → Precision Detection & Repair (Test Mode on for dry-run)
+- TUI: Z (scan), Y (parity), X (scan JSON), W2 (parity JSON)
+- Safety: In live OS (not WinRE/WinPE), destructive boot writes require typing BRICKME.
+
+---
+
 ### Task 1.3: Fix Numbered Output (0,1,2,3,4,5,6)
 **Priority:** P0  
 **Impact:** Medium - Confusing debug output  
@@ -457,3 +482,44 @@
 ### 📋 Pending
 - **Task 1.3** - Fix numbered output (0,1,2,3,4,5,6)
 
+### 🆕 Task 1.4: External Research Integration (BOOTFIXPREMIUM repos)
+**Priority:** P1  
+**Impact:** Medium — leverage prior work/research for parity and improvements  
+**Effort:** Medium  
+**Dependencies:** None
+
+**Micro Tasks (execute sequentially):**
+- 1.4.1 - Pull and inventory `eltonaguiar/BOOTFIXPREMIUM_CURSOR` (modules, CLI/GUI split, detection/remediation coverage)
+- 1.4.2 - Pull and inventory `eltonaguiar/BOOTFIXPREMIUM_GITHUB` (diff vs CURSOR; list deltas)
+- 1.4.3 - Extract detection/remediation patterns not yet covered in MiracleBoot precision; map to TCs
+- 1.4.4 - Extract UX patterns (prompts, safeguards, logging) that differ; assess adoption
+- 1.4.5 - Produce merge plan: functions/flows to port, conflicts, expected gains
+- 1.4.6 - Draft patch/PR plan mapping each imported change to internal tasks/TCs
+- 1.4.7 - Update precision test matrix with any new detections/remediations discovered
+
+**Status:** 🟡 NEW
+
+### 🆕 Task 1.5: Research-driven hardening (Gemini paper)
+**Priority:** P1  
+**Impact:** High — add logic lock signals, safety gates, and fault injection  
+**Effort:** Medium  
+**Dependencies:** Precision core
+
+**Micro Tasks:**
+- 1.5.1 FASTBOOT: detect 0-byte hiberfil.sys; auto recommend powercfg /h off/on.
+- 1.5.2 Secure Boot: differentiate missing winload.efi vs signature rejection; advise BIOS key restore.
+- 1.5.3 BitLocker/TPM PCR awareness: warn/suspend before boot writes; log decision.
+- 1.5.4 StartOverride traps: covered (storahci/iaStorV/iaStorAC/stornvme) — verify test coverage.
+- 1.5.5 Pending rename / RebootPending detection: covered; add tests.
+- 1.5.6 Dangling BCD pointers (device/osdevice unknown): covered; add tests.
+- 1.5.7 ESP format/type validation: covered; add tests.
+- 1.5.8 Fault injection scripts: StartOverride, pending.xml exclusive, missing BCD, BitLocker trap, ESP format — added in Test/Invoke-FaultInjection.ps1; run and log outputs.
+- 1.5.9 Safety gates: ensure backups (SYSTEM hive, BCD) before writes (added); version gate (WinPE vs target OS bcdboot) — add check/log.
+- 1.5.10 Logging: ensure JSON outputs capture evidence and actions for post-mortem.
+
+**Status:** 🟡 NEW
+
+### 🔄 Ongoing Test Harness
+- CLI smoke: `Test\Invoke-PrecisionSmoke.ps1` (precision/parity/JSON/BCD/log prompt)
+- Fault injection: `Test\Invoke-FaultInjection.ps1` (StartOverride trap, pending.xml exclusive, missing BCD; manual BitLocker/ESP)
+- GUI/TUI non-destructive checks: launch, load BCD list, run Precision (Test Mode), export/save JSON, parity JSON save

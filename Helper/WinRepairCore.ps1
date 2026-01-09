@@ -95,6 +95,1202 @@
           (GUI/TUI) is responsible for choosing the correct drive.
 #>
 
+function Invoke-BootPrecisionSafetyCheck {
+    <#
+    .SYNOPSIS
+    Safety interlock for live Windows sessions (FullOS) to prevent accidental boot writes.
+    .PARAMETER Force
+    Skip the prompt (CI/automation only).
+    #>
+    param(
+        [switch]$Force
+    )
+    if ($Force) { return $true }
+    if ($env:SystemDrive -ne 'X:' -and -not $env:CI -and -not $env:TF_BUILD) {
+        $confirm = Read-Host "SAFETY WARNING: Live OS detected. Type 'BRICKME' to continue or press Enter to abort"
+        if ($confirm -ne 'BRICKME') {
+            Write-Host "Aborting by user choice. No changes made." -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
+}
+
+function Invoke-PrecisionLogPrompt {
+    <#
+    .SYNOPSIS
+    Prompts the user (if requested) to open collected boot-related logs in Notepad.
+    .PARAMETER LogPaths
+    Array of log file paths to offer.
+    .PARAMETER Ask
+    If set, prompt the user; otherwise skip opening.
+    .PARAMETER ForceOpen
+    Open without prompting (for explicit calls).
+    #>
+    param(
+        [string[]]$LogPaths,
+        [switch]$Ask,
+        [switch]$ForceOpen
+    )
+
+    $paths = $LogPaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+    if (-not $paths -or $paths.Count -eq 0) {
+        return
+    }
+
+    $shouldOpen = $false
+    if ($ForceOpen) {
+        $shouldOpen = $true
+    } elseif ($Ask) {
+        $response = Read-Host "Open collected boot logs in Notepad? (Y/N)"
+        if ($response -match '^(y|yes)$') { $shouldOpen = $true }
+    }
+
+    if ($shouldOpen) {
+        foreach ($p in $paths) {
+            try {
+                Start-Process notepad.exe $p -ErrorAction Stop
+            } catch {
+                Write-Host "Failed to open $p : $_" -ForegroundColor Yellow
+            }
+        }
+    }
+}
+
+function Assert-PrecisionInterfaceParity {
+    <#
+    .SYNOPSIS
+    Basic parity helper to compare CLI vs GUI/TUI detection outputs.
+    .DESCRIPTION
+    Accepts hashtables/PSCustomObjects with detection names, evidence, and remediation commands.
+    Returns a summary indicating mismatches.
+    #>
+    param(
+        $CliOutput,
+        $GuiOutput,
+        $TuiOutput
+    )
+
+    $result = @{
+        Matches = $true
+        Differences = @()
+    }
+
+    $targets = @(
+        @{ Name = "CLI"; Data = $CliOutput },
+        @{ Name = "GUI"; Data = $GuiOutput },
+        @{ Name = "TUI"; Data = $TuiOutput }
+    )
+
+    # Simple pairwise comparison by detection name + remediation sets
+    if ($CliOutput -and $GuiOutput) {
+        if ($CliOutput.detections -ne $GuiOutput.detections -or $CliOutput.remediation -ne $GuiOutput.remediation) {
+            $result.Matches = $false
+            $result.Differences += "CLI vs GUI differ"
+        }
+    }
+    if ($CliOutput -and $TuiOutput) {
+        if ($CliOutput.detections -ne $TuiOutput.detections -or $CliOutput.remediation -ne $TuiOutput.remediation) {
+            $result.Matches = $false
+            $result.Differences += "CLI vs TUI differ"
+        }
+    }
+    if ($GuiOutput -and $TuiOutput) {
+        if ($GuiOutput.detections -ne $TuiOutput.detections -or $GuiOutput.remediation -ne $TuiOutput.remediation) {
+            $result.Matches = $false
+            $result.Differences += "GUI vs TUI differ"
+        }
+    }
+
+    return $result
+}
+
+function Search-PrecisionErrorCode {
+    <#
+    .SYNOPSIS
+    Maps common boot/BSOD error codes or names to precision test case IDs.
+    .PARAMETER Code
+    Error code or name, e.g. "0x7B" or "INACCESSIBLE_BOOT_DEVICE".
+    #>
+    param(
+        [string]$Code
+    )
+    if ([string]::IsNullOrWhiteSpace($Code)) { return $null }
+    $c = $Code.Trim().ToUpper()
+    $map = @{
+        "0X7B"                                = "TC-011"
+        "INACCESSIBLE_BOOT_DEVICE"            = "TC-011"
+        "CRITICAL_PROCESS_DIED"               = "TC-012"
+        "0XEF"                                = "TC-012"
+        "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED" = "TC-013"
+        "0X7E"                                = "TC-013"
+        "0X1000007E"                          = "TC-013"
+    }
+    $tc = $map[$c]
+    return if ($tc) {
+        [PSCustomObject]@{
+            Code           = $Code
+            SuggestedTC    = $tc
+            Notes          = "Use precision scan to validate; see Get-PrecisionDetections mapping."
+        }
+    } else {
+        $null
+    }
+}
+
+function Get-PrecisionRecentBugcheck {
+    <#
+    .SYNOPSIS
+    Reads the latest BugCheck event from offline/online System.evtx.
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows"
+    )
+    $evtx = Join-Path $WindowsRoot "System32\winevt\Logs\System.evtx"
+    if (-not (Test-Path $evtx)) { return $null }
+    try {
+        $events = Get-WinEvent -Path $evtx -FilterHashtable @{Id=1001} -MaxEvents 1 -ErrorAction Stop
+        if ($events) {
+            $e = $events[0]
+            $msg = $e.Message
+            $code = $null
+            if ($msg -match "BugcheckCode\s+(\d+)") { $code = [int]$Matches[1] }
+            elseif ($msg -match "BugCheck\s+(\d+)") { $code = [int]$Matches[1] }
+            $params = @()
+            if ($msg -match "Parameter1:\s*(0x[0-9A-Fa-f]+)") { $params += $Matches[1] }
+            if ($msg -match "Parameter2:\s*(0x[0-9A-Fa-f]+)") { $params += $Matches[1] }
+            if ($msg -match "Parameter3:\s*(0x[0-9A-Fa-f]+)") { $params += $Matches[1] }
+            if ($msg -match "Parameter4:\s*(0x[0-9A-Fa-f]+)") { $params += $Matches[1] }
+            return [PSCustomObject]@{
+                TimeCreated = $e.TimeCreated
+                Code        = $code
+                Params      = $params
+                Message     = $msg
+            }
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Invoke-PrecisionQuickScan {
+    <#
+    .SYNOPSIS
+    Runs precision scan with sensible defaults and returns objects (optionally JSON).
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    .PARAMETER EspDriveLetter
+    ESP drive letter (default Z).
+    .PARAMETER Apply
+    Execute remediation commands; default is preview only.
+    .PARAMETER AsJson
+    Return JSON instead of objects.
+    .PARAMETER IncludeBugcheck
+    Include latest bugcheck summary.
+    .PARAMETER OutFile
+    If set, write JSON output to this path.
+    .PARAMETER ActionLogPath
+    Optional log path for actions.
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z",
+        [switch]$Apply,
+        [switch]$AsJson,
+        [switch]$IncludeBugcheck,
+        [string]$OutFile,
+        [string]$ActionLogPath
+    )
+    if ($ActionLogPath) {
+        $script:PrecisionLogPath = $ActionLogPath
+    }
+    $res = Start-PrecisionScan -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -Apply:$Apply -PassThru
+    if ($IncludeBugcheck) {
+        $res | Add-Member -NotePropertyName Bugcheck -NotePropertyValue (Get-PrecisionRecentBugcheck -WindowsRoot $WindowsRoot) -Force
+    }
+    if ($AsJson -or $OutFile) {
+        $json = $res | ConvertTo-Json -Depth 6
+        if ($OutFile) {
+            try {
+                $dir = Split-Path $OutFile -Parent
+                if ($dir -and -not (Test-Path $dir)) {
+                    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                }
+                Set-Content -Path $OutFile -Value $json -Encoding UTF8 -Force
+            } catch {
+                Write-Host "Failed to write JSON to $OutFile : $_" -ForegroundColor Yellow
+            }
+        }
+        if ($AsJson) { return $json }
+        return $res
+    }
+    return $res
+}
+
+function Invoke-PrecisionQuickScanCli {
+    <#
+    .SYNOPSIS
+    Convenience wrapper for CLI usage: runs precision scan with defaults and prints JSON to console.
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    .PARAMETER EspDriveLetter
+    ESP drive letter (default Z).
+    .PARAMETER Apply
+    Execute remediation commands (default: preview).
+    .PARAMETER IncludeBugcheck
+    Include latest bugcheck summary.
+    .PARAMETER ActionLogPath
+    Optional log path.
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z",
+        [switch]$Apply,
+        [switch]$IncludeBugcheck,
+        [string]$ActionLogPath
+    )
+    $json = Invoke-PrecisionQuickScan -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -Apply:$Apply -IncludeBugcheck:$IncludeBugcheck -AsJson -ActionLogPath $ActionLogPath
+    Write-Host $json
+}
+
+function Get-PrecisionDumpSummary {
+    <#
+    .SYNOPSIS
+    Provides a lightweight summary of recent minidump files (offline-safe).
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    .PARAMETER Max
+    Maximum number of dumps to return (default 5).
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [int]$Max = 5
+    )
+    $dumpDir = Join-Path $WindowsRoot "Minidump"
+    if (-not (Test-Path $dumpDir)) { return @() }
+    try {
+        return Get-ChildItem -Path $dumpDir -Filter "*.dmp" -ErrorAction Stop |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First $Max |
+            Select-Object @{n="Path";e={$_.FullName}}, @{n="SizeMB";e={[math]::Round($_.Length/1MB,2)}}, LastWriteTime
+    } catch { return @() }
+}
+
+function Invoke-PrecisionParityHarness {
+    <#
+    .SYNOPSIS
+    Runs precision scan (CLI baseline) and compares with provided GUI/TUI outputs.
+    .PARAMETER WindowsRoot
+    Target Windows directory.
+    .PARAMETER EspDriveLetter
+    ESP drive letter for remediation commands.
+    .PARAMETER GuiDetections
+    Detection/remediation object from GUI (PassThru output).
+    .PARAMETER TuiDetections
+    Detection/remediation object from TUI (PassThru output).
+    .PARAMETER AsJson
+    Return JSON instead of objects.
+    .PARAMETER OutFile
+    Write JSON to a file if set (implies JSON output).
+    .PARAMETER ActionLogPath
+    Optional path for action logging.
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z",
+        $GuiDetections,
+        $TuiDetections,
+        [switch]$AsJson,
+        [string]$OutFile,
+        [string]$ActionLogPath
+    )
+    if ($ActionLogPath) {
+        $script:PrecisionLogPath = $ActionLogPath
+    }
+    $cli = Start-PrecisionScan -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -PassThru
+    $parity = Assert-PrecisionInterfaceParity -CliOutput $cli -GuiOutput $GuiDetections -TuiOutput $TuiDetections
+    $obj = [PSCustomObject]@{
+        Cli     = $cli
+        Gui     = $GuiDetections
+        Tui     = $TuiDetections
+        Parity  = $parity
+    }
+    Write-PrecisionLog -Message "Parity Harness: matches=$($parity.Matches) diffs=$($parity.Differences -join '; ')"
+    if ($AsJson -or $OutFile) {
+        $json = $obj | ConvertTo-Json -Depth 6
+        if ($OutFile) {
+            try {
+                $dir = Split-Path $OutFile -Parent
+                if ($dir -and -not (Test-Path $dir)) {
+                    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                }
+                Set-Content -Path $OutFile -Value $json -Encoding UTF8 -Force
+            } catch {
+                Write-Host "Failed to write parity JSON to $OutFile : $_" -ForegroundColor Yellow
+            }
+        }
+        return $json
+    }
+    return $obj
+}
+
+function Get-PrecisionPriorityOrder {
+    <#
+    .SYNOPSIS
+    Returns the evaluation order for precision boot detection to minimize false positives.
+    .OUTPUTS
+    Array of category names in priority order.
+    #>
+    return @(
+        "PhysicalFs"      # disk offline, NTFS dirty → handle first
+        "Partition"       # GPT/MBR mismatch, hidden/missing ESP
+        "BootFiles"       # winload/bootmgfw missing
+        "RegistryHives"   # SYSTEM/SOFTWARE corruption (0x51)
+        "Drivers"         # 0x7B storage, 0xEF critical process, GPU/storage drivers
+        "Servicing"       # pending.xml / rollback loops
+        "ConfigEdge"      # BCD device path, Hyper-V/VBS flags
+        "OEMDrivers"      # VMD/IRST missing, OEM storage class
+        "Safety"          # read-only volumes, multi-OS selection prompts
+    )
+}
+
+function Resolve-PrecisionRootCauseFromSrtTrail {
+    <#
+    .SYNOPSIS
+    Parse SrtTrail.txt root causes and map to internal test case IDs.
+    .PARAMETER LogPath
+    Path to SrtTrail.txt (defaults to C:\Windows\System32\LogFiles\Srt\SrtTrail.txt).
+    .OUTPUTS
+    PSCustomObject with RootCause, Details, SuggestedTC (if mapped)
+    #>
+    param(
+        [string]$LogPath = "C:\Windows\System32\LogFiles\Srt\SrtTrail.txt"
+    )
+
+    if (-not (Test-Path $LogPath)) {
+        return $null
+    }
+
+    $content = Get-Content $LogPath -ErrorAction SilentlyContinue
+    if (-not $content) { return $null }
+
+    $rootCauseLine = $content | Where-Object { $_ -match "Root cause found" } | Select-Object -First 1
+    $detailsLine   = $content | Where-Object { $_ -match "Root cause found:|Root cause" } | Select-Object -First 1
+
+    $root = $null
+    if ($rootCauseLine -match "Root cause found:\s*(.+)$") {
+        $root = $Matches[1].Trim()
+    } elseif ($detailsLine -match "Root cause:\s*(.+)$") {
+        $root = $Matches[1].Trim()
+    }
+
+    $tc = $null
+    switch -Regex ($root) {
+        "Boot status indicates that the OS booted successfully"     { $tc = "TC-013"; break }
+        "A recent driver installation or upgrade may be preventing" { $tc = "TC-013"; break }
+        "A patch is preventing the system from starting"            { $tc = "TC-014"; break }
+        "The operating system version is incompatible"              { $tc = "TC-007"; break }
+        "BadDriver"                                                 { $tc = "TC-013"; break }
+        "Boot critical file is corrupt"                             { $tc = "TC-012"; break }
+        "Boot configuration data store is corrupt"                  { $tc = "TC-002"; break }
+        "Boot manager failed to find OS loader"                     { $tc = "TC-001"; break }
+        "A hard disk could not be found"                            { $tc = "TC-011"; break }
+        default { $tc = $null }
+    }
+
+    [PSCustomObject]@{
+        RootCause   = $root
+        Details     = $detailsLine
+        SuggestedTC = $tc
+        LogPath     = $LogPath
+    }
+}
+
+function Get-PrecisionPriorityOrder {
+    <#
+    .SYNOPSIS
+    Returns the evaluation order for precision boot detection to minimize false positives.
+    .OUTPUTS
+    Array of category names in priority order.
+    #>
+    return @(
+        "PhysicalFs"      # disk offline, NTFS dirty → handle first
+        "Partition"       # GPT/MBR mismatch, hidden/missing ESP
+        "BootFiles"       # winload/bootmgfw missing
+        "RegistryHives"   # SYSTEM/SOFTWARE corruption (0x51)
+        "Drivers"         # 0x7B storage, 0xEF critical process, GPU/storage drivers
+        "Servicing"       # pending.xml / rollback loops
+        "ConfigEdge"      # BCD device path, Hyper-V/VBS flags
+        "OEMDrivers"      # VMD/IRST missing, OEM storage class
+        "Safety"          # read-only volumes, multi-OS selection prompts
+    )
+}
+
+function Get-OfflineSystemHivePath {
+    param([string]$WindowsRoot = "C:\Windows")
+    return (Join-Path $WindowsRoot "System32\Config\SYSTEM")
+}
+
+function Get-PrecisionDetections {
+    <#
+    .SYNOPSIS
+    Collects precision detections for common boot blockers (subset implemented).
+    .PARAMETER WindowsRoot
+    Target Windows directory (offline or online).
+    .PARAMETER EspDriveLetter
+    Expected ESP letter for remediation planning (default Z).
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z"
+    )
+
+    $detections = @()
+
+    # TC-001: Missing winload.efi
+    $winloadPath = Join-Path $WindowsRoot "System32\winload.efi"
+    if (-not (Test-Path $winloadPath)) {
+        $detections += [PSCustomObject]@{
+            Id        = "TC-001"
+            Title     = "Missing winload.efi"
+            Category  = "BootFiles"
+            Evidence  = @("File missing: $winloadPath")
+            Remediate = @(
+                "bcdboot $WindowsRoot /s $EspDriveLetter`: /f ALL",
+                "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Get-WimInfo /WimFile:X:\sources\install.wim (locate winload.efi if copy needed)"
+            )
+        }
+    }
+
+    # TC-002: Corrupt or missing BCD
+    try {
+        $bcdOk = $true
+        $null = & bcdedit /enum all 2>$null
+    } catch {
+        $bcdOk = $false
+    }
+    $efiBcd = "$EspDriveLetter`:\EFI\Microsoft\Boot\BCD"
+    if (-not $bcdOk -or -not (Test-Path $efiBcd)) {
+        $evidence = @()
+        if (-not $bcdOk) { $evidence += "bcdedit /enum failed (possible corruption)" }
+        if (-not (Test-Path $efiBcd)) { $evidence += "BCD not found at $efiBcd" }
+        $detections += [PSCustomObject]@{
+            Id        = "TC-002"
+            Title     = "Corrupt or missing BCD"
+            Category  = "BootFiles"
+            Evidence  = $evidence
+            Remediate = @(
+                "bcdedit /export C:\BCD_Backup",
+                "bootrec /fixboot",
+                "bootrec /rebuildbcd",
+                "bcdboot $WindowsRoot /s $EspDriveLetter`: /f ALL"
+            )
+        }
+    }
+
+    # TC-003: ESP not mounted / no drive letter
+    try {
+        $efiParts = Get-Partition -ErrorAction Stop | Where-Object { $_.GptType -eq "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" }
+        $hasLetter = $efiParts | Where-Object { $_.DriveLetter }
+        if (-not $hasLetter) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-003"
+                Title     = "EFI System Partition not assigned"
+                Category  = "Partition"
+                Evidence  = @("No ESP with drive letter; GPT ESP count: $($efiParts.Count)")
+                Remediate = @(
+                    "diskpart /s assign-esp.txt   (create script: select disk X; list vol; select vol <ESP>; assign letter=$EspDriveLetter)",
+                    "bcdboot $WindowsRoot /s $EspDriveLetter`: /f UEFI"
+                )
+            }
+        }
+    } catch {
+        # ignore if disk APIs not available
+    }
+
+    # TC-011: INACCESSIBLE_BOOT_DEVICE (storage StartOverride)
+    $systemHive = Get-OfflineSystemHivePath -WindowsRoot $WindowsRoot
+    if (Test-Path $systemHive) {
+        $mount = "HKLM\OFFLINE_SYS"
+        try {
+            cmd.exe /c "reg load $mount $systemHive" | Out-Null
+            $stor = Get-ItemProperty -Path "$mount\Services\storahci" -ErrorAction SilentlyContinue
+            $storOv0 = Get-ItemProperty -Path "$mount\Services\storahci\StartOverride" -ErrorAction SilentlyContinue
+            $startBad = $false
+            $evidence = @()
+            if ($stor -and $stor.Start -ne 0) { $startBad = $true; $evidence += "storahci Start=$($stor.Start) (expected 0)" }
+            if ($storOv0 -and $storOv0.0 -ne 0) { $startBad = $true; $evidence += "storahci StartOverride[0]=$($storOv0.0) (expected 0)" }
+            if ($startBad) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-011"
+                    Title     = "INACCESSIBLE_BOOT_DEVICE (StartOverride)"
+                    Category  = "Drivers"
+                    Evidence  = $evidence
+                    Remediate = @(
+                        "reg load HKLM\\OFFLINE_SYS $systemHive",
+                        "reg add HKLM\\OFFLINE_SYS\\Services\\storahci /v Start /t REG_DWORD /d 0 /f",
+                        "reg add HKLM\\OFFLINE_SYS\\Services\\storahci\\StartOverride /v 0 /t REG_DWORD /d 0 /f",
+                        "reg unload HKLM\\OFFLINE_SYS"
+                    )
+                }
+            }
+        } finally {
+            cmd.exe /c "reg unload $mount" | Out-Null 2>$null
+        }
+    }
+
+    # TC-014: Servicing pending.xml / rollback loop
+    $pendingXml = Join-Path $WindowsRoot "WinSxS\pending.xml"
+    if (Test-Path $pendingXml) {
+        $exclusive = $false
+        try {
+            [xml]$px = Get-Content $pendingXml -ErrorAction Stop
+            $exclusiveNodes = $px.SelectNodes("//*[@exclusive='true']")
+            if ($exclusiveNodes -and $exclusiveNodes.Count -gt 0) { $exclusive = $true }
+        } catch {}
+
+        if ($exclusive) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-014"
+                Title     = "Servicing exclusive lock in pending.xml"
+                Category  = "Servicing"
+                Evidence  = @("pending.xml contains exclusive=true")
+                Remediate = @(
+                    "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Remove-Package /PackageName:<Offending_Package_ID>",
+                    "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Cleanup-Image /RevertPendingActions",
+                    "del $pendingXml /q"
+                )
+            }
+        } else {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-014"
+                Title     = "Servicing pending actions detected"
+                Category  = "Servicing"
+                Evidence  = @("pending.xml present at $pendingXml")
+                Remediate = @(
+                    "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Cleanup-Image /RevertPendingActions",
+                    "del $pendingXml /q"
+                )
+            }
+        }
+    }
+
+    # CBS Reboot Pending
+    try {
+        $cbsReboot = Get-Item "Registry::HKLM\OFFLINE_SYS\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -ErrorAction Stop
+        if ($cbsReboot) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-014-CBS"
+                Title     = "Component Based Servicing pending reboot"
+                Category  = "Servicing"
+                Evidence  = @("CBS RebootPending key present")
+                Remediate = @(
+                    "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Cleanup-Image /RevertPendingActions"
+                )
+            }
+        }
+    } catch {}
+
+    # TC-021: VMD/IRST driver missing
+    $vmdDriver = Join-Path $WindowsRoot "System32\drivers\iaStorVD.sys"
+    if (-not (Test-Path $vmdDriver)) {
+        $detections += [PSCustomObject]@{
+            Id        = "TC-021"
+            Title     = "Critical storage driver missing: iaStorVD.sys"
+            Category  = "OEMDrivers"
+            Evidence  = @("File missing: $vmdDriver")
+            Remediate = @(
+                "dism /Image:$($WindowsRoot.TrimEnd('\Windows')) /Add-Driver /Driver:X:\Drivers\VMD\ /Recurse"
+            )
+        }
+    }
+
+    # TC-012: CRITICAL_PROCESS_DIED (core binaries missing/corrupt)
+    $criticalFiles = @(
+        "System32\csrss.exe",
+        "System32\wininit.exe"
+    )
+    $missingCrit = @()
+    foreach ($cf in $criticalFiles) {
+        $p = Join-Path $WindowsRoot $cf
+        if (-not (Test-Path $p)) { $missingCrit += $p }
+    }
+    if ($missingCrit.Count -gt 0) {
+        $detections += [PSCustomObject]@{
+            Id        = "TC-012"
+            Title     = "CRITICAL_PROCESS_DIED (core process file missing)"
+            Category  = "Drivers"
+            Evidence  = $missingCrit | ForEach-Object { "Missing: $_" }
+            Remediate = @(
+                "sfc /scannow /offbootdir:$($WindowsRoot.TrimEnd('\Windows')) /offwindir:$WindowsRoot",
+                "dism /image:$($WindowsRoot.TrimEnd('\Windows')) /cleanup-image /restorehealth"
+            )
+        }
+    }
+
+    # TC-013: SYSTEM_THREAD_EXCEPTION_NOT_HANDLED (driver crash loop / minidump present)
+    try {
+        $dumps = Get-ChildItem -Path (Join-Path $WindowsRoot "Minidump") -Filter "*.dmp" -ErrorAction Stop | Sort-Object LastWriteTime -Descending
+        if ($dumps.Count -gt 0) {
+            $latest = $dumps | Select-Object -First 1
+            $bugcheck = Get-PrecisionRecentBugcheck -WindowsRoot $WindowsRoot
+            $ev = @("Minidump present: $($latest.FullName)")
+            if ($bugcheck -and $bugcheck.Code) {
+                $ev += "Recent bugcheck: 0x{0:X}" -f $bugcheck.Code
+            }
+            $detections += [PSCustomObject]@{
+                Id        = "TC-013"
+                Title     = "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED (driver crash loop suspected)"
+                Category  = "Drivers"
+                Evidence  = $ev
+                Remediate = @(
+                    "dism /image:$($WindowsRoot.TrimEnd('\Windows')) /get-drivers",
+                    "dism /image:$($WindowsRoot.TrimEnd('\Windows')) /remove-driver /driver:oemXX.inf   (replace with offending INF)",
+                    "bcdedit /set {default} safeboot minimal"
+                )
+            }
+        }
+    } catch {
+        # ignore if path missing
+    }
+
+    # Fast boot hibernation corruption
+    $hiber = Join-Path $WindowsRoot "hiberfil.sys"
+    if (Test-Path $hiber) {
+        try {
+            $len = (Get-Item $hiber).Length
+            if ($len -eq 0) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-FASTBOOT"
+                    Title     = "Fast Boot hibernation file appears corrupt (0 bytes)"
+                    Category  = "ConfigEdge"
+                    Evidence  = @("$hiber size is 0 bytes")
+                    Remediate = @(
+                        "powercfg /h off",
+                        "del $hiber /q",
+                        "powercfg /h on"
+                    )
+                }
+            }
+        } catch {}
+    }
+
+    # Secure Boot state vs winload existence
+    try {
+        $sbState = Get-ItemProperty -Path "Registry::HKLM\OFFLINE_SYS\ControlSet001\Control\SecureBoot\State" -ErrorAction SilentlyContinue
+        $winloadExists = Test-Path (Join-Path $WindowsRoot "System32\winload.efi")
+        if ($sbState) {
+            $uefiSecureBootEnabled = $sbState.UEFISecureBootEnabled
+            if ($uefiSecureBootEnabled -eq 1 -and -not $winloadExists) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-SB-MISSING"
+                    Title     = "Secure Boot enabled but winload.efi missing"
+                    Category  = "BootFiles"
+                    Evidence  = @("Secure Boot: On; winload.efi not found")
+                    Remediate = @(
+                        "bcdboot $WindowsRoot /s $EspDriveLetter`: /f UEFI"
+                    )
+                }
+            }
+            if ($uefiSecureBootEnabled -eq 1 -and $winloadExists) {
+                # Placeholder for signature mismatch signal; recommend BIOS key restore
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-SB-SIG"
+                    Title     = "Secure Boot enabled (verify winload.efi signature if boot blocked)"
+                    Category  = "BootFiles"
+                    Evidence  = @("Secure Boot: On; winload.efi present")
+                    Remediate = @(
+                        "If firmware rejects winload.efi: restore factory Secure Boot keys in BIOS, then rerun bcdboot $WindowsRoot /s $EspDriveLetter`: /f UEFI"
+                    )
+                }
+            }
+        }
+    } catch {}
+
+    # Logic locks / reboot pending registry
+    try {
+        $pendingRename = Get-ItemProperty -Path "Registry::HKLM\OFFLINE_SYS\ControlSet001\Control\Session Manager" -Name "PendingFileRenameOperations" -ErrorAction Stop
+        if ($pendingRename -and $pendingRename.PendingFileRenameOperations -and $pendingRename.PendingFileRenameOperations.Count -gt 0) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-014-PFR"
+                Title     = "Pending file rename operations detected"
+                Category  = "Servicing"
+                Evidence  = @("PendingFileRenameOperations contains $($pendingRename.PendingFileRenameOperations.Count) entries")
+                Remediate = @(
+                    "Review PendingFileRenameOperations and clear if corrupt; consider DISM revert pending"
+                )
+            }
+        }
+    } catch {}
+
+    # BitLocker guard
+    try {
+        $bl = manage-bde -status "$(($WindowsRoot -replace '\\Windows','').TrimEnd('\'))" 2>$null
+        if ($bl -and ($bl -match "Protection Status:\s+Protection On")) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-006-BL"
+                Title     = "BitLocker detected on OS volume"
+                Category  = "Safety"
+                Evidence  = @("BitLocker protection is On; suspend before boot writes")
+                Remediate = @(
+                    "manage-bde -protectors -disable $(($WindowsRoot -replace '\\Windows','').TrimEnd('\'))"
+                )
+            }
+        }
+    } catch {}
+
+    # Critical driver 0-byte check
+    $criticalDrivers = @("System32\drivers\classpnp.sys", "System32\drivers\ksecdd.sys")
+    foreach ($cd in $criticalDrivers) {
+        $p = Join-Path $WindowsRoot $cd
+        if (Test-Path $p) {
+            $len = (Get-Item $p).Length
+            if ($len -eq 0) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-013-DRV"
+                    Title     = "Critical driver zero-length ($cd)"
+                    Category  = "Drivers"
+                    Evidence  = @("$p size is 0 bytes")
+                    Remediate = @(
+                        "sfc /scannow /offbootdir:$($WindowsRoot.TrimEnd('\Windows')) /offwindir:$WindowsRoot",
+                        "dism /image:$($WindowsRoot.TrimEnd('\Windows')) /cleanup-image /restorehealth"
+                    )
+                }
+            }
+        }
+    }
+
+    # BCD unknown device/osdevice
+    try {
+        $bcdAll = & bcdedit /enum all 2>$null
+        if ($bcdAll -and ($bcdAll -match "device\s+unknown" -or $bcdAll -match "osdevice\s+unknown")) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-019-UNK"
+                Title     = "BCD points to unknown device/osdevice"
+                Category  = "ConfigEdge"
+                Evidence  = @("bcdedit shows device/osdevice unknown")
+                Remediate = @(
+                    "bcdedit /set {default} device partition=C:",
+                    "bcdedit /set {default} osdevice partition=C:",
+                    "bcdboot $WindowsRoot /s $EspDriveLetter`: /f ALL"
+                )
+            }
+        }
+    } catch {}
+
+    # ESP format/type check
+    try {
+        $efiParts = Get-Partition -ErrorAction Stop | Where-Object { $_.GptType -eq "{C12A7328-F81F-11D2-BA4B-00A0C93EC93B}" }
+        foreach ($esp in $efiParts) {
+            $vol = Get-Volume -Partition $esp -ErrorAction SilentlyContinue
+            if ($vol -and $vol.FileSystem -ne "FAT32") {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-003-ESPFS"
+                    Title     = "ESP not FAT32"
+                    Category  = "Partition"
+                    Evidence  = @("ESP volume $($esp.DriveLetter) uses $($vol.FileSystem)")
+                    Remediate = @(
+                        "backup ESP contents; format $($esp.DriveLetter): as FAT32; rerun bcdboot $WindowsRoot /s $($esp.DriveLetter)`: /f UEFI"
+                    )
+                }
+            }
+        }
+    } catch {}
+
+    # TC-018: Corrupt SYSTEM/SOFTWARE hive with RegBack available
+    $regbackPath = Join-Path $WindowsRoot "System32\Config\RegBack"
+    $systemHiveCurrent = Join-Path $WindowsRoot "System32\Config\SYSTEM"
+    $softwareHiveCurrent = Join-Path $WindowsRoot "System32\Config\SOFTWARE"
+    $systemHiveBackup = Join-Path $regbackPath "SYSTEM"
+    $softwareHiveBackup = Join-Path $regbackPath "SOFTWARE"
+    $regbackExists = (Test-Path $systemHiveBackup) -and (Test-Path $softwareHiveBackup)
+    if ($regbackExists -and (-not (Test-Path $systemHiveCurrent) -or -not (Test-Path $softwareHiveCurrent))) {
+        $evidence = @()
+        if (-not (Test-Path $systemHiveCurrent)) { $evidence += "SYSTEM hive missing" }
+        if (-not (Test-Path $softwareHiveCurrent)) { $evidence += "SOFTWARE hive missing" }
+        $detections += [PSCustomObject]@{
+            Id        = "TC-018"
+            Title     = "Registry hive missing/corrupt (RegBack available)"
+            Category  = "RegistryHives"
+            Evidence  = $evidence
+            Remediate = @(
+                "copy $systemHiveBackup $systemHiveCurrent /Y",
+                "copy $softwareHiveBackup $softwareHiveCurrent /Y"
+            )
+        }
+    }
+
+    # TC-019: BCD device/osdevice path mismatch vs target Windows
+    try {
+        $bcdDefault = & bcdedit /enum {default} 2>$null
+        if ($bcdDefault) {
+            $driveLetter = ($WindowsRoot -replace ":\\Windows","").TrimEnd(':')
+            $deviceLine = $bcdDefault | Select-String "device\s+partition=([A-Z]):" -AllMatches
+            $osdevLine  = $bcdDefault | Select-String "osdevice\s+partition=([A-Z]):" -AllMatches
+            $mismatch = $false
+            $evidence = @()
+            if ($deviceLine.Matches.Count -gt 0 -and $deviceLine.Matches[0].Groups[1].Value -ne $driveLetter) {
+                $mismatch = $true
+                $evidence += "BCD device points to $($deviceLine.Matches[0].Groups[1].Value): expected ${driveLetter}:"
+            }
+            if ($osdevLine.Matches.Count -gt 0 -and $osdevLine.Matches[0].Groups[1].Value -ne $driveLetter) {
+                $mismatch = $true
+                $evidence += "BCD osdevice points to $($osdevLine.Matches[0].Groups[1].Value): expected ${driveLetter}:"
+            }
+            if ($mismatch) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-019"
+                    Title     = "BCD device/osdevice path incorrect"
+                    Category  = "ConfigEdge"
+                    Evidence  = $evidence
+                    Remediate = @(
+                        "bcdedit /set {default} device partition=$driveLetter`:",
+                        "bcdedit /set {default} osdevice partition=$driveLetter`:"
+                    )
+                }
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    # TC-020: Hyper-V / VBS boot blocker
+    try {
+        $hyper = & bcdedit /enum {current} 2>$null
+        if ($hyper -and ($hyper -match "hypervisorlaunchtype\s+Auto" -or $hyper -match "hypervisorlaunchtype\s+On")) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-020"
+                Title     = "Hyper-V / VBS may block boot"
+                Category  = "ConfigEdge"
+                Evidence  = @("hypervisorlaunchtype enabled in BCD")
+                Remediate = @(
+                    "bcdedit /set hypervisorlaunchtype off"
+                )
+            }
+        }
+    } catch {}
+
+    # TC-022: Automatic Repair loop
+    $srtPath = Join-Path $WindowsRoot "System32\LogFiles\Srt\SrtTrail.txt"
+    if (Test-Path $srtPath) {
+        $recoveryEnabled = $null
+        try {
+            $recoveryEnabled = (& bcdedit /enum {default} 2>$null) -match "recoveryenabled\s+Yes"
+        } catch {}
+        $detections += [PSCustomObject]@{
+            Id        = "TC-022"
+            Title     = "Automatic Repair loop detected"
+            Category  = "Safety"
+            Evidence  = @("SrtTrail.txt present at $srtPath") + @(if ($recoveryEnabled) { "BCD recoveryenabled=Yes" })
+            Remediate = @(
+                "bcdedit /set {default} recoveryenabled No"
+            )
+        }
+    }
+
+    # TC-023: Multiple Windows installations detected
+    try {
+        $winRoots = @()
+        $fsDrives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -match "^[A-Z]:" }
+        foreach ($d in $fsDrives) {
+            $candidate = Join-Path $d.Root "Windows\System32\Config\SYSTEM"
+            if (Test-Path $candidate) {
+                $winRoots += $d.Root.TrimEnd('\')
+            }
+        }
+        if ($winRoots.Count -gt 1) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-023"
+                Title     = "Multiple Windows installations detected"
+                Category  = "Safety"
+                Evidence  = $winRoots | ForEach-Object { "Windows installation at $_" }
+                Remediate = @(
+                    "bcdedit /enum all",
+                    "Select correct install and set: bcdedit /set {default} device partition=<correct>",
+                    "bcdedit /set {default} osdevice partition=<correct>"
+                )
+            }
+        }
+    } catch {}
+
+    # TC-024: Read-only volume blocks fixes
+    try {
+        $driveLetter = ($WindowsRoot -replace ":\\Windows","").TrimEnd(':')
+        $vol = Get-Volume -DriveLetter $driveLetter -ErrorAction Stop
+        if ($vol -and $vol.IsReadOnly) {
+            $detections += [PSCustomObject]@{
+                Id        = "TC-024"
+                Title     = "Target volume is read-only"
+                Category  = "Safety"
+                Evidence  = @("Volume $driveLetter`: is read-only")
+                Remediate = @(
+                    "diskpart /s clear-readonly.txt   (script: select vol $driveLetter ; attributes volume clear readonly)"
+                )
+            }
+        }
+    } catch {}
+
+    # MBR vs UEFI mismatch
+    try {
+        $fw = $env:firmware_type
+        $driveLetter = ($WindowsRoot -replace ":\\Windows","").TrimEnd(':')
+        $part = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop | Select-Object -First 1
+        if ($part) {
+            $disk = Get-Disk -Number $part.DiskNumber -ErrorAction Stop
+            if (($fw -eq "UEFI" -and $disk.PartitionStyle -eq 'MBR') -or ($fw -eq "BIOS" -and $disk.PartitionStyle -eq 'GPT')) {
+                $detections += [PSCustomObject]@{
+                    Id        = "TC-007"
+                    Title     = "Boot mode mismatch (firmware vs disk style)"
+                    Category  = "Partition"
+                    Evidence  = @("Firmware=$fw, Disk $($disk.Number) style=$($disk.PartitionStyle)")
+                    Remediate = @(
+                        "Switch firmware boot mode to match disk style OR use MBR2GPT with backups",
+                        "mbr2gpt /convert /disk:$($disk.Number) /allowFullOS (if supported)"
+                    )
+                }
+            }
+        }
+    } catch {}
+
+    # EFI ACL / permission issues
+    try {
+        $efiBcdAcl = Get-Acl -Path $efiBcd -ErrorAction Stop
+    } catch {
+        $detections += [PSCustomObject]@{
+            Id        = "TC-005"
+            Title     = "EFI access denied (BCD/boot files)"
+            Category  = "BootFiles"
+            Evidence  = @("Access denied reading $efiBcd")
+            Remediate = @(
+                "takeown /F $EspDriveLetter`:\EFI\Microsoft\Boot /R /A",
+                "icacls $EspDriveLetter`:\EFI\Microsoft\Boot /grant Administrators:F /T",
+                "bcdboot $WindowsRoot /s $EspDriveLetter`: /f UEFI"
+            )
+        }
+    }
+
+    return $detections
+}
+
+function Invoke-PrecisionRemediationPlan {
+    <#
+    .SYNOPSIS
+    Runs or previews remediation commands for detections.
+    .PARAMETER Detections
+    Array of detection objects with Remediate property (array of strings).
+    .PARAMETER Apply
+    If set, execute commands; otherwise preview only.
+    #>
+    param(
+        $Detections,
+        [switch]$Apply
+    )
+
+    $outputs = @()
+    foreach ($det in $Detections) {
+        Write-Host "---- $($det.Id) $($det.Title) ----" -ForegroundColor Cyan
+        if (-not $det.Remediate) { continue }
+        foreach ($cmd in $det.Remediate) {
+            if ($Apply) {
+                Write-Host "Executing: $cmd" -ForegroundColor Yellow
+                try {
+                    # If command contains bcdboot and winload exists, log hash before/after
+                    if ($cmd -match "bcdboot" -or $cmd -match "bootrec") {
+                        Write-PrecisionFileHash -Path (Join-Path ($cmd.Split()[1].Trim('"')) "System32\winload.efi") -Label "before"
+                    }
+                    $out = cmd.exe /c $cmd 2>&1
+                    if ($out) { $outputs += [PSCustomObject]@{ Command = $cmd; Output = ($out -join "`n") } }
+                    Write-PrecisionLog -Message "Remediate success: $cmd"
+                    if ($cmd -match "bcdboot" -or $cmd -match "bootrec") {
+                        Write-PrecisionFileHash -Path (Join-Path ($cmd.Split()[1].Trim('"')) "System32\winload.efi") -Label "after"
+                    }
+                } catch {
+                    Write-Host "Command failed: $_" -ForegroundColor Red
+                    Write-PrecisionLog -Message "Remediate failure: $cmd $_"
+                    $outputs += [PSCustomObject]@{ Command = $cmd; Output = "$_" }
+                }
+            } else {
+                Write-Host "DRY-RUN: $cmd" -ForegroundColor Gray
+                Write-PrecisionLog -Message "DRY-RUN: $cmd"
+                $outputs += [PSCustomObject]@{ Command = $cmd; Output = "[DRY-RUN]" }
+            }
+        }
+    }
+    return $outputs
+}
+
+function Write-PrecisionLog {
+    param(
+        [string]$Message,
+        [string]$LogPath = "$env:TEMP\precision-actions.log"
+    )
+    try {
+        if ($script:PrecisionLogPath) {
+            $LogPath = $script:PrecisionLogPath
+        }
+        $dir = Split-Path $LogPath -Parent
+        if ($dir -and -not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        $line = "$(Get-Date -Format s) $Message"
+        Add-Content -Path $LogPath -Value $line -Encoding UTF8
+    } catch {}
+}
+
+function Write-PrecisionFileHash {
+    param(
+        [string]$Path,
+        [string]$Label = ""
+    )
+    try {
+        if (Test-Path $Path) {
+            $hash = Get-FileHash -Path $Path -Algorithm SHA256 -ErrorAction Stop
+            Write-PrecisionLog -Message "HASH $Label $($hash.Path) $($hash.Hash)"
+        }
+    } catch {}
+}
+
+function Backup-PrecisionState {
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z"
+    )
+    try {
+        $systemHive = Join-Path $WindowsRoot "System32\Config\SYSTEM"
+        $systemBackup = "$systemHive.precision.bak"
+        if (Test-Path $systemHive) {
+            cmd.exe /c "reg save HKLM\OFFLINE_SYS $systemBackup" 2>$null | Out-Null
+        }
+    } catch {
+        Write-Host "Backup skipped (SYSTEM hive)" -ForegroundColor Yellow
+    }
+    try {
+        $bcdPath = "$EspDriveLetter`:\EFI\Microsoft\Boot\BCD"
+        $bcdBackup = "$EspDriveLetter`:\EFI\Microsoft\Boot\BCD.precision.bak"
+        cmd.exe /c "bcdedit /export $bcdBackup" 2>$null | Out-Null
+    } catch {
+        Write-Host "Backup skipped (BCD)" -ForegroundColor Yellow
+    }
+}
+
+function Get-TargetOSBuild {
+    param([string]$WindowsRoot = "C:\Windows")
+    $soft = Join-Path $WindowsRoot "System32\Config\SOFTWARE"
+    if (-not (Test-Path $soft)) { return $null }
+    $mount = "HKLM\OFF_SOFT_PREC"
+    try {
+        cmd.exe /c "reg load $mount $soft" | Out-Null
+        $cv = Get-ItemProperty -Path "$mount\Microsoft\Windows NT\CurrentVersion" -ErrorAction Stop
+        if ($cv -and $cv.CurrentBuildNumber) {
+            return [int]$cv.CurrentBuildNumber
+        }
+    } catch { return $null }
+    finally {
+        cmd.exe /c "reg unload $mount" | Out-Null 2>$null
+    }
+    return $null
+}
+
+function Start-PrecisionScan {
+    <#
+    .SYNOPSIS
+    Entry point for precision detection/remediation (CLI-safe, WinRE/WinPE-friendly).
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    .PARAMETER EspDriveLetter
+    ESP letter to use in remediation commands (default Z).
+    .PARAMETER Apply
+    Execute remediation commands (default: preview only).
+    .PARAMETER AskOpenLogs
+    Prompt to open collected logs in Notepad after scan.
+    .PARAMETER Force
+    Skip BRICKME prompt (automation/CI only).
+    .PARAMETER PassThru
+    Return detection/remediation objects to the pipeline for UI consumption.
+    .PARAMETER ActionLogPath
+    Optional path for action logging (defaults to %TEMP%\precision-actions.log).
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z",
+        [switch]$Apply,
+        [switch]$AskOpenLogs,
+        [switch]$Force,
+        [switch]$PassThru,
+        [string]$ActionLogPath
+    )
+
+    if (-not (Invoke-BootPrecisionSafetyCheck -Force:$Force)) {
+        return
+    }
+
+    if ($ActionLogPath) {
+        $script:PrecisionLogPath = $ActionLogPath
+    } else {
+        $script:PrecisionLogPath = "$env:TEMP\precision-actions.log"
+    }
+
+    if ($Apply) {
+        $targetBuild = Get-TargetOSBuild -WindowsRoot $WindowsRoot
+        $hostBuild = [int][Environment]::OSVersion.Version.Build
+        if ($targetBuild -and $hostBuild -lt $targetBuild) {
+            Write-Host "Warning: Host PE build ($hostBuild) is older than target OS build ($targetBuild). Prefer target bcdboot from $WindowsRoot\System32 for writes." -ForegroundColor Yellow
+            Write-PrecisionLog -Message "VersionGate host=$hostBuild target=$targetBuild"
+        }
+    }
+
+    Write-Host "Starting precision scan..." -ForegroundColor Cyan
+    Write-PrecisionLog -Message "Start-PrecisionScan Apply=$Apply WindowsRoot=$WindowsRoot ESP=$EspDriveLetter"
+    $priority = Get-PrecisionPriorityOrder
+    $detections = Get-PrecisionDetections -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter
+
+    # Sort by priority category
+    $ordered = @()
+    if ($detections) {
+        $ordered = $detections | Sort-Object { $priority.IndexOf($_.Category) }
+    }
+
+    if (-not $ordered -or $ordered.Count -eq 0) {
+        Write-Host "No issues detected by precision scan." -ForegroundColor Green
+    } else {
+        if ($Apply) {
+            Backup-PrecisionState -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter
+            Write-PrecisionLog -Message "Backups created for SYSTEM/BCD before apply"
+        }
+        foreach ($det in $ordered) {
+            Write-Host "[$($det.Id)] $($det.Title)  Category: $($det.Category)" -ForegroundColor Yellow
+            foreach ($ev in $det.Evidence) { Write-Host "  Evidence: $ev" -ForegroundColor Gray }
+            Write-PrecisionLog -Message "Detection $($det.Id) $($det.Title)"
+        }
+        $remOutputs = Invoke-PrecisionRemediationPlan -Detections $ordered -Apply:$Apply
+        $ordered | ForEach-Object {
+            $_ | Add-Member -NotePropertyName RemediationOutput -NotePropertyValue ($remOutputs | Where-Object { $_.Command -in $_.Remediate }) -Force
+        }
+    }
+
+    if ($AskOpenLogs) {
+        $logs = @(
+            "C:\Windows\System32\LogFiles\Srt\SrtTrail.txt",
+            "C:\Windows\ntbtlog.txt",
+            "C:\Windows\Logs\CBS\CBS.log",
+            "C:\Windows\Logs\DISM\dism.log"
+        )
+        Invoke-PrecisionLogPrompt -LogPaths $logs -Ask
+        Write-PrecisionLog -Message "Log prompt presented (AskOpenLogs)"
+    }
+
+    if ($PassThru) {
+        return [PSCustomObject]@{
+            Detections     = $ordered
+            Applied        = [bool]$Apply
+            WindowsRoot    = $WindowsRoot
+            EspDriveLetter = $EspDriveLetter
+        }
+    }
+}
+
 function Optimize-RepairPerformance {
     <#
     .SYNOPSIS

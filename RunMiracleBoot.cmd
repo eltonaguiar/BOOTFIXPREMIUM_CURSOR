@@ -8,6 +8,20 @@ echo   Miracle Boot v7.2.0 Launcher
 echo ========================================
 echo.
 
+REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
+REM require explicit confirmation before allowing boot writes.
+if /I not "%SystemDrive%"=="X:" (
+    echo SAFETY WARNING: You are running from a live Windows OS (%SystemDrive%).
+    echo Destructive boot repairs can brick the system if misused.
+    echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
+    set "BRICKME_OK="
+    set /p BRICKME_OK="Type BRICKME to continue: "
+    if /I not "%BRICKME_OK%"=="BRICKME" (
+        echo Aborting by user choice. No changes made.
+        exit /b 1
+    )
+)
+
 REM Get the directory where this batch file is located
 set "SCRIPT_DIR=%~dp0"
 

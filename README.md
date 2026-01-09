@@ -96,6 +96,21 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 
 ---
 
+## ⚡ Precision Quick Reference (CLI/GUI/TUI)
+
+- CLI dry-run precision: `Start-PrecisionScan -WindowsRoot C:\Windows -EspDriveLetter Z`
+- CLI apply precision: `Start-PrecisionScan -WindowsRoot C:\Windows -EspDriveLetter Z -Apply`
+- CLI JSON precision (console): `Invoke-PrecisionQuickScanCli -WindowsRoot C:\Windows -EspDriveLetter Z -IncludeBugcheck`
+- CLI JSON precision (file): `Invoke-PrecisionQuickScan -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson -IncludeBugcheck -OutFile C:\Temp\precision-scan.json`
+- CLI parity JSON: `Invoke-PrecisionParityHarness -WindowsRoot C:\Windows -EspDriveLetter Z -AsJson -OutFile C:\Temp\precision-parity.json`
+- GUI (Diagnostics & Logs tab): Precision Detection & Repair; Export/Save Precision JSON; Precision Parity; Save Parity JSON
+- TUI: Z) Precision Scan, Y) Precision Parity, X) Scan JSON export, W2) Parity JSON export
+- Safety: In a live OS (not WinRE/WinPE), destructive boot writes require typing `BRICKME` to continue.
+- Smoke harness: run `Test\Invoke-PrecisionSmoke.ps1` for a fast CLI smoke (precision/parity/JSON/BCD/log prompt).
+- CI runner: run `Test\Invoke-PrecisionCI.ps1 -WithFaults -LogDir C:\Temp\precision-ci` in a disposable VM to produce logs/JSON before/after fault injection.
+
+---
+
 ## 📁 Project Structure
 
 Miracle Boot follows industry best practices for project organization:

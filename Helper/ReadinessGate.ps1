@@ -25,7 +25,7 @@
 #>
 
 param(
-    [switch]$StrictMode = $true
+    [switch]$StrictMode
 )
 
 function Test-ReadinessGate {
@@ -36,6 +36,11 @@ function Test-ReadinessGate {
     param(
         [string]$ScriptRoot = $null
     )
+    
+    # Default StrictMode to $true unless explicitly overridden (avoids default switch warning)
+    if (-not $PSBoundParameters.ContainsKey('StrictMode')) {
+        $StrictMode = $true
+    }
     
     # If ScriptRoot not provided, determine project root
     if (-not $ScriptRoot) {
@@ -58,6 +63,7 @@ function Test-ReadinessGate {
         Warnings = @()
         Checks = @{}
         Timestamp = Get-Date
+        StrictMode = $StrictMode
     }
     
     Write-Host "`n===============================================================" -ForegroundColor Cyan
@@ -83,7 +89,6 @@ function Test-ReadinessGate {
             # Use AST tokenization for syntax validation - more reliable than parser errors
             # This checks if the file can be parsed into valid tokens without execution
             $hasSyntaxError = $false
-            $parseError = $null
             
             try {
                 $errors = $null
@@ -168,7 +173,7 @@ function Test-ReadinessGate {
                 # Try to parse XAML
                 try {
                     $reader = New-Object System.Xml.XmlTextReader([System.IO.StringReader]::new($xamlContent))
-                    $xaml = [System.Windows.Markup.XamlReader]::Load($reader)
+                    $null = [System.Windows.Markup.XamlReader]::Load($reader)
                     $reader.Close()
                     $xamlValid = $true
                     Write-Host "  [PASS] XAML parses successfully" -ForegroundColor Green
