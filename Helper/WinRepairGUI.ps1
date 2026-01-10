@@ -4195,7 +4195,11 @@ if ($btnOneClickRepair) {
                         Write-Log ""
                         
                         if ($viabilityResult.WillBoot) {
-                            Write-Log "✅ VERDICT: SYSTEM WILL BOOT"
+                            Write-Log "==============================================================="
+                            Write-Log "WILL IT BOOT: YES"
+                            Write-Log "==============================================================="
+                            Write-Log ""
+                            Write-Log "Feedback: All critical boot files verified and BCD is correctly mapped."
                             Write-Log ""
                             Write-Log "Your boot system is repaired and verified. Next steps:"
                             Write-Log "  1. Restart your computer"
@@ -4203,34 +4207,54 @@ if ($btnOneClickRepair) {
                             Write-Log "  3. Windows should boot normally"
                             
                             if ($txtOneClickStatus) {
-                                $txtOneClickStatus.Text = "✅ BOOTABLE! System verified. Ready to reboot."
+                                $txtOneClickStatus.Text = "[YES] BOOTABLE! System verified. Ready to reboot."
                             }
                             if ($fixerOutput) {
-                                $fixerOutput.Text += "`n`n$($viabilityResult.UserMessage)`n"
+                                $fixerOutput.Text += "`n`n===============================================================`n"
+                                $fixerOutput.Text += "WILL IT BOOT: YES`n"
+                                $fixerOutput.Text += "===============================================================`n"
+                                $fixerOutput.Text += "`n$($viabilityResult.UserMessage)`n"
                             }
                         } else {
-                            Write-Log "❌ VERDICT: SYSTEM WILL NOT BOOT"
+                            Write-Log "==============================================================="
+                            Write-Log "WILL IT BOOT: NO"
+                            Write-Log "==============================================================="
                             Write-Log ""
-                            Write-Log "Blocking Issues:"
-                            foreach ($issue in $viabilityResult.BlockingIssues) {
-                                Write-Log "  - $issue"
+                            Write-Log "REASON(S) FOR FAILURE:"
+                            Write-Log ""
+                            
+                            # Display critical failures with specific fixes
+                            if ($viabilityResult.Evidence.CheckC -and -not $viabilityResult.Evidence.CheckC.Passed) {
+                                Write-Log "  [!] PHYSICAL MISSING: winload.efi is still missing from the source folder."
+                                Write-Log "      Fix: Source template is corrupted. Needs DISM extraction from ISO."
+                                Write-Log "      Command: DISM /apply-image /imagefile:<ISO_PATH>\sources\install.wim /index:1 /applydir:$drive`:"
+                                Write-Log ""
                             }
-                            Write-Log ""
-                            Write-Log "See detailed report above for:"
-                            Write-Log "  - Root cause classification"
-                            Write-Log "  - Evidence"
-                            Write-Log "  - Why automatic repair failed"
-                            Write-Log "  - Next steps for manual repair"
+                            
+                            if ($viabilityResult.Evidence.CheckB -and -not $viabilityResult.Evidence.CheckB.Passed) {
+                                Write-Log "  [!] BCD MISMATCH: The boot configuration is pointing to the wrong file/path."
+                                Write-Log "      Fix: Run 'bcdedit /set {default} path \Windows\system32\winload.efi'"
+                                Write-Log ""
+                            }
+                            
+                            # Check for BitLocker locked (from diagnostic payload)
+                            if ($viabilityResult.DiagnosticPayload -and $viabilityResult.DiagnosticPayload.blocking_issue -match "BitLocker") {
+                                Write-Log "  [!] BITLOCKER LOCKED: The drive is encrypted and 'bcdboot' could not write to it."
+                                Write-Log "      Fix: You MUST unlock the drive with your recovery key before repairing."
+                                Write-Log "      Command: manage-bde -unlock $drive`: -RecoveryPassword <YOUR_48_DIGIT_KEY>"
+                                Write-Log ""
+                            }
+                            
+                            Write-Log "See detailed report above for complete analysis."
                             
                             if ($txtOneClickStatus) {
-                                $txtOneClickStatus.Text = "❌ NOT BOOTABLE: $($viabilityResult.BlockingIssues[0])"
+                                $txtOneClickStatus.Text = "[NO] NOT BOOTABLE: See log for reasons"
                             }
                             if ($fixerOutput) {
-                                $fixerOutput.Text += "`n`n$($viabilityResult.UserMessage)`n"
-                                $fixerOutput.Text += "`nBlocking Issues:`n"
-                                foreach ($issue in $viabilityResult.BlockingIssues) {
-                                    $fixerOutput.Text += "  - $issue`n"
-                                }
+                                $fixerOutput.Text += "`n`n===============================================================`n"
+                                $fixerOutput.Text += "WILL IT BOOT: NO`n"
+                                $fixerOutput.Text += "===============================================================`n"
+                                $fixerOutput.Text += "`n$($viabilityResult.UserMessage)`n"
                             }
                         }
                         
