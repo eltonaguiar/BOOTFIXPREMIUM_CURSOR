@@ -3043,7 +3043,202 @@ if ($btnOneClickRepair) {
             
             . $corePath -ErrorAction Stop
             
-            $drive = $env:SystemDrive.TrimEnd(':')
+            # Prompt user to select target Windows drive (exclude X: WinPE drive)
+            Write-Log "Detecting Windows installations..."
+            $installations = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
+            
+            # Always prompt user for drive selection (even if only one found)
+            # This ensures user confirms the correct drive and prevents targeting wrong drive
+            if ($installations.Count -eq 0) {
+                # Fallback: Allow manual drive entry
+                Write-Log "[WARNING] No Windows installations detected automatically."
+                Write-Log "Please enter the drive letter manually."
+                $manualDrive = [Microsoft.VisualBasic.Interaction]::InputBox(
+                    "No Windows installations were automatically detected.`n`n" +
+                    "Please enter the drive letter of your Windows installation (e.g., C):",
+                    "Manual Drive Selection",
+                    "C"
+                )
+                if ([string]::IsNullOrWhiteSpace($manualDrive)) {
+                    Write-Log "[ERROR] No drive selected. Aborting."
+                    throw "No target drive selected."
+                }
+                $drive = $manualDrive.TrimEnd(':').ToUpper()
+                Write-Log "Using manually specified drive: $drive`:"
+            } elseif ($installations.Count -eq 1) {
+                # Only one installation found, but still prompt user to confirm
+                $selectedInst = $installations[0]
+                $confirmMsg = "One Windows installation detected:`n`n" +
+                             "Drive: $($selectedInst.Drive)`n" +
+                             "Volume Label: $($selectedInst.VolumeLabel)`n" +
+                             "OS: $($selectedInst.OSVersion) Build $($selectedInst.OSBuild)`n" +
+                             "Size: $([math]::Round($selectedInst.SizeGB, 1)) GB`n" +
+                             "Free: $([math]::Round($selectedInst.FreeGB, 1)) GB`n" +
+                             "Health: $($selectedInst.HealthStatus)`n`n" +
+                             "Use this drive for repair? (Click OK to use, Cancel to enter manually)"
+                $confirm = [System.Windows.MessageBox]::Show(
+                    $confirmMsg,
+                    "Confirm Windows Installation",
+                    "OKCancel",
+                    "Question"
+                )
+                if ($confirm -eq "OK") {
+                    $drive = $selectedInst.DriveLetter
+                    Write-Log "Confirmed Windows installation: $($selectedInst.DisplayName)"
+                } else {
+                    # User cancelled, allow manual entry
+                    $manualDrive = [Microsoft.VisualBasic.Interaction]::InputBox(
+                        "Please enter the drive letter of your Windows installation (e.g., C):",
+                        "Manual Drive Selection",
+                        $selectedInst.DriveLetter
+                    )
+                    if ([string]::IsNullOrWhiteSpace($manualDrive)) {
+                        Write-Log "[ERROR] No drive selected. Aborting."
+                        throw "No target drive selected."
+                    }
+                    $drive = $manualDrive.TrimEnd(':').ToUpper()
+                    Write-Log "Using manually specified drive: $drive`:"
+                }
+            } else {
+                # Multiple installations - show selection dialog
+                Add-Type -AssemblyName System.Windows.Forms
+                Add-Type -AssemblyName System.Drawing
+                
+                $form = New-Object System.Windows.Forms.Form
+                $form.Text = "Select Windows Installation"
+                $form.Size = New-Object System.Drawing.Size(700, 500)
+                $form.StartPosition = "CenterScreen"
+                $form.FormBorderStyle = "FixedDialog"
+                $form.MaximizeBox = $false
+                $form.MinimizeBox = $false
+                
+                $label = New-Object System.Windows.Forms.Label
+                $label.Location = New-Object System.Drawing.Point(10, 10)
+                $label.Size = New-Object System.Drawing.Size(660, 30)
+                $label.Text = "Multiple Windows installations detected. Please select the target drive:"
+                $form.Controls.Add($label)
+                
+                $listView = New-Object System.Windows.Forms.ListView
+                $listView.Location = New-Object System.Drawing.Point(10, 50)
+                $listView.Size = New-Object System.Drawing.Size(660, 350)
+                $listView.View = [System.Windows.Forms.View]::Details
+                $listView.FullRowSelect = $true
+                $listView.GridLines = $true
+                $listView.Columns.Add("Drive", 60) | Out-Null
+                $listView.Columns.Add("Volume Label", 120) | Out-Null
+                $listView.Columns.Add("OS Version", 150) | Out-Null
+                $listView.Columns.Add("Size", 80) | Out-Null
+                $listView.Columns.Add("Free", 80) | Out-Null
+                $listView.Columns.Add("Used %", 70) | Out-Null
+                $listView.Columns.Add("Health", 80) | Out-Null
+                $listView.Columns.Add("Boot Type", 80) | Out-Null
+                
+                foreach ($inst in $installations) {
+                    $item = New-Object System.Windows.Forms.ListViewItem($inst.Drive)
+                    $item.SubItems.Add($inst.VolumeLabel) | Out-Null
+                    $item.SubItems.Add("$($inst.OSVersion) Build $($inst.OSBuild)") | Out-Null
+                    $item.SubItems.Add("$([math]::Round($inst.SizeGB, 1)) GB") | Out-Null
+                    $item.SubItems.Add("$([math]::Round($inst.FreeGB, 1)) GB") | Out-Null
+                    $item.SubItems.Add("$($inst.UsedPercent)%") | Out-Null
+                    $item.SubItems.Add($inst.HealthStatus) | Out-Null
+                    $item.SubItems.Add($inst.BootType) | Out-Null
+                    $item.Tag = $inst.DriveLetter
+                    if ($inst.IsCurrentOS) {
+                        $item.BackColor = [System.Drawing.Color]::LightGreen
+                        $item.Text += " (Current OS)"
+                    }
+                    $listView.Items.Add($item) | Out-Null
+                }
+                
+                # Select first item (usually current OS)
+                if ($listView.Items.Count -gt 0) {
+                    $listView.Items[0].Selected = $true
+                    $listView.Items[0].Focused = $true
+                }
+                
+                $form.Controls.Add($listView)
+                
+                $btnRefresh = New-Object System.Windows.Forms.Button
+                $btnRefresh.Text = "Refresh List"
+                $btnRefresh.Location = New-Object System.Drawing.Point(10, 410)
+                $btnRefresh.Size = New-Object System.Drawing.Size(100, 30)
+                $btnRefresh.Add_Click({
+                    $listView.Items.Clear()
+                    $refreshed = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
+                    foreach ($inst in $refreshed) {
+                        $item = New-Object System.Windows.Forms.ListViewItem($inst.Drive)
+                        $item.SubItems.Add($inst.VolumeLabel) | Out-Null
+                        $item.SubItems.Add("$($inst.OSVersion) Build $($inst.OSBuild)") | Out-Null
+                        $item.SubItems.Add("$([math]::Round($inst.SizeGB, 1)) GB") | Out-Null
+                        $item.SubItems.Add("$([math]::Round($inst.FreeGB, 1)) GB") | Out-Null
+                        $item.SubItems.Add("$($inst.UsedPercent)%") | Out-Null
+                        $item.SubItems.Add($inst.HealthStatus) | Out-Null
+                        $item.SubItems.Add($inst.BootType) | Out-Null
+                        $item.Tag = $inst.DriveLetter
+                        if ($inst.IsCurrentOS) {
+                            $item.BackColor = [System.Drawing.Color]::LightGreen
+                            $item.Text += " (Current OS)"
+                        }
+                        $listView.Items.Add($item) | Out-Null
+                    }
+                })
+                $form.Controls.Add($btnRefresh)
+                
+                $btnManual = New-Object System.Windows.Forms.Button
+                $btnManual.Text = "Manual Entry"
+                $btnManual.Location = New-Object System.Drawing.Point(120, 410)
+                $btnManual.Size = New-Object System.Drawing.Size(100, 30)
+                $btnManual.Add_Click({
+                    $manualDrive = [Microsoft.VisualBasic.Interaction]::InputBox(
+                        "Enter the drive letter of your Windows installation (e.g., C):",
+                        "Manual Drive Selection",
+                        "C"
+                    )
+                    if (-not [string]::IsNullOrWhiteSpace($manualDrive)) {
+                        $script:selectedDrive = $manualDrive.TrimEnd(':').ToUpper()
+                        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                        $form.Close()
+                    }
+                })
+                $form.Controls.Add($btnManual)
+                
+                $btnOK = New-Object System.Windows.Forms.Button
+                $btnOK.Text = "OK"
+                $btnOK.Location = New-Object System.Drawing.Point(550, 410)
+                $btnOK.Size = New-Object System.Drawing.Size(60, 30)
+                $btnOK.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                $form.AcceptButton = $btnOK
+                $form.Controls.Add($btnOK)
+                
+                $btnCancel = New-Object System.Windows.Forms.Button
+                $btnCancel.Text = "Cancel"
+                $btnCancel.Location = New-Object System.Drawing.Point(620, 410)
+                $btnCancel.Size = New-Object System.Drawing.Size(60, 30)
+                $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+                $form.CancelButton = $btnCancel
+                $form.Controls.Add($btnCancel)
+                
+                $script:selectedDrive = $null
+                if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                    if ($script:selectedDrive) {
+                        $drive = $script:selectedDrive
+                        Write-Log "Using manually entered drive: $drive`:"
+                    } elseif ($listView.SelectedItems.Count -gt 0) {
+                        $drive = $listView.SelectedItems[0].Tag
+                        $selectedInst = $installations | Where-Object { $_.DriveLetter -eq $drive } | Select-Object -First 1
+                        Write-Log "Selected: $($selectedInst.DisplayName)"
+                    } else {
+                        Write-Log "[ERROR] No drive selected. Aborting."
+                        throw "No target drive selected."
+                    }
+                } else {
+                    Write-Log "[ERROR] Drive selection cancelled. Aborting."
+                    throw "Drive selection cancelled by user."
+                }
+            }
+            
+            Write-Log "Target Drive: $drive`:"
+            Write-Log ""
             
             # Step 1: Hardware Diagnostics
             Write-Log "Step 1: Hardware Diagnostics"

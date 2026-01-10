@@ -221,6 +221,7 @@ You'll see a modern GUI with tabs and buttons.
 - Set default boot entry
 - Fix duplicate entries
 - Sync BCD to all EFI partitions
+- **EFI Partition Mounting** - Automatically mount EFI System Partition with fallback if drive letter is occupied
 
 ### 🛠️ System File Repair
 - **SFC (System File Checker)** - Scan and repair corrupted system files

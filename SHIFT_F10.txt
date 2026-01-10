@@ -170,10 +170,18 @@ Step 3: Follow the Menu
 SECTION 4: COMMON WINRE COMMANDS
 ================================================================================
 
-List all drives and volumes:
+List all drives and volumes (with labels):
     diskpart
     list volume
     exit
+
+View drive volume labels (PowerShell):
+    Get-Volume | Format-Table DriveLetter, FileSystemLabel, Size, HealthStatus
+
+View drive volume labels (CMD):
+    vol C:
+    vol D:
+    vol E:
 
 Check which drive has Windows:
     dir C:\Windows
@@ -198,7 +206,28 @@ Fix MBR:
 Repair boot files:
     bcdboot C:\Windows
 
-(Replace C: with your actual Windows drive letter)
+Mount EFI Partition (for UEFI systems):
+    diskpart
+    list disk
+    select disk 0
+    list partition
+    select partition 1    (or the EFI partition number, usually partition 1)
+    assign letter=S
+    exit
+
+    Then verify:
+    dir S:\EFI\Microsoft\Boot
+
+    If S: is occupied, try T:, U:, V:, W:, Y:, or Z:
+
+Unmount EFI Partition (when done):
+    diskpart
+    select disk 0
+    select partition 1
+    remove letter=S
+    exit
+
+(Replace C: with your actual Windows drive letter, and S: with your preferred EFI drive letter)
 
 ================================================================================
 SECTION 5: TROUBLESHOOTING

@@ -206,6 +206,7 @@ echo 1) Enable Network/Internet
 echo 2) Check Internet Connectivity
 echo 3) Open ChatGPT Help
 echo 4) Check Windows Install Failure Reasons
+echo 5) ONE-CLICK BOOT FIX
 echo Q) Quit
 echo.
 
@@ -237,12 +238,210 @@ if /i "%choice%"=="4" (
     goto :loop
 )
 
+if /i "%choice%"=="5" (
+    call :OneClickBootFix
+    pause
+    goto :loop
+)
+
 if /i "%choice%"=="Q" goto :eof
 if /i "%choice%"=="q" goto :eof
 
 echo Invalid selection.
 timeout /t 2 >nul
 goto :loop
+
+REM ============================================================================
+REM ONE-CLICK BOOT FIX
+REM ============================================================================
+
+:OneClickBootFix
+REM Automated boot repair with safety checks
+echo.
+echo ================================================================
+echo   ONE-CLICK BOOT FIX
+echo ================================================================
+echo.
+echo WARNING: This will attempt to repair boot files on your Windows installation.
+echo.
+
+REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
+REM require explicit confirmation before allowing boot writes.
+if /I not "%SystemDrive%"=="X:" (
+    echo SAFETY WARNING: You are running from a live Windows OS (%SystemDrive%).
+    echo Destructive boot repairs can brick the system if misused.
+    echo.
+    set "BRICKME_OK="
+    set /p BRICKME_OK="Type BRICKME to continue (or press Enter to cancel): "
+    if /I not "!BRICKME_OK!"=="BRICKME" (
+        echo Aborting by user choice. No changes made.
+        goto :eof
+    )
+    echo.
+)
+
+REM Prompt for target drive
+echo Detecting Windows installations...
+echo.
+echo Available drives:
+for %%d in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do (
+    if exist "%%d:\Windows\System32\ntoskrnl.exe" (
+        if /I not "%%d"=="X" (
+            echo   %%d: - Windows installation found
+        )
+    )
+)
+echo.
+set /p target_drive="Enter target Windows drive letter (e.g. C, or press Enter for C): "
+if "!target_drive!"=="" set "target_drive=C"
+set "target_drive=!target_drive:~0,1!"
+
+REM Verify drive exists and has Windows
+if not exist "!target_drive!:\Windows\System32\ntoskrnl.exe" (
+    echo ERROR: Windows installation not found on !target_drive!: drive.
+    echo Please verify the drive letter and try again.
+    goto :eof
+)
+
+echo.
+echo Target drive: !target_drive!:
+echo.
+
+REM Check if bootrec.exe is available (WinRE/WinPE only)
+where bootrec.exe >nul 2>&1
+if errorlevel 1 (
+    echo WARNING: bootrec.exe is not available in this environment.
+    echo bootrec.exe is only available in Windows Recovery Environment (WinRE/WinPE).
+    echo.
+    echo Alternative: Use bcdboot to repair boot files.
+    echo.
+    set /p use_bcdboot="Use bcdboot instead? (Y/N): "
+    if /I "!use_bcdboot!"=="Y" (
+        echo.
+        echo Attempting to mount EFI partition...
+        call :MountEFIPartition "!target_drive!"
+        if errorlevel 1 (
+            echo ERROR: Could not mount EFI partition.
+            echo Please mount it manually using diskpart.
+            goto :eof
+        )
+        echo.
+        echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+        bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+        if errorlevel 1 (
+            echo ERROR: bcdboot failed.
+        ) else (
+            echo.
+            echo [SUCCESS] Boot files repaired successfully.
+        )
+    ) else (
+        echo Aborted by user.
+    )
+    goto :eof
+)
+
+REM bootrec.exe is available - use it
+echo Running boot repair commands...
+echo.
+
+echo Step 1: Scanning for Windows installations...
+bootrec /scanos
+if errorlevel 1 (
+    echo WARNING: bootrec /scanos reported issues.
+)
+echo.
+
+echo Step 2: Rebuilding Boot Configuration Data (BCD)...
+bootrec /rebuildbcd
+if errorlevel 1 (
+    echo WARNING: bootrec /rebuildbcd reported issues.
+)
+echo.
+
+echo Step 3: Fixing boot sector...
+bootrec /fixboot
+if errorlevel 1 (
+    echo WARNING: bootrec /fixboot reported issues.
+)
+echo.
+
+echo Step 4: Fixing Master Boot Record (MBR)...
+bootrec /fixmbr
+if errorlevel 1 (
+    echo WARNING: bootrec /fixmbr reported issues.
+)
+echo.
+
+echo ================================================================
+echo BOOT REPAIR COMPLETE
+echo ================================================================
+echo.
+echo Next steps:
+echo 1. Restart your computer
+echo 2. Test if Windows boots normally
+echo 3. If problems persist, consider running an in-place repair installation
+echo.
+
+goto :eof
+
+:MountEFIPartition
+REM Attempts to mount EFI partition for target drive
+REM Usage: call :MountEFIPartition "C"
+setlocal enabledelayedexpansion
+set "TARGET_DRIVE=%~1"
+set "EFI_DRIVE="
+
+REM Try to find EFI partition using diskpart
+echo list disk > %TEMP%\mount_efi.txt
+echo list partition >> %TEMP%\mount_efi.txt
+echo exit >> %TEMP%\mount_efi.txt
+
+REM Check if EFI partition already has a drive letter
+for %%d in (S T U V W Y Z) do (
+    if exist "%%d:\EFI\Microsoft\Boot\BCD" (
+        set "EFI_DRIVE=%%d"
+        goto :efi_found
+    )
+)
+
+REM Try to assign a drive letter (start from S:)
+for %%d in (S T U V W Y Z) do (
+    diskpart /s %TEMP%\mount_efi.txt | findstr /i "EFI" >nul 2>&1
+    if errorlevel 1 (
+        REM Try to assign drive letter using diskpart script
+        (
+            echo select disk 0
+            echo list partition
+            echo select partition 1
+            echo assign letter=%%d
+            echo exit
+        ) > %TEMP%\assign_efi.txt
+        diskpart /s %TEMP%\assign_efi.txt >nul 2>&1
+        if exist "%%d:\EFI\Microsoft\Boot\BCD" (
+            set "EFI_DRIVE=%%d"
+            goto :efi_found
+        )
+    )
+)
+
+:efi_found
+if "!EFI_DRIVE!"=="" (
+    echo ERROR: Could not mount EFI partition automatically.
+    echo Please mount it manually using diskpart:
+    echo   1. Run: diskpart
+    echo   2. Run: list disk
+    echo   3. Run: select disk 0
+    echo   4. Run: list partition
+    echo   5. Run: select partition 1 (or the EFI partition number)
+    echo   6. Run: assign letter=S
+    echo   7. Run: exit
+    endlocal
+    exit /b 1
+) else (
+    echo EFI partition mounted as !EFI_DRIVE!:
+    endlocal & set "EFI_DRIVE=%EFI_DRIVE%"
+    exit /b 0
+)
 
 REM If script is run directly (not called as function), show menu
 if "%~1"=="" goto :MainMenu

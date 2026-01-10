@@ -1750,14 +1750,15 @@ function Get-WindowsInstallations {
         $systemHive = "$drive`:\Windows\System32\config\SYSTEM"
         
         # Check if this is a Windows installation
-        $isWindows = $false
+        # Use a unique variable name to avoid conflicts with read-only variables
+        $hasWindowsInstallation = $false
         if (Test-Path $kernelPath) {
-            $isWindows = $true
+            $hasWindowsInstallation = $true
         } elseif (Test-Path $systemHive) {
-            $isWindows = $true
+            $hasWindowsInstallation = $true
         }
         
-        if ($isWindows) {
+        if ($hasWindowsInstallation) {
             # Get partition info for boot type
             $partition = Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue
             $bootType = "Unknown"
@@ -1839,6 +1840,133 @@ function Get-WindowsInstallations {
     }
     
     return $installations
+}
+
+function Mount-EFIPartition {
+    <#
+    .SYNOPSIS
+    Mounts the EFI System Partition for a given Windows drive with fallback if drive letter is occupied.
+    
+    .DESCRIPTION
+    Attempts to mount the EFI System Partition (ESP) for the specified Windows drive.
+    If the preferred drive letter is occupied, it tries alternative letters.
+    
+    .PARAMETER WindowsDrive
+    The drive letter of the Windows installation (e.g., "C")
+    
+    .PARAMETER PreferredLetter
+    Preferred drive letter for the EFI partition (default: "S")
+    
+    .OUTPUTS
+    PSCustomObject with properties:
+    - Success: Boolean indicating if mount was successful
+    - DriveLetter: The drive letter assigned (or null if failed)
+    - Message: Status message
+    - EFIPath: Full path to EFI partition (or null if failed)
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$WindowsDrive,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$PreferredLetter = "S"
+    )
+    
+    $result = @{
+        Success = $false
+        DriveLetter = $null
+        Message = ""
+        EFIPath = $null
+    }
+    
+    try {
+        $windowsDrive = $WindowsDrive.TrimEnd(':').ToUpper()
+        
+        # Get partition info for Windows drive
+        $partition = Get-Partition -DriveLetter $windowsDrive -ErrorAction SilentlyContinue
+        if (-not $partition) {
+            $result.Message = "Windows drive $windowsDrive`: not found or not accessible."
+            return $result
+        }
+        
+        $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
+        if (-not $disk) {
+            $result.Message = "Could not get disk information for drive $windowsDrive`:."
+            return $result
+        }
+        
+        # Find EFI partition on the same disk
+        $efiPartitions = Get-Partition -DiskNumber $disk.Number | Where-Object { 
+            $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' 
+        }
+        
+        if (-not $efiPartitions -or $efiPartitions.Count -eq 0) {
+            $result.Message = "No EFI System Partition found on disk $($disk.Number). This may be a legacy BIOS system."
+            return $result
+        }
+        
+        $efiPartition = $efiPartitions[0]
+        
+        # Check if EFI partition already has a drive letter
+        if ($efiPartition.DriveLetter) {
+            $efiLetter = $efiPartition.DriveLetter
+            $efiPath = "$efiLetter`:\EFI\Microsoft\Boot"
+            if (Test-Path $efiPath) {
+                $result.Success = $true
+                $result.DriveLetter = $efiLetter
+                $result.EFIPath = "$efiLetter`:"
+                $result.Message = "EFI partition already mounted as $efiLetter`:"
+                return $result
+            }
+        }
+        
+        # Try to assign drive letter (with fallback)
+        $lettersToTry = @($PreferredLetter)
+        # Add fallback letters (S, T, U, V, W, Y, Z)
+        $fallbackLetters = @("S", "T", "U", "V", "W", "Y", "Z")
+        foreach ($letter in $fallbackLetters) {
+            if ($letter -ne $PreferredLetter -and $letter -notin $lettersToTry) {
+                $lettersToTry += $letter
+            }
+        }
+        
+        foreach ($letter in $lettersToTry) {
+            # Check if drive letter is available
+            $existingDrive = Get-PSDrive -Name $letter -ErrorAction SilentlyContinue
+            if ($existingDrive) {
+                continue  # Drive letter is occupied, try next
+            }
+            
+            try {
+                # Try to assign the drive letter
+                $efiPartition | Set-Partition -NewDriveLetter $letter -ErrorAction Stop
+                Start-Sleep -Milliseconds 500  # Wait for mount to complete
+                
+                # Verify mount was successful
+                $efiPath = "$letter`:\EFI\Microsoft\Boot"
+                if (Test-Path $efiPath) {
+                    $result.Success = $true
+                    $result.DriveLetter = $letter
+                    $result.EFIPath = "$letter`:"
+                    $result.Message = "EFI partition mounted successfully as $letter`:"
+                    return $result
+                } else {
+                    # Mount succeeded but path doesn't exist - unmount and try next
+                    $efiPartition | Remove-PartitionAccessPath -AccessPath "$letter`:" -ErrorAction SilentlyContinue
+                }
+            } catch {
+                # Failed to assign this letter, try next
+                continue
+            }
+        }
+        
+        $result.Message = "Could not mount EFI partition. All attempted drive letters (S, T, U, V, W, Y, Z) are occupied or mount failed. Please mount manually using diskpart."
+        return $result
+        
+    } catch {
+        $result.Message = "Error mounting EFI partition: $_"
+        return $result
+    }
 }
 
 function Get-AllBootableOS {
