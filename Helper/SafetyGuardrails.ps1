@@ -546,3 +546,105 @@ function Invoke-SafeCommand {
     
     return $result
 }
+function New-PasteBackBundle {
+    <#
+    .SYNOPSIS
+    Generates a paste-back bundle for review and troubleshooting.
+    #>
+    
+    param(
+        [string]$ToolVersion = 'v7.1.1',
+        [string]$Mode = 'DIAGNOSE_ONLY',
+        [string]$Environment = 'Unknown',
+        [string]$TargetDrive = 'C',
+        $ViabilityResult = $null
+    )
+    
+    $bundle = New-Object System.Text.StringBuilder
+    $separator = '=' * 80
+    
+    $bundle.AppendLine($separator) | Out-Null
+    $bundle.AppendLine('BOOTFIX PASTE-BACK BUNDLE BEGIN') | Out-Null
+    $bundle.AppendLine($separator) | Out-Null
+    $bundle.AppendLine('ToolVersion: ' + $ToolVersion) | Out-Null
+    $bundle.AppendLine('Mode: ' + $Mode) | Out-Null
+    $bundle.AppendLine('Environment: ' + $Environment) | Out-Null
+    $bundle.AppendLine('Timestamp: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) | Out-Null
+    $bundle.AppendLine('') | Out-Null
+    
+    # Environment Detection
+    $envCheck = Test-EnvironmentSafety
+    $bundle.AppendLine('EnvironmentDetails:') | Out-Null
+    $bundle.AppendLine('  SystemDrive: ' + $envCheck.SystemDrive) | Out-Null
+    $bundle.AppendLine('  IsSafe: ' + $envCheck.IsSafe) | Out-Null
+    $bundle.AppendLine('  SafetyMessage: ' + $envCheck.SafetyMessage) | Out-Null
+    $bundle.AppendLine('') | Out-Null
+    
+    # Firmware & Disk Layout
+    $firmwareType = 'Unknown'
+    $diskLayout = 'Unknown'
+    
+    try {
+        $efiPartitions = Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }
+        if ($efiPartitions) {
+            $firmwareType = 'UEFI'
+            $diskLayout = 'GPT'
+        } else {
+            $disks = Get-Disk | Select-Object -First 1
+            if ($disks -and $disks.PartitionStyle -eq 'MBR') {
+                $firmwareType = 'Legacy BIOS'
+                $diskLayout = 'MBR'
+            }
+        }
+    } catch {
+        # Detection failed
+    }
+    
+    $bundle.AppendLine('Firmware: ' + $firmwareType) | Out-Null
+    $bundle.AppendLine('DiskLayout: ' + $diskLayout) | Out-Null
+    $bundle.AppendLine('') | Out-Null
+    
+    # Selected Windows
+    $bundle.AppendLine('SelectedWindows:') | Out-Null
+    $bundle.AppendLine('  Drive: ' + $TargetDrive + ':') | Out-Null
+    $bundle.AppendLine('  Path: ' + $TargetDrive + ':\Windows') | Out-Null
+    $bundle.AppendLine('') | Out-Null
+    
+    # Windows Files
+    $bundle.AppendLine('WindowsFiles:') | Out-Null
+    $winloadPath = $TargetDrive + ':\Windows\System32\winload.efi'
+    $kernelPath = $TargetDrive + ':\Windows\System32\ntoskrnl.exe'
+    
+    $bundle.AppendLine('  winload.efi: ' + (if (Test-Path $winloadPath) { 'present' } else { 'missing' })) | Out-Null
+    $bundle.AppendLine('  ntoskrnl.exe: ' + (if (Test-Path $kernelPath) { 'present' } else { 'missing' })) | Out-Null
+    $bundle.AppendLine('') | Out-Null
+    
+    # Final Verdict
+    $bundle.AppendLine('Final:') | Out-Null
+    $winloadExists = Test-Path ($TargetDrive + ':\Windows\System32\winload.efi')
+    $kernelExists = Test-Path ($TargetDrive + ':\Windows\System32\ntoskrnl.exe')
+    
+    if ($winloadExists -and $kernelExists) {
+        $bundle.AppendLine('  BootVerdict: YES') | Out-Null
+        $bundle.AppendLine('  Confidence: MEDIUM') | Out-Null
+        $bundle.AppendLine('  Blocker: (none)') | Out-Null
+        $bundle.AppendLine('  NextStep: Reboot and test') | Out-Null
+    } else {
+        $bundle.AppendLine('  BootVerdict: NO') | Out-Null
+        $bundle.AppendLine('  Confidence: HIGH') | Out-Null
+        if (-not $winloadExists) {
+            $bundle.AppendLine('  Blocker: winload.efi missing') | Out-Null
+            $bundle.AppendLine('  NextStep: Extract winload.efi from installation media') | Out-Null
+        } else {
+            $bundle.AppendLine('  Blocker: ntoskrnl.exe missing') | Out-Null
+            $bundle.AppendLine('  NextStep: Windows installation appears corrupted') | Out-Null
+        }
+    }
+    $bundle.AppendLine('') | Out-Null
+    
+    $bundle.AppendLine($separator) | Out-Null
+    $bundle.AppendLine('BOOTFIX PASTE-BACK BUNDLE END') | Out-Null
+    $bundle.AppendLine($separator) | Out-Null
+    
+    return $bundle.ToString()
+}
