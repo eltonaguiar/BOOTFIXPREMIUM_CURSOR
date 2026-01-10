@@ -4380,6 +4380,21 @@ if ($btnOneClickRepair) {
             
             Write-Log ""
             Write-Log "==============================================================="
+            Write-Log "REPAIR STATE DIAGNOSTIC (Copy for troubleshooting)"
+            Write-Log "==============================================================="
+            Write-Log ""
+            
+            # Generate and display repair state diagnostic
+            if (Get-Command "Get-RepairState" -ErrorAction SilentlyContinue) {
+                $repairState = Get-RepairState -TargetDrive $drive
+                Write-Log $repairState
+                Write-Log ""
+            } else {
+                Write-Log "[INFO] Repair state diagnostic not available"
+                Write-Log ""
+            }
+            
+            Write-Log "==============================================================="
             Write-Log "END OF ONE-CLICK REPAIR"
             Write-Log "End Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
             Write-Log "Log File: $logFile"
