@@ -1744,23 +1744,6 @@ function Get-WindowsInstallations {
     - FreeGB: Free space in GB
     - HealthStatus: Volume health status
     #>
-    Scans all drives and finds Windows installations with detailed volume information.
-    .DESCRIPTION
-    Scans all available drives to find Windows installations by checking for:
-    - \Windows\System32\ntoskrnl.exe (kernel file)
-    - \Windows\System32\config\SYSTEM (registry hive)
-    
-    Returns detailed information about each Windows installation including:
-    - Drive letter
-    - Volume label
-    - Size and free space
-    - Health status
-    - OS version (if accessible)
-    - Whether it's the current running OS
-    - Boot type (UEFI/Legacy)
-    .OUTPUTS
-    Array of PSCustomObject with Windows installation details
-    #>
     $installations = @()
     
     # Get all volumes with drive letters
