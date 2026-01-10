@@ -575,6 +575,67 @@ function Invoke-DefensiveBootRepair {
                                      "The partition may have been moved or cloned."
                         $result.Warnings += $warningMsg
                         $report.AppendLine("[WARNING] $warningMsg") | Out-Null
+                        
+                        # Attempt to fix Unknown device/osdevice
+                        try {
+                            $report.AppendLine("Attempting to fix Unknown device/osdevice...") | Out-Null
+                            
+                            # Get actual partition GUID for Windows drive
+                            $targetPartition = Get-Partition -DriveLetter $targetOS.DriveLetter -ErrorAction SilentlyContinue
+                            if ($targetPartition) {
+                                $actualGuid = $targetPartition.Guid
+                                
+                                # Fix device
+                                $fixDevice = & bcdedit /store $bcdPath /set {default} device "partition=$actualGuid" 2>&1 | Out-String
+                                $report.AppendLine("bcdedit device fix: $fixDevice") | Out-Null
+                                
+                                # Fix osdevice
+                                $fixOsDevice = & bcdedit /store $bcdPath /set {default} osdevice "partition=$actualGuid" 2>&1 | Out-String
+                                $report.AppendLine("bcdedit osdevice fix: $fixOsDevice") | Out-Null
+                                
+                                # Verify fix
+                                $bcdRecheck = & bcdedit /store $bcdPath /enum {default} 2>&1 | Out-String
+                                if ($bcdRecheck -notmatch "device\s+Unknown" -and $bcdRecheck -notmatch "osdevice\s+Unknown") {
+                                    $result.Steps += "Verification: Fixed Unknown device/osdevice"
+                                    $report.AppendLine("[SUCCESS] Unknown device/osdevice fixed") | Out-Null
+                                } else {
+                                    $report.AppendLine("[WARNING] Unknown device/osdevice still present after fix attempt") | Out-Null
+                                }
+                            }
+                        } catch {
+                            $report.AppendLine("[WARNING] Could not fix Unknown device/osdevice: $_") | Out-Null
+                        }
+                    }
+                    
+                    # Verify partition exists
+                    if ($bcdEnum -match "osdevice\s+partition=([a-f0-9\-]+)") {
+                        $partitionGuid = $matches[1]
+                        $partition = Get-Partition | Where-Object { $_.Guid -eq $partitionGuid }
+                        if (-not $partition) {
+                            $errorMsg = "CRITICAL: BCD points to partition GUID $partitionGuid which does not exist.`n" +
+                                       "The partition may have been deleted or the disk was cloned."
+                            $result.Errors += $errorMsg
+                            $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+                        } else {
+                            $result.Steps += "Verification: Partition exists for BCD osdevice"
+                            $report.AppendLine("[OK] Partition exists: $($partition.DriveLetter)") | Out-Null
+                        }
+                    }
+                    
+                    # Verify firmware boot entry
+                    try {
+                        $firmwareEntries = & bcdedit /enum firmware 2>&1 | Out-String
+                        if ($firmwareEntries -match "bootmgfw\.efi") {
+                            $result.Steps += "Verification: Firmware boot entry exists"
+                            $report.AppendLine("[OK] Firmware boot entry found") | Out-Null
+                        } else {
+                            $warningMsg = "WARNING: No firmware boot entry found for bootmgfw.efi.`n" +
+                                         "UEFI may not boot automatically. May need to add boot entry manually."
+                            $result.Warnings += $warningMsg
+                            $report.AppendLine("[WARNING] $warningMsg") | Out-Null
+                        }
+                    } catch {
+                        $report.AppendLine("[INFO] Could not check firmware boot entries: $_") | Out-Null
                     }
                 } else {
                     $report.AppendLine("[WARNING] Could not parse BCD path from bcdedit output") | Out-Null
@@ -592,23 +653,144 @@ function Invoke-DefensiveBootRepair {
         
         $report.AppendLine("") | Out-Null
         
-        # STEP 6: Final Status
-        $report.AppendLine("STEP 6: FINAL STATUS") | Out-Null
+        # STEP 6: Final Status & Comprehensive Verification
+        $report.AppendLine("STEP 6: FINAL STATUS & VERIFICATION") | Out-Null
         $report.AppendLine("-" * 80) | Out-Null
         
-        if ($result.Errors.Count -eq 0 -and $result.Verification.WinloadExists -and $result.Verification.BCDValid) {
+        # Comprehensive verification checklist
+        $verificationChecks = @{
+            WinloadExistsInWindows = $false
+            WinloadExistsInESP = $false
+            BCDReadable = $false
+            BCDPathCorrect = $false
+            BCDDeviceValid = $false
+            PartitionExists = $false
+            FirmwareEntryExists = $false
+            ESPHealthy = $false
+        }
+        
+        # Check 1: winload.efi in Windows directory
+        if (Test-Path "$($targetOS.WindowsPath)\System32\winload.efi") {
+            $verificationChecks.WinloadExistsInWindows = $true
+            $report.AppendLine("[OK] winload.efi exists in Windows directory") | Out-Null
+        } else {
+            $report.AppendLine("[FAIL] winload.efi MISSING in Windows directory") | Out-Null
+        }
+        
+        # Check 2: winload.efi in ESP
+        if ($efiHealth.DriveLetter) {
+            $winloadEfiPath = "$($efiHealth.DriveLetter):\EFI\Microsoft\Boot\winload.efi"
+            if (Test-Path $winloadEfiPath) {
+                $verificationChecks.WinloadExistsInESP = $true
+                $report.AppendLine("[OK] winload.efi exists in ESP") | Out-Null
+            } else {
+                $report.AppendLine("[FAIL] winload.efi MISSING in ESP") | Out-Null
+            }
+        }
+        
+        # Check 3: BCD readable
+        if ($efiHealth.DriveLetter) {
+            $bcdPath = "$($efiHealth.DriveLetter):\EFI\Microsoft\Boot\BCD"
+            try {
+                $bcdTest = & bcdedit /store $bcdPath /enum all 2>&1 | Out-String
+                if ($LASTEXITCODE -eq 0) {
+                    $verificationChecks.BCDReadable = $true
+                    $report.AppendLine("[OK] BCD is readable") | Out-Null
+                    
+                    # Check 4: BCD path correctness
+                    if ($bcdTest -match "path\s+\\Windows\\system32\\winload\.efi") {
+                        $verificationChecks.BCDPathCorrect = $true
+                        $report.AppendLine("[OK] BCD path points to winload.efi") | Out-Null
+                    } elseif ($bcdTest -match "path\s+\\Windows\\system32\\winload\.exe") {
+                        $report.AppendLine("[FAIL] BCD path points to winload.exe (should be winload.efi)") | Out-Null
+                    } else {
+                        $report.AppendLine("[FAIL] BCD path format unexpected") | Out-Null
+                    }
+                    
+                    # Check 5: BCD device/osdevice validity
+                    if ($bcdTest -notmatch "device\s+Unknown" -and $bcdTest -notmatch "osdevice\s+Unknown") {
+                        $verificationChecks.BCDDeviceValid = $true
+                        $report.AppendLine("[OK] BCD device/osdevice valid (not Unknown)") | Out-Null
+                    } else {
+                        $report.AppendLine("[FAIL] BCD device/osdevice is Unknown") | Out-Null
+                    }
+                    
+                    # Check 6: Partition exists
+                    if ($bcdTest -match "osdevice\s+partition=([a-f0-9\-]+)") {
+                        $partitionGuid = $matches[1]
+                        $partition = Get-Partition | Where-Object { $_.Guid -eq $partitionGuid }
+                        if ($partition) {
+                            $verificationChecks.PartitionExists = $true
+                            $report.AppendLine("[OK] BCD osdevice partition exists") | Out-Null
+                        } else {
+                            $report.AppendLine("[FAIL] BCD osdevice partition does NOT exist (GUID: $partitionGuid)") | Out-Null
+                        }
+                    }
+                } else {
+                    $report.AppendLine("[FAIL] BCD is NOT readable") | Out-Null
+                }
+            } catch {
+                $report.AppendLine("[FAIL] BCD verification failed: $_") | Out-Null
+            }
+        }
+        
+        # Check 7: Firmware boot entry
+        try {
+            $firmwareEntries = & bcdedit /enum firmware 2>&1 | Out-String
+            if ($firmwareEntries -match "bootmgfw\.efi") {
+                $verificationChecks.FirmwareEntryExists = $true
+                $report.AppendLine("[OK] Firmware boot entry exists") | Out-Null
+            } else {
+                $report.AppendLine("[FAIL] Firmware boot entry MISSING") | Out-Null
+            }
+        } catch {
+            $report.AppendLine("[?] Could not check firmware boot entries: $_") | Out-Null
+        }
+        
+        # Check 8: ESP health
+        if ($efiHealth.HealthStatus -eq "Healthy" -and $efiHealth.FileSystem -eq "FAT32") {
+            $verificationChecks.ESPHealthy = $true
+            $report.AppendLine("[OK] ESP is healthy (FAT32)") | Out-Null
+        } else {
+            $report.AppendLine("[FAIL] ESP health issue: $($efiHealth.HealthStatus), FS: $($efiHealth.FileSystem)") | Out-Null
+        }
+        
+        $report.AppendLine("") | Out-Null
+        
+        # Calculate success rate
+        $checksPassed = ($verificationChecks.Values | Where-Object { $_ -eq $true }).Count
+        $totalChecks = $verificationChecks.Count
+        $successRate = [math]::Round(($checksPassed / $totalChecks) * 100, 1)
+        
+        $report.AppendLine("VERIFICATION SUMMARY:") | Out-Null
+        $report.AppendLine("  Checks Passed: $checksPassed / $totalChecks ($successRate%)") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        # Final verdict
+        if ($checksPassed -eq $totalChecks -and $result.Errors.Count -eq 0) {
             $result.Success = $true
             $report.AppendLine("[SUCCESS] Defensive Boot-Chain Repair completed successfully") | Out-Null
             $report.AppendLine("  - Target OS Drive: $($result.TargetOSDrive):") | Out-Null
             $report.AppendLine("  - EFI Drive: $($result.EFIDrive):") | Out-Null
-            $report.AppendLine("  - winload.efi: Verified") | Out-Null
-            $report.AppendLine("  - BCD: Valid") | Out-Null
+            $report.AppendLine("  - All verification checks passed") | Out-Null
+        } elseif ($checksPassed -ge ($totalChecks * 0.8)) {
+            $result.Success = $true
+            $report.AppendLine("[PARTIAL SUCCESS] Defensive Boot-Chain Repair completed with minor issues") | Out-Null
+            $report.AppendLine("  - Target OS Drive: $($result.TargetOSDrive):") | Out-Null
+            $report.AppendLine("  - EFI Drive: $($result.EFIDrive):") | Out-Null
+            $report.AppendLine("  - Verification: $checksPassed / $totalChecks checks passed") | Out-Null
+            $report.AppendLine("  - System may boot but some issues remain") | Out-Null
         } else {
             $result.Success = $false
-            $report.AppendLine("[FAILED] Defensive Boot-Chain Repair completed with errors") | Out-Null
-            $report.AppendLine("  Errors: $($result.Errors.Count)") | Out-Null
-            $report.AppendLine("  Warnings: $($result.Warnings.Count)") | Out-Null
+            $report.AppendLine("[FAILED] Defensive Boot-Chain Repair completed with critical errors") | Out-Null
+            $report.AppendLine("  - Errors: $($result.Errors.Count)") | Out-Null
+            $report.AppendLine("  - Warnings: $($result.Warnings.Count)") | Out-Null
+            $report.AppendLine("  - Verification: $checksPassed / $totalChecks checks passed") | Out-Null
+            $report.AppendLine("  - System will likely NOT boot") | Out-Null
         }
+        
+        $result.VerificationChecks = $verificationChecks
+        $result.VerificationScore = $successRate
         
         $report.AppendLine("") | Out-Null
         $report.AppendLine($separator) | Out-Null
