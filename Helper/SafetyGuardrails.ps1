@@ -246,8 +246,9 @@ function Get-RepairState {
     # BCD Entry Path
     $output.AppendLine("BCD ENTRY PATH:") | Out-Null
     try {
-        $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0) {
+        # Use cmd /c to properly execute bcdedit
+        $bcdEnum = cmd /c "bcdedit /enum {default}" 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $bcdEnum -notmatch "Invalid command|parameter is incorrect") {
             $bcdPathMatch = $bcdEnum | Select-String "path\s+(.+)"
             if ($bcdPathMatch) {
                 $bcdPath = $bcdPathMatch.Matches[0].Groups[1].Value.Trim()
@@ -270,7 +271,12 @@ function Get-RepairState {
             }
         } else {
             $output.AppendLine("  BCD Status: ERROR - Could not read BCD store") | Out-Null
-            $output.AppendLine("  Error: $bcdEnum") | Out-Null
+            if ($bcdEnum) {
+                $errorMsg = ($bcdEnum -split "`n" | Where-Object { $_ -notmatch "Invalid command|parameter is incorrect" } | Select-Object -First 3) -join " "
+                if ($errorMsg) {
+                    $output.AppendLine("  Error: $errorMsg") | Out-Null
+                }
+            }
         }
     } catch {
         $output.AppendLine("  BCD Status: EXCEPTION - $_") | Out-Null
