@@ -3043,6 +3043,16 @@ if ($btnOneClickRepair) {
             
             . $corePath -ErrorAction Stop
             
+            # Load defensive boot-chain module if available
+            $defensiveBootChainPath = Join-Path $scriptRoot "DefensiveBootChain.ps1"
+            if (Test-Path $defensiveBootChainPath) {
+                try {
+                    . $defensiveBootChainPath -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Log "[INFO] Defensive Boot-Chain module not available, using standard repair"
+                }
+            }
+            
             # Pre-flight checks: BitLocker and drive accessibility
             Write-Log "==============================================================="
             Write-Log "PRE-FLIGHT CHECKS"
@@ -3741,10 +3751,61 @@ if ($btnOneClickRepair) {
                 }
                 
                 if ($efiDrive) {
-                    # Step 1: Check if winload.efi exists in Windows directory
-                    $winloadWindowsPath = "$drive`:\Windows\System32\winload.efi"
-                    $winloadBootPath = "$drive`:\Windows\System32\Boot\winload.efi"
-                    $winloadMissing = -not (Test-Path $winloadWindowsPath)
+                    # Use Defensive Boot-Chain Logic if available, otherwise fallback to standard repair
+                    $useDefensiveLogic = $false
+                    if (Get-Command "Invoke-DefensiveBootRepair" -ErrorAction SilentlyContinue) {
+                        try {
+                            Write-Log "Using Defensive Boot-Chain Logic for professional-grade repair..."
+                            $defensiveResult = Invoke-DefensiveBootRepair -PreferredDrive $drive
+                            
+                            if ($defensiveResult.Success) {
+                                Write-Log "[SUCCESS] Defensive Boot-Chain Repair completed successfully"
+                                Write-Log $defensiveResult.Report
+                                
+                                # Update verification status
+                                if ($defensiveResult.Verification.WinloadExists) {
+                                    Write-Log "[OK] winload.efi verified in Windows directory"
+                                }
+                                if ($defensiveResult.Verification.BCDValid) {
+                                    Write-Log "[OK] BCD verified and valid"
+                                }
+                                
+                                # Show warnings if any
+                                foreach ($warning in $defensiveResult.Warnings) {
+                                    Write-Log "[WARNING] $warning"
+                                }
+                                
+                                $useDefensiveLogic = $true
+                            } else {
+                                Write-Log "[WARNING] Defensive Boot-Chain Repair completed with errors"
+                                Write-Log $defensiveResult.Report
+                                
+                                # Show errors
+                                foreach ($error in $defensiveResult.Errors) {
+                                    Write-Log "[ERROR] $error"
+                                }
+                                
+                                # If blocked by BitLocker, stop here
+                                if ($defensiveResult.Errors | Where-Object { $_ -match "BitLocker LOCKED" }) {
+                                    Write-Log "[BLOCKED] Cannot proceed - drive is BitLocker locked"
+                                    throw "Drive is BitLocker locked. Unlock drive before repairs."
+                                }
+                                
+                                # Continue with fallback repair if not blocked
+                                Write-Log "Falling back to standard repair method..."
+                            }
+                        } catch {
+                            Write-Log "[WARNING] Defensive Boot-Chain Logic failed: $_"
+                            Write-Log "Falling back to standard repair method..."
+                        }
+                    }
+                    
+                    # Standard repair method (fallback or if defensive logic not available)
+                    if (-not $useDefensiveLogic) {
+                        # Step 1: Check if winload.efi exists in Windows directory
+                        $winloadWindowsPath = "$drive`:\Windows\System32\winload.efi"
+                        $winloadBootPath = "$drive`:\Windows\System32\Boot\winload.efi"
+                        $winloadMissing = -not (Test-Path $winloadWindowsPath)
                     
                     if ($winloadMissing) {
                         Write-Log "[WARNING] winload.efi is missing from Windows directory: $winloadWindowsPath"
@@ -3785,8 +3846,8 @@ if ($btnOneClickRepair) {
                                     if (Test-Path $winloadWindowsPath) {
                                         Write-Log "[SUCCESS] winload.efi restored to Windows directory"
                                     } else {
-                                        Write-Log "[WARNING] winload.efi still missing after DISM/SFC."
-                                        Write-Log "May need to extract from Windows installation media (see Step 5 in repair guide)."
+                                    Write-Log "[WARNING] winload.efi still missing after DISM/SFC."
+                                    Write-Log "May need to extract from Windows installation media (see Step 5 in repair guide)."
                                     }
                                 } catch {
                                     Write-Log "[ERROR] Failed to restore winload.efi: $_"
@@ -3795,7 +3856,7 @@ if ($btnOneClickRepair) {
                                 Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
                             }
                         }
-                    }
+                    }  # End of if ($winloadMissing) block
                     
                     # Step 2: Verify file attributes (clear hidden/system if needed)
                     if (Test-Path $winloadWindowsPath) {
@@ -3887,6 +3948,7 @@ if ($btnOneClickRepair) {
                     } else {
                         Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                     }
+                    }  # End of if (-not $useDefensiveLogic) block
                 } else {
                     # Fallback: Try bootrec if available
                     $bootrecPath = $null

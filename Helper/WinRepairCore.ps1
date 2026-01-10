@@ -12465,6 +12465,27 @@ function Get-WindowsInstallFailureReasons {
 }
 
 # ============================================================================
+# DEFENSIVE BOOT-CHAIN LOGIC
+# Professional-grade automated repair engine with comprehensive verification
+# ============================================================================
+
+# Load defensive boot-chain module if available
+# This module provides professional-grade boot repair with comprehensive verification
+if ($PSScriptRoot) {
+    $defensiveBootChainPath = Join-Path $PSScriptRoot "DefensiveBootChain.ps1"
+} else {
+    $defensiveBootChainPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "DefensiveBootChain.ps1"
+}
+
+if (Test-Path $defensiveBootChainPath) {
+    try {
+        . $defensiveBootChainPath -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to load DefensiveBootChain.ps1: $_"
+    }
+}
+
+# ============================================================================
 # AUTOMATED REPAIR FUNCTIONS
 # Enhanced repair workflows for comprehensive system recovery
 # ============================================================================
