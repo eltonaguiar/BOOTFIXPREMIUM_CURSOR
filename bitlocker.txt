@@ -1,0 +1,172 @@
+================================================================================
+  BITLOCKER RECOVERY KEY RETRIEVAL GUIDE
+================================================================================
+
+If your Windows system is protected by BitLocker encryption and you're seeing
+a BitLocker recovery screen, you need your Recovery Key to unlock the drive.
+
+================================================================================
+WHERE TO FIND YOUR BITLOCKER RECOVERY KEY
+================================================================================
+
+Your BitLocker Recovery Key is a 48-digit number that was created when BitLocker
+was first enabled. It should be saved in one of these locations:
+
+1. MICROSOFT ACCOUNT (ONLINE)
+   --------------------------
+   If you signed in with a Microsoft account when setting up Windows:
+   
+   URL: https://account.microsoft.com/devices/recoverykey
+   
+   Steps:
+   1. On another device (phone, tablet, or working computer), open a web browser
+   2. Go to: https://account.microsoft.com/devices/recoverykey
+   3. Sign in with the same Microsoft account used on your Windows PC
+   4. Find your device in the list
+   5. Click "Get recovery key" or "View recovery key"
+   6. Copy the 48-digit recovery key
+   7. Enter it on the BitLocker recovery screen
+
+2. AZURE ACTIVE DIRECTORY (BUSINESS/SCHOOL ACCOUNTS)
+   --------------------------------------------------
+   If your PC is managed by an organization (work or school):
+   
+   URL: https://aka.ms/aadrecoverykey
+   
+   Steps:
+   1. On another device, go to: https://aka.ms/aadrecoverykey
+   2. Sign in with your work/school account
+   3. Find your device and recovery key
+   4. Copy the key and enter it on the BitLocker recovery screen
+
+3. PRINTED OR SAVED COPY
+   ----------------------
+   Check if you:
+   - Printed the recovery key when BitLocker was enabled
+   - Saved it to a file (often named "BitLocker Recovery Key.txt")
+   - Saved it to a USB drive
+   - Wrote it down in a safe place
+
+4. LOCAL GROUP POLICY (DOMAIN MANAGED)
+   ------------------------------------
+   If your PC is on a domain network, contact your IT administrator.
+   They may have the recovery key stored in Active Directory.
+
+================================================================================
+HOW TO ENTER THE RECOVERY KEY
+================================================================================
+
+When you see the BitLocker recovery screen:
+
+1. You'll see a prompt asking for the recovery key
+2. Enter the 48-digit key (usually displayed in groups of 8 digits)
+3. Press Enter
+4. Windows should unlock the drive and continue booting
+
+Format: XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX
+        (8 digits - 8 digits - 8 digits - 8 digits - 8 digits - 8 digits)
+
+================================================================================
+IMPORTANT WARNINGS
+================================================================================
+
+⚠️  DO NOT MODIFY BOOT FILES WHILE BITLOCKER IS ACTIVE
+   - Changing BCD, boot files, or BIOS settings while BitLocker is enabled
+     can trigger BitLocker recovery
+   - Always suspend BitLocker before making boot changes:
+     manage-bde -protectors -disable C: -RebootCount 1
+
+⚠️  IF YOU DON'T HAVE THE RECOVERY KEY
+   - Without the recovery key, you CANNOT access encrypted data
+   - Microsoft cannot recover your key if you don't have it saved
+   - Consider this before proceeding with boot repairs
+
+⚠️  BACKUP YOUR RECOVERY KEY
+   - Save your recovery key in multiple safe locations
+   - Print a copy and keep it in a safe place
+   - Store it in your Microsoft account for easy access
+
+================================================================================
+SUSPENDING BITLOCKER FOR BOOT REPAIRS
+================================================================================
+
+If you need to perform boot repairs and BitLocker is active:
+
+1. Boot into Windows (if possible)
+2. Open PowerShell as Administrator
+3. Suspend BitLocker for one reboot:
+
+   manage-bde -protectors -disable C: -RebootCount 1
+
+4. Perform your boot repairs
+5. BitLocker will automatically re-enable on the next boot
+
+Note: This only works if you can boot into Windows. If you're already locked
+      out, you'll need the recovery key first.
+
+================================================================================
+QUICK REFERENCE - RECOVERY KEY URLS
+================================================================================
+
+Personal Microsoft Account:
+  https://account.microsoft.com/devices/recoverykey
+
+Work/School Account (Azure AD):
+  https://aka.ms/aadrecoverykey
+
+Alternative (if above don't work):
+  https://account.microsoft.com/account
+  Then navigate to: Devices → Find your device → Recovery keys
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: "I can't find my device on the Microsoft account page"
+Solution:
+  - Make sure you're signed in with the SAME Microsoft account
+  - Check if the device name matches (it might be listed differently)
+  - Try searching by the device's serial number
+  - The device might be listed under a different account
+
+Problem: "The recovery key doesn't work"
+Solution:
+  - Double-check you entered all 48 digits correctly
+  - Make sure there are no spaces or dashes (or include them if the screen shows them)
+  - Verify you're using the key for the correct drive (if multiple drives encrypted)
+  - Try typing it slowly, one group at a time
+
+Problem: "I don't have a Microsoft account"
+Solution:
+  - Check for a printed copy of the key
+  - Check USB drives or external storage where you might have saved it
+  - If it's a work/school PC, contact your IT administrator
+  - If none of these work, you may need to perform a clean install (DATA LOSS)
+
+Problem: "BitLocker keeps asking for recovery key after boot repair"
+Solution:
+  - This is normal if boot files were modified
+  - Enter the recovery key once to unlock
+  - BitLocker should resume normal operation after that
+  - If it keeps asking, you may need to suspend BitLocker before repairs
+
+================================================================================
+ADDITIONAL RESOURCES
+================================================================================
+
+Microsoft BitLocker Documentation:
+  https://support.microsoft.com/windows/bitlocker-recovery-keys-fd451b67-5a67-109f-3c1c-749a65e0d1dc
+
+BitLocker Recovery Key FAQ:
+  https://support.microsoft.com/windows/find-your-bitlocker-recovery-key-45b014dc-6b9d-0f38-8b24-2c602880c25e
+
+================================================================================
+REMEMBER
+================================================================================
+
+✅ Always save your BitLocker recovery key in a safe place
+✅ Store it in your Microsoft account for easy access
+✅ Print a copy as backup
+✅ Never delete or lose your recovery key - you cannot recover it!
+
+================================================================================

@@ -1501,7 +1501,7 @@ $pantherIntel = $null
 if ($Mode -eq 'Analyze' -or $Mode -eq 'Full') {
     $forensics = Invoke-BootForensics -WindowsDrive $windowsDrive
     $blockers = Test-RepairInstallBlockers -WindowsDrive $windowsDrive
-    $diskHealth = Test-DiskHealth -WindowsDrive $windowsDrive
+    $diskHealth = Test-DiskHealth -TargetDrive $windowsDrive
     $pantherIntel = $forensics.PantherIntelligence
 }
 

@@ -212,7 +212,8 @@ function Start-TUI {
         Write-Host "H) In-Place Upgrade Readiness Check" -ForegroundColor Magenta
         Write-Host "I) Boot Chain Analysis (View Startup/Boot Logs)" -ForegroundColor Cyan
         Write-Host "J) Look Up Windows Error Code (Get troubleshooting help)" -ForegroundColor Yellow
-        Write-Host "Z) Precision Boot Scan (ordered detection/remediation, dry-run default)" -ForegroundColor Yellow
+        Write-Host "Z) Precision Boot Scan (DIAGNOSE-ONLY: shows what's broken, dry-run default)" -ForegroundColor Yellow
+        Write-Host "O) ONE-CLICK PRECISION FIXER (automated fix, offers repair install for extreme cases)" -ForegroundColor Green
         Write-Host "Y) Precision Parity (CLI vs GUI/TUI baseline)" -ForegroundColor Yellow
         Write-Host "X) Precision Quick Scan JSON export" -ForegroundColor Yellow
         Write-Host "W2) Precision Parity JSON export" -ForegroundColor Yellow
@@ -672,7 +673,7 @@ function Start-TUI {
                 Write-Host "`nADVANCED DIAGNOSTICS" -ForegroundColor Cyan
                 Write-Host "===============================================================" -ForegroundColor Gray
                 Write-Host ""
-                Write-Host "1) Boot Diagnosis" -ForegroundColor White
+                Write-Host "1) Boot Diagnosis & Repair (3 modes available)" -ForegroundColor White
                 Write-Host "2) System Restore Check" -ForegroundColor White
                 Write-Host "3) Reagentc Health Check" -ForegroundColor White
                 Write-Host "4) OS Information" -ForegroundColor White
@@ -688,11 +689,186 @@ function Start-TUI {
                 
                 switch ($diagChoice) {
                     '1' {
-                        Write-Host "`nRunning boot diagnosis..." -ForegroundColor Gray
-                        $diagnosis = Get-BootDiagnosis -TargetDrive $drive
-                        Write-Host $diagnosis
+                        Write-Host "`nBOOT DIAGNOSIS AND REPAIR" -ForegroundColor Cyan
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        Write-Host ""
+                        
+                        # Ensure core is loaded
+                        $scriptRoot = $PSScriptRoot
+                        if (-not $scriptRoot) {
+                            $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+                        }
+                        if ($scriptRoot) {
+                            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+                            if (Test-Path $corePath) {
+                                try {
+                                    . $corePath -ErrorAction Stop
+                                } catch {
+                                    Write-Host "[ERROR] Failed to load core engine: $_" -ForegroundColor Red
+                                    Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                                    $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                                    continue
+                                }
+                            }
+                        }
+                        
+                        # Scan for Windows installations
+                        Write-Host "Scanning for Windows installations..." -ForegroundColor Yellow
+                        try {
+                            $installations = Get-WindowsInstallations
+                            
+                            if ($installations.Count -eq 0) {
+                                Write-Host ""
+                                Write-Host "[ERROR] No Windows installations found." -ForegroundColor Red
+                                Write-Host "Please ensure you have access to Windows drives and try again." -ForegroundColor Yellow
+                                Write-Host ""
+                                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+                                continue
+                            }
+                            
+                            Write-Host ""
+                            Write-Host "Available Windows Installations:" -ForegroundColor Cyan
+                            Write-Host "===============================================================" -ForegroundColor Gray
+                            Write-Host ""
+                            
+                            $num = 1
+                            foreach ($inst in $installations) {
+                                $currentMarker = if ($inst.IsCurrentOS) { " [CURRENT OS]" } else { "" }
+                                Write-Host "$num. $($inst.Drive) - $($inst.VolumeLabel)$currentMarker" -ForegroundColor $(if ($inst.IsCurrentOS) { "Green" } else { "White" })
+                                Write-Host "   OS: $($inst.OSVersion) Build $($inst.OSBuild) ($($inst.OSEdition))" -ForegroundColor Gray
+                                Write-Host "   Size: $($inst.SizeGB) GB | Free: $($inst.FreeGB) GB | Used: $($inst.UsedPercent)%" -ForegroundColor Gray
+                                Write-Host "   Health: $($inst.HealthStatus) | Boot Type: $($inst.BootType)" -ForegroundColor Gray
+                                Write-Host ""
+                                $num++
+                            }
+                            
+                            Write-Host "===============================================================" -ForegroundColor Gray
+                            Write-Host ""
+                            
+                            $driveChoice = Read-Host "Select Windows installation (1-$($installations.Count), or drive letter like C)"
+                            
+                            # Parse selection
+                            $selectedInst = $null
+                            if ($driveChoice -match '^(\d+)$') {
+                                $index = [int]$matches[1] - 1
+                                if ($index -ge 0 -and $index -lt $installations.Count) {
+                                    $selectedInst = $installations[$index]
+                                }
+                            } elseif ($driveChoice -match '^([A-Z]):?$') {
+                                $driveLetter = $matches[1]
+                                $selectedInst = $installations | Where-Object { $_.DriveLetter -eq $driveLetter } | Select-Object -First 1
+                            }
+                            
+                            if (-not $selectedInst) {
+                                Write-Host ""
+                                Write-Host "[ERROR] Invalid selection. Using default drive C:" -ForegroundColor Yellow
+                                $drive = "C"
+                            } else {
+                                $drive = $selectedInst.DriveLetter
+                                Write-Host ""
+                                Write-Host "Selected: $($selectedInst.Drive) - $($selectedInst.VolumeLabel) ($($selectedInst.OSVersion))" -ForegroundColor Green
+                            }
+                        } catch {
+                            Write-Host ""
+                            Write-Host "[WARNING] Error scanning for Windows installations: $_" -ForegroundColor Yellow
+                            Write-Host "Falling back to default drive C:" -ForegroundColor Yellow
+                            $drive = "C"
+                        }
+                        
+                        Write-Host ""
+                        Write-Host "This will analyze 8 phases of the boot process:" -ForegroundColor White
+                        Write-Host "1. UEFI/GPT Integrity Check" -ForegroundColor Gray
+                        Write-Host "2. BCD File & Integrity" -ForegroundColor Gray
+                        Write-Host "3. BCD Entries Validation" -ForegroundColor Gray
+                        Write-Host "4. WinRE Access" -ForegroundColor Gray
+                        Write-Host "5. Driver Matching" -ForegroundColor Gray
+                        Write-Host "6. Windows Kernel" -ForegroundColor Gray
+                        Write-Host "7. Boot Log Analysis" -ForegroundColor Gray
+                        Write-Host "8. Event Log Analysis" -ForegroundColor Gray
+                        Write-Host ""
+                        Write-Host "Select operation mode:" -ForegroundColor Yellow
+                        Write-Host "  1 = DIAGNOSIS ONLY (find what's broken, no fixes)" -ForegroundColor Cyan
+                        Write-Host "  2 = DIAGNOSIS + FIX (automatically fixes issues)" -ForegroundColor Green
+                        Write-Host "  3 = DIAGNOSIS THEN ASK (diagnose first, then ask about fixes)" -ForegroundColor Yellow
+                        Write-Host ""
+                        $modeChoice = Read-Host "Select mode (1/2/3, default 1)"
+                        $mode = switch ($modeChoice) {
+                            "2" { "DiagnosisAndFix" }
+                            "3" { "DiagnosisThenAsk" }
+                            default { "DiagnosisOnly" }
+                        }
+                        
+                        Write-Host ""
+                        $verboseResp = Read-Host "Run in VERBOSE mode? (Y/N, default N)"
+                        $verbose = ($verboseResp -match '^(y|yes)$')
+                        
+                        $logFile = if ($verbose) { "$env:TEMP\BootDiagnosis_$(Get-Date -Format 'yyyyMMdd_HHmmss').log" } else { $null }
+                        
+                        Write-Host ""
+                        Write-Host "Starting boot diagnosis (Mode: $mode) on $drive`:..." -ForegroundColor Cyan
+                        if ($verbose -and $logFile) {
+                            Write-Host "Command log: $logFile" -ForegroundColor Yellow
+                            Write-Host "Notepad will open automatically to show real-time updates." -ForegroundColor Yellow
+                        }
+                        Write-Host ""
+                        
+                        $startTime = Get-Date
+                        $progressCallback = {
+                            param($progress)
+                            $phaseNum = $progress.Phase
+                            $phaseName = $progress.PhaseName
+                            $message = $progress.Message
+                            $elapsed = $progress.Elapsed
+                            
+                            Write-Host "[Phase $phaseNum/8] $phaseName" -ForegroundColor Cyan
+                            Write-Host "  -> $message" -ForegroundColor Gray
+                            if ($progress.Command -and $verbose) {
+                                Write-Host "  Command: $($progress.Command)" -ForegroundColor DarkGray
+                            }
+                            Write-Host "  Elapsed: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor DarkGray
+                            Write-Host ""
+                        }
+                        
+                        $result = Start-BootDiagnosisAndRepair -Drive $drive -Mode $mode -Verbose:$verbose -ProgressCallback $progressCallback -LogFile $logFile
+                        
+                        # Handle DiagnosisThenAsk mode
+                        if ($result.AskForFix) {
+                            Write-Host ""
+                            Write-Host "===============================================================" -ForegroundColor Gray
+                            Write-Host "DIAGNOSIS COMPLETE" -ForegroundColor Green
+                            Write-Host "===============================================================" -ForegroundColor Gray
+                            Write-Host "Issues Found: $($result.IssuesFound)" -ForegroundColor Yellow
+                            Write-Host ""
+                            Write-Host $result.Report
+                            Write-Host ""
+                            $fixResp = Read-Host "Would you like to automatically fix these issues? (Y/N)"
+                            if ($fixResp -match '^(y|yes)$') {
+                                Write-Host ""
+                                Write-Host "Running automated boot repair..." -ForegroundColor Cyan
+                                $repair = Start-AutomatedBootRepair -TargetDrive $drive -SkipConfirmation:$false -CreateRestorePoint:$true
+                                $result.Repair = $repair
+                                $result.Report += "`n`n" + $repair.Report
+                                $result.Success = $repair.Success
+                            } else {
+                                Write-Host "Repair skipped by user." -ForegroundColor Yellow
+                            }
+                        }
+                        
+                        Write-Host ""
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        Write-Host "COMPLETE" -ForegroundColor Green
+                        Write-Host "===============================================================" -ForegroundColor Gray
+                        Write-Host "Mode: $($result.Mode)" -ForegroundColor White
+                        Write-Host "Issues Found: $($result.IssuesFound)" -ForegroundColor $(if ($result.IssuesFound -eq 0) { "Green" } else { "Yellow" })
+                        if ($result.IssuesFixed) {
+                            Write-Host "Issues Fixed: $($result.IssuesFixed)" -ForegroundColor Green
+                        }
+                        Write-Host "Success: $(if ($result.Success) { 'Yes' } else { 'No' })" -ForegroundColor $(if ($result.Success) { "Green" } else { "Yellow" })
+                        Write-Host ""
+                        Write-Host $result.Report
                         Write-Host ''
-                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                        Write-Host 'Press any key to continue...' -ForegroundColor Gray
                         $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
                     }
                     '2' {
@@ -825,6 +1001,83 @@ function Start-TUI {
                 Write-Host ''
                 Write-Host 'Press any key to continue...' -ForegroundColor Gray
                 $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "O" {
+                Write-Host "`nONE-CLICK PRECISION FIXER" -ForegroundColor Green
+                Write-Host "===============================================================" -ForegroundColor Green
+                Write-Host "This will automatically fix all detected issues." -ForegroundColor White
+                Write-Host "For extreme cases, it will offer repair install with clear warnings.`n" -ForegroundColor White
+
+                $win = Read-Host 'Target Windows drive letter (default C)'
+                if ([string]::IsNullOrWhiteSpace($win)) { $win = "C" }
+                $win = $win.TrimEnd(':').ToUpper()
+                $windowsRoot = "$win`:\Windows"
+
+                $esp = Read-Host 'EFI System Partition letter (default Z)'
+                if ([string]::IsNullOrWhiteSpace($esp)) { $esp = "Z" }
+                $esp = $esp.TrimEnd(':').ToUpper()
+
+                Write-Host ""
+                Write-Host "Starting one-click precision fixer..." -ForegroundColor Cyan
+                Write-Host ""
+
+                $result = Start-OneClickPrecisionFix -WindowsRoot $windowsRoot -EspDriveLetter $esp -PassThru -ActionLogPath "$env:TEMP\precision-actions.log"
+
+                if ($result) {
+                    Write-Host "`nRESULTS:" -ForegroundColor Cyan
+                    Write-Host "===============================================================" -ForegroundColor Gray
+                    
+                    if ($result.Success) {
+                        Write-Host "[SUCCESS] $($result.Message)" -ForegroundColor Green
+                    } else {
+                        Write-Host "[PARTIAL/FAILED] $($result.Message)" -ForegroundColor Yellow
+                    }
+
+                    if ($result.FixedIssues -and $result.FixedIssues.Count -gt 0) {
+                        Write-Host "`nFIXED ISSUES ($($result.FixedIssues.Count)):" -ForegroundColor Green
+                        foreach ($issue in $result.FixedIssues) {
+                            $issueId = $issue.Id
+                            $issueTitle = $issue.Title
+                            $issueCategory = $issue.Category
+                            Write-Host "  [OK] [$issueId] $issueTitle (Category: $issueCategory)" -ForegroundColor Green
+                        }
+                    }
+
+                    if ($result.RemainingIssues -and $result.RemainingIssues.Count -gt 0) {
+                        Write-Host "`nREMAINING ISSUES ($($result.RemainingIssues.Count)):" -ForegroundColor Yellow
+                        foreach ($issue in $result.RemainingIssues) {
+                            $issueId = $issue.Id
+                            $issueTitle = $issue.Title
+                            $issueCategory = $issue.Category
+                            Write-Host "  [WARN] [$issueId] $issueTitle (Category: $issueCategory)" -ForegroundColor Yellow
+                        }
+                    }
+
+                    if ($result.RequiresRepairInstall) {
+                        Write-Host "`n[WARN] REPAIR INSTALL RECOMMENDED [WARN]" -ForegroundColor Red
+                        Write-Host "===============================================================" -ForegroundColor Red
+                        Write-Host "Reason: $($result.RepairInstallReason)" -ForegroundColor Yellow
+                        Write-Host ""
+                        Write-Host "Critical issues detected that cannot be fixed automatically." -ForegroundColor Yellow
+                        Write-Host "A repair install (in-place upgrade) is recommended.`n" -ForegroundColor Yellow
+                        Write-Host "WHAT GETS KEPT:" -ForegroundColor Cyan
+                        Write-Host "  [OK] Your files (Documents, Pictures, Videos, etc.)" -ForegroundColor Green
+                        Write-Host "  [OK] Your installed programs" -ForegroundColor Green
+                        Write-Host "  [OK] Your user profiles and settings`n" -ForegroundColor Green
+                        Write-Host "WHAT YOU NEED:" -ForegroundColor Cyan
+                        Write-Host "  - Windows ISO matching your current edition and build family" -ForegroundColor White
+                        Write-Host "  - Same architecture (x64/x86) and language`n" -ForegroundColor White
+                        Write-Host "Use option 'S' (Ensure Repair-Install Ready) to proceed." -ForegroundColor Cyan
+                    }
+                }
+
+                Write-Host ''
+                Write-Host 'Press any key to continue...' -ForegroundColor Gray
+                $null = $Host.UI.RawUI.ReadKey([System.Management.Automation.Host.ReadKeyOptions]::NoEcho -bor [System.Management.Automation.Host.ReadKeyOptions]::IncludeKeyDown)
+            }
+            "o" {
+                $c = 'O'
+                continue
             }
             "z" {
                 $c = 'Z'

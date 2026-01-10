@@ -1291,6 +1291,196 @@ function Start-PrecisionScan {
     }
 }
 
+function Start-OneClickPrecisionFix {
+    <#
+    .SYNOPSIS
+    One-click precision fixer that automatically fixes all detected issues and offers repair install for extreme cases.
+    .DESCRIPTION
+    This function provides a fully automated repair experience:
+    1. Runs precision scan with automatic fixes
+    2. Re-scans to verify fixes were successful
+    3. If critical issues remain or are too severe, offers repair install with clear warnings
+    4. Returns comprehensive status report
+    .PARAMETER WindowsRoot
+    Target Windows directory (default C:\Windows).
+    .PARAMETER EspDriveLetter
+    ESP drive letter (default Z).
+    .PARAMETER Force
+    Skip BRICKME prompt (automation/CI only).
+    .PARAMETER PassThru
+    Return detailed result object.
+    .PARAMETER ActionLogPath
+    Optional path for action logging.
+    #>
+    param(
+        [string]$WindowsRoot = "C:\Windows",
+        [string]$EspDriveLetter = "Z",
+        [switch]$Force,
+        [switch]$PassThru,
+        [string]$ActionLogPath
+    )
+
+    $result = @{
+        Success = $false
+        FixedIssues = @()
+        RemainingIssues = @()
+        RequiresRepairInstall = $false
+        RepairInstallReason = ""
+        Message = ""
+        Details = @()
+    }
+
+    Write-Host "`n===============================================================" -ForegroundColor Cyan
+    Write-Host "ONE-CLICK PRECISION FIXER" -ForegroundColor Cyan
+    Write-Host "===============================================================" -ForegroundColor Cyan
+    Write-Host "Automatically fixing all detected boot issues...`n" -ForegroundColor White
+
+    # Step 1: Initial scan
+    Write-Host "[Step 1/3] Running initial precision scan..." -ForegroundColor Yellow
+    try {
+        $initialScan = Start-PrecisionScan -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -Apply -Force:$Force -PassThru -ActionLogPath $ActionLogPath -ErrorAction Stop
+    } catch {
+        Write-Host "[ERROR] Precision scan failed: $_`n" -ForegroundColor Red
+        $result.Success = $false
+        $result.Message = "Precision scan failed: $_"
+        if ($PassThru) { return $result }
+        return
+    }
+
+    # Check if scan was aborted (null return) vs no issues found (empty detections)
+    if ($null -eq $initialScan) {
+        Write-Host "[ABORTED] Precision scan was aborted (likely due to safety check).`n" -ForegroundColor Yellow
+        $result.Success = $false
+        $result.Message = "Scan aborted - safety check failed or user cancelled"
+        if ($PassThru) { return $result }
+        return
+    }
+
+    if (-not $initialScan.Detections -or $initialScan.Detections.Count -eq 0) {
+        Write-Host "[SUCCESS] No issues detected. System appears healthy.`n" -ForegroundColor Green
+        $result.Success = $true
+        $result.Message = "No issues detected. System appears healthy."
+        if ($PassThru) { return $result }
+        return
+    }
+
+    $initialCount = $initialScan.Detections.Count
+    Write-Host "Found $initialCount issue(s). Applying fixes...`n" -ForegroundColor Yellow
+
+    # Track what was fixed
+    foreach ($det in $initialScan.Detections) {
+        $result.FixedIssues += [PSCustomObject]@{
+            Id = $det.Id
+            Title = $det.Title
+            Category = $det.Category
+        }
+    }
+
+    # Step 2: Re-scan to verify fixes
+    Write-Host "[Step 2/3] Verifying fixes were successful..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2  # Brief pause for system to settle
+    try {
+        $rescan = Start-PrecisionScan -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -Force:$Force -PassThru -ActionLogPath $ActionLogPath -ErrorAction Stop
+    } catch {
+        Write-Host "[WARNING] Rescan failed: $_`n" -ForegroundColor Yellow
+        Write-Host "Assuming fixes were successful, but unable to verify.`n" -ForegroundColor Yellow
+        $result.Success = $true
+        $result.Message = "Fixes applied, but verification scan failed"
+        if ($PassThru) { return $result }
+        return
+    }
+
+    # Check if rescan was aborted
+    if ($null -eq $rescan) {
+        Write-Host "[WARNING] Rescan was aborted. Assuming fixes were successful.`n" -ForegroundColor Yellow
+        $result.Success = $true
+        $result.Message = "Fixes applied, but verification scan was aborted"
+        if ($PassThru) { return $result }
+        return
+    }
+
+    if ($rescan.Detections -and $rescan.Detections.Count -gt 0) {
+        $remainingCount = $rescan.Detections.Count
+        Write-Host "Warning: $remainingCount issue(s) still remain after fixes.`n" -ForegroundColor Yellow
+
+        # Check if remaining issues are critical enough to require repair install
+        $criticalCategories = @("RegistryHives", "PhysicalFs")
+        $hasCritical = $false
+        $criticalReasons = @()
+
+        foreach ($det in $rescan.Detections) {
+            $result.RemainingIssues += [PSCustomObject]@{
+                Id = $det.Id
+                Title = $det.Title
+                Category = $det.Category
+            }
+
+            if ($criticalCategories -contains $det.Category) {
+                $hasCritical = $true
+                if ($det.Category -eq "RegistryHives") {
+                    $criticalReasons += "Corrupt registry hives detected - requires repair install to rebuild registry structure"
+                } elseif ($det.Category -eq "PhysicalFs") {
+                    $criticalReasons += "Physical filesystem corruption detected - requires repair install to rebuild system files"
+                }
+            }
+        }
+
+        # If multiple critical issues or specific severe cases, recommend repair install
+        if ($hasCritical -or $remainingCount -ge 3) {
+            $result.RequiresRepairInstall = $true
+            $result.RepairInstallReason = $criticalReasons -join "; "
+            if ($remainingCount -ge 3) {
+                $result.RepairInstallReason += "Multiple unresolved issues ($remainingCount) suggest deeper system corruption"
+            }
+
+            Write-Host "[Step 3/3] CRITICAL ISSUES DETECTED" -ForegroundColor Red
+            Write-Host "===============================================================" -ForegroundColor Red
+            Write-Host "The following critical issues cannot be fixed automatically:" -ForegroundColor Yellow
+            foreach ($det in $rescan.Detections) {
+                Write-Host "  - [$($det.Id)] $($det.Title) (Category: $($det.Category))" -ForegroundColor Red
+            }
+            Write-Host ""
+            Write-Host "RECOMMENDATION: Repair Install Required" -ForegroundColor Yellow
+            Write-Host "===============================================================" -ForegroundColor Yellow
+            Write-Host $result.RepairInstallReason -ForegroundColor White
+            Write-Host ""
+            Write-Host "A repair install (in-place upgrade) will:" -ForegroundColor Cyan
+            Write-Host "  ✓ Reinstall Windows system files" -ForegroundColor Green
+            Write-Host "  ✓ Rebuild component store" -ForegroundColor Green
+            Write-Host "  ✓ Re-register services and boot configuration" -ForegroundColor Green
+            Write-Host "  ✓ KEEP your files, apps, and user profiles" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "You will need:" -ForegroundColor Yellow
+            Write-Host "  - Windows ISO matching your current edition and build family" -ForegroundColor White
+            Write-Host "  - Same architecture (x64/x86)" -ForegroundColor White
+            Write-Host "  - Same language" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Use the 'Repair Install Forcer' feature in this tool to proceed.`n" -ForegroundColor Cyan
+
+            $result.Success = $false
+            $result.Message = "Critical issues detected. Repair install recommended."
+        } else {
+            Write-Host "[PARTIAL SUCCESS] Some issues remain but are non-critical." -ForegroundColor Yellow
+            Write-Host "You may try running the fixer again, or use manual repair options.`n" -ForegroundColor White
+            $result.Success = $true
+            $result.Message = "Most issues fixed. Some non-critical issues remain."
+        }
+    } else {
+        Write-Host "[SUCCESS] All issues have been fixed!`n" -ForegroundColor Green
+        Write-Host "Your system should now boot successfully." -ForegroundColor Green
+        Write-Host "If you still experience boot issues, try:" -ForegroundColor Yellow
+        Write-Host "  - Restarting your computer" -ForegroundColor White
+        Write-Host "  - Running system file repair (SFC/DISM)" -ForegroundColor White
+        Write-Host "  - Checking for driver updates`n" -ForegroundColor White
+        $result.Success = $true
+        $result.Message = "All issues fixed successfully."
+    }
+
+    if ($PassThru) {
+        return $result
+    }
+}
+
 function Optimize-RepairPerformance {
     <#
     .SYNOPSIS
@@ -1526,6 +1716,129 @@ function Get-WindowsVolumes {
     Get-Volume | Where-Object FileSystem |
         Sort-Object DriveLetter |
         Select DriveLetter, FileSystemLabel, Size, HealthStatus
+}
+
+function Get-WindowsInstallations {
+    <#
+    .SYNOPSIS
+    Scans all drives and finds Windows installations with detailed volume information.
+    .DESCRIPTION
+    Scans all available drives to find Windows installations by checking for:
+    - \Windows\System32\ntoskrnl.exe (kernel file)
+    - \Windows\System32\config\SYSTEM (registry hive)
+    
+    Returns detailed information about each Windows installation including:
+    - Drive letter
+    - Volume label
+    - Size and free space
+    - Health status
+    - OS version (if accessible)
+    - Whether it's the current running OS
+    - Boot type (UEFI/Legacy)
+    .OUTPUTS
+    Array of PSCustomObject with Windows installation details
+    #>
+    $installations = @()
+    
+    # Get all volumes with drive letters
+    $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystem } | Sort-Object DriveLetter
+    
+    foreach ($vol in $volumes) {
+        $drive = $vol.DriveLetter
+        $windowsPath = "$drive`:\Windows"
+        $kernelPath = "$drive`:\Windows\System32\ntoskrnl.exe"
+        $systemHive = "$drive`:\Windows\System32\config\SYSTEM"
+        
+        # Check if this is a Windows installation
+        $isWindows = $false
+        if (Test-Path $kernelPath) {
+            $isWindows = $true
+        } elseif (Test-Path $systemHive) {
+            $isWindows = $true
+        }
+        
+        if ($isWindows) {
+            # Get partition info for boot type
+            $partition = Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue
+            $bootType = "Unknown"
+            $diskNumber = $null
+            $partitionNumber = $null
+            
+            if ($partition) {
+                $diskNumber = $partition.DiskNumber
+                $partitionNumber = $partition.PartitionNumber
+                $disk = Get-Disk -Number $diskNumber -ErrorAction SilentlyContinue
+                if ($disk) {
+                    $bootType = if ($disk.PartitionStyle -eq 'GPT') { "UEFI" } else { "Legacy BIOS" }
+                }
+            }
+            
+            # Try to get OS version
+            $osVersion = "Unknown"
+            $osBuild = "Unknown"
+            $osEdition = "Unknown"
+            
+            try {
+                if (Test-Path "$windowsPath\System32\config\SOFTWARE") {
+                    # Try to load offline registry to get OS info
+                    $regMount = "HKLM\TEMP_OSINFO_$drive"
+                    try {
+                        reg load "$regMount" "$windowsPath\System32\config\SOFTWARE" 2>&1 | Out-Null
+                        $osInfo = Get-ItemProperty -Path "$regMount\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue
+                        if ($osInfo) {
+                            $osVersion = if ($osInfo.ProductName) { $osInfo.ProductName } else { "Windows" }
+                            $osBuild = if ($osInfo.CurrentBuild) { $osInfo.CurrentBuild } else { "Unknown" }
+                            $osEdition = if ($osInfo.EditionID) { $osInfo.EditionID } else { "Unknown" }
+                        }
+                        reg unload "$regMount" 2>&1 | Out-Null
+                    } catch {
+                        # Registry load failed, use defaults
+                        reg unload "$regMount" 2>&1 | Out-Null
+                    }
+                }
+            } catch {
+                # Ignore errors getting OS info
+            }
+            
+            # Calculate size info
+            $sizeGB = [math]::Round($vol.Size / 1GB, 2)
+            $freeGB = if ($vol.SizeRemaining) { [math]::Round($vol.SizeRemaining / 1GB, 2) } else { 0 }
+            $usedGB = $sizeGB - $freeGB
+            $usedPercent = if ($sizeGB -gt 0) { [math]::Round(($usedGB / $sizeGB) * 100, 1) } else { 0 }
+            
+            # Check if this is the current running OS
+            $isCurrentOS = ($env:SystemDrive -eq "$drive`:")
+            
+            $install = [PSCustomObject]@{
+                DriveLetter = $drive
+                Drive = "$drive`:"
+                WindowsPath = $windowsPath
+                VolumeLabel = if ($vol.FileSystemLabel) { $vol.FileSystemLabel } else { "Local Disk" }
+                SizeGB = $sizeGB
+                FreeGB = $freeGB
+                UsedGB = $usedGB
+                UsedPercent = $usedPercent
+                HealthStatus = if ($vol.HealthStatus) { $vol.HealthStatus.ToString() } else { "Unknown" }
+                FileSystem = if ($vol.FileSystem) { $vol.FileSystem } else { "Unknown" }
+                OSVersion = $osVersion
+                OSBuild = $osBuild
+                OSEdition = $osEdition
+                IsCurrentOS = $isCurrentOS
+                BootType = $bootType
+                DiskNumber = $diskNumber
+                PartitionNumber = $partitionNumber
+                DisplayName = if ($isCurrentOS) { 
+                    "$drive`: - $($vol.FileSystemLabel) (Current OS - $osVersion Build $osBuild)" 
+                } else { 
+                    "$drive`: - $($vol.FileSystemLabel) ($osVersion Build $osBuild)" 
+                }
+            }
+            
+            $installations += $install
+        }
+    }
+    
+    return $installations
 }
 
 function Get-AllBootableOS {
@@ -4737,7 +5050,39 @@ function Get-HardwareSupportInfo {
 }
 
 function Run-BootDiagnosis {
-    param($Drive = "C")
+    <#
+    .SYNOPSIS
+    Comprehensive boot diagnosis that analyzes all boot phases and components.
+    .DESCRIPTION
+    This function performs a complete boot stack analysis covering 8 major phases:
+    1. UEFI/GPT Integrity - Checks EFI partition, format, and structure
+    2. BCD File & Integrity - Validates Boot Configuration Data exists and is accessible
+    3. BCD Entries Validation - Verifies boot manager and default entries are present
+    4. WinRE Access - Checks Windows Recovery Environment availability
+    5. Driver Matching - Scans for missing storage controller drivers
+    6. Windows Kernel - Verifies critical system files exist
+    7. Boot Log Analysis - Checks for boot log files for driver issues
+    8. Event Log Analysis - Validates system event logs for crash information
+    
+    Estimated time: 2-5 minutes (regular mode) or 5-10 minutes (verbose mode)
+    .PARAMETER Drive
+    Target Windows drive letter (default C)
+    .PARAMETER Verbose
+    Enable verbose mode with detailed command logging and progress updates
+    .PARAMETER ProgressCallback
+    Scriptblock to call for progress updates: { param($phase, $message, $command) }
+    .PARAMETER LogFile
+    Path to log file for command output (opens in Notepad if provided)
+    #>
+    param(
+        $Drive = "C",
+        [switch]$Verbose,
+        [scriptblock]$ProgressCallback,
+        [string]$LogFile
+    )
+    
+    $startTime = Get-Date
+    $commandLog = New-Object System.Collections.ArrayList
     
     # Normalize drive letter
     if ($Drive -match '^([A-Z]):?$') {
@@ -4750,12 +5095,74 @@ function Run-BootDiagnosis {
     $report = New-Object System.Text.StringBuilder
     $issues = @()
     
+    # Define the 8 actual phases
+    $phases = @(
+        @{ Number = 1; Name = "UEFI/GPT Integrity Check"; Description = "Checking EFI partition, format (FAT32), and Microsoft Boot folder structure" },
+        @{ Number = 2; Name = "BCD File & Integrity"; Description = "Locating and validating Boot Configuration Data file accessibility" },
+        @{ Number = 3; Name = "BCD Entries Validation"; Description = "Verifying boot manager and default boot entries exist" },
+        @{ Number = 4; Name = "WinRE Access"; Description = "Checking Windows Recovery Environment availability and accessibility" },
+        @{ Number = 5; Name = "Driver Matching"; Description = "Scanning for missing or errored storage controller drivers (VMD, RAID, NVMe)" },
+        @{ Number = 6; Name = "Windows Kernel"; Description = "Verifying critical system files (ntoskrnl.exe) exist" },
+        @{ Number = 7; Name = "Boot Log Analysis"; Description = "Checking for boot log files (ntbtlog.txt) for driver loading issues" },
+        @{ Number = 8; Name = "Event Log Analysis"; Description = "Validating system event logs for crash and error information" }
+    )
+    
     $report.AppendLine("AUTOMATED BOOT DIAGNOSIS REPORT") | Out-Null
     $report.AppendLine("===============================================================") | Out-Null
     $report.AppendLine("Target Windows Installation: $Drive`:\Windows") | Out-Null
     $report.AppendLine("Status: $osContext") | Out-Null
+    $report.AppendLine("Mode: $(if ($Verbose) { 'VERBOSE (Detailed)' } else { 'REGULAR (Standard)' })") | Out-Null
+    $report.AppendLine("Total Phases: $($phases.Count)") | Out-Null
     $report.AppendLine("Scan Time: $([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))") | Out-Null
     $report.AppendLine("") | Out-Null
+    $report.AppendLine("BOOT DIAGNOSIS PROCESS OVERVIEW:") | Out-Null
+    $report.AppendLine("===============================================================") | Out-Null
+    foreach ($phase in $phases) {
+        $report.AppendLine("Phase $($phase.Number): $($phase.Name)") | Out-Null
+        $report.AppendLine("  -> $($phase.Description)") | Out-Null
+    }
+    $report.AppendLine("===============================================================") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Helper function to log commands
+    function Write-CommandLog {
+        param([string]$Command, [string]$Output = "")
+        $timestamp = Get-Date -Format "HH:mm:ss"
+        $logEntry = "[$timestamp] $Command"
+        if ($Output) {
+            $logEntry += "`n  Output: $Output"
+        }
+        [void]$commandLog.Add($logEntry)
+        
+        if ($LogFile) {
+            Add-Content -Path $LogFile -Value $logEntry -ErrorAction SilentlyContinue
+        }
+        
+        if ($Verbose) {
+            Write-Host $logEntry -ForegroundColor Cyan
+        }
+    }
+    
+    # Helper function to update progress
+    function Update-Progress {
+        param([int]$PhaseNumber, [string]$Message, [string]$Command = "")
+        if ($ProgressCallback) {
+            $phase = $phases | Where-Object { $_.Number -eq $PhaseNumber }
+            $progress = @{
+                Phase = $PhaseNumber
+                PhaseName = if ($phase) { $phase.Name } else { "Unknown" }
+                TotalPhases = $phases.Count
+                Percentage = [math]::Round(($PhaseNumber / $phases.Count) * 100)
+                Message = $Message
+                Command = $Command
+                Elapsed = (Get-Date) - $startTime
+            }
+            & $ProgressCallback $progress
+        }
+        if ($Command) {
+            Write-CommandLog -Command $Command
+        }
+    }
     
     # 1. UEFI/GPT Integrity Check
     $efiPartition = $null
@@ -4821,7 +5228,8 @@ function Run-BootDiagnosis {
         $report.AppendLine("[ERROR] Failed to check EFI partition: $_")
     }
     
-    # 2. Check for BCD File and Integrity
+    # Phase 2: Check for BCD File and Integrity
+    Update-Progress -PhaseNumber 2 -Message "Locating and validating BCD file..." -Command "bcdedit /enum"
     $bcdFound = $false
     $bcdPath = $null
     $bcdAccessible = $false
@@ -4831,6 +5239,7 @@ function Run-BootDiagnosis {
         # First, check if bcdedit actually works (most reliable test)
         try {
             $bcdTest = bcdedit /enum 2>&1 | Out-String
+            Write-CommandLog -Command "bcdedit /enum" -Output "BCD accessibility check"
             if ($bcdTest -match "Windows Boot Manager" -or $bcdTest -match "identifier.*\{default\}") {
                 $bcdAccessible = $true
                 $report.AppendLine("[PASS] BCD Store is accessible via bcdedit (system can boot)")
@@ -4939,10 +5348,12 @@ function Run-BootDiagnosis {
         $report.AppendLine("[WARNING] Could not check BCD file location: $_")
     }
     
-    # 3. Validate BCD Entries
+    # Phase 3: Validate BCD Entries
+    Update-Progress -PhaseNumber 3 -Message "Validating boot manager and default entries..." -Command "bcdedit /enum {bootmgr}"
     if ($bcdFound) {
         try {
             $bcdOutput = bcdedit /enum 2>&1
+            Write-CommandLog -Command "bcdedit /enum" -Output "Enumerating BCD entries"
             $hasBootMgr = $bcdOutput | Select-String "Windows Boot Manager" -Quiet
             $hasDefault = $bcdOutput | Select-String "identifier.*\{default\}" -Quiet
             
@@ -4998,9 +5409,11 @@ function Run-BootDiagnosis {
         }
     }
     
-    # 4. WinRE Access Validation (Bootloader "Good Enough" Check)
+    # Phase 4: WinRE Access Validation (Bootloader "Good Enough" Check)
+    Update-Progress -PhaseNumber 4 -Message "Checking Windows Recovery Environment..." -Command "reagentc /info"
     try {
         $reagentcOutput = reagentc /info 2>&1 | Out-String
+        Write-CommandLog -Command "reagentc /info" -Output "WinRE status check"
         if ($reagentcOutput -match "Windows RE status:\s*(\w+)") {
             $reStatus = $matches[1]
             if ($reStatus -eq "Enabled") {
@@ -5086,12 +5499,14 @@ function Run-BootDiagnosis {
         $report.AppendLine("[WARNING] Could not check WinRE status: $_")
     }
     
-    # 5. Driver Matching - Scan Hardware IDs for storage controllers
+    # Phase 5: Driver Matching - Scan Hardware IDs for storage controllers
+    Update-Progress -PhaseNumber 5 -Message "Scanning for missing storage drivers..." -Command "Get-PnpDevice"
+    Write-CommandLog -Command "Get-PnpDevice" -Output "Scanning PnP devices for storage controllers"
     # Only report devices with error codes that indicate missing drivers
     # Error code 28 = Driver not installed (most common)
     # Error code 1 = Device not configured properly (often driver issue)
     # Error code 3 = Driver may be corrupted
-    $missingStorage = Get-PnpDevice | Where-Object { 
+    $missingStorage = Get-PnpDevice | Where-Object {
         ($_.ConfigManagerErrorCode -eq 28 -or $_.ConfigManagerErrorCode -eq 1 -or $_.ConfigManagerErrorCode -eq 3) -and 
         ($_.Class -match 'SCSI|Storage|System|DiskDrive' -or $_.FriendlyName -match 'VMD|RAID|NVMe|Storage|Controller')
     }
@@ -5130,8 +5545,10 @@ function Run-BootDiagnosis {
         $report.AppendLine("[PASS] No missing storage controllers detected")
     }
     
-    # 6. Check for Windows Kernel
-    if (Test-Path "$Drive`:\Windows\System32\ntoskrnl.exe") { 
+    # Phase 6: Check for Windows Kernel
+    Update-Progress -PhaseNumber 6 -Message "Verifying Windows kernel files..." -Command "Test-Path $Drive`:\Windows\System32\ntoskrnl.exe"
+    if (Test-Path "$Drive`:\Windows\System32\ntoskrnl.exe") {
+        Write-CommandLog -Command "Test-Path $Drive`:\Windows\System32\ntoskrnl.exe" -Output "Kernel file found" 
         $report.AppendLine("[PASS] Windows System files detected on $Drive`:")
     } else { 
         $report.AppendLine("[FAIL] Windows Kernel not found. Drive may be formatted or corrupted.")
@@ -5143,15 +5560,34 @@ function Run-BootDiagnosis {
         }
     }
     
-    # 7. Check for boot log
+    # Phase 7: Check for boot log
+    Update-Progress -PhaseNumber 7 -Message "Checking for boot log files..." -Command "Test-Path $Drive`:\Windows\ntbtlog.txt"
     if (Test-Path "$Drive`:\Windows\ntbtlog.txt") {
         $report.AppendLine("[INFO] Boot log (ntbtlog.txt) found - can be analyzed for driver issues.")
+        Write-CommandLog -Command "Test-Path $Drive`:\Windows\ntbtlog.txt" -Output "Boot log found"
+    } else {
+        Write-CommandLog -Command "Test-Path $Drive`:\Windows\ntbtlog.txt" -Output "Boot log not found"
     }
     
-    # 8. Check for event logs
+    # Phase 8: Check for event logs
+    Update-Progress -PhaseNumber 8 -Message "Validating system event logs..." -Command "Test-Path $Drive`:\Windows\System32\winevt\Logs\System.evtx"
     if (Test-Path "$Drive`:\Windows\System32\winevt\Logs\System.evtx") {
         $report.AppendLine("[INFO] System event log found - can be analyzed for crashes and errors.")
+        Write-CommandLog -Command "Test-Path $Drive`:\Windows\System32\winevt\Logs\System.evtx" -Output "Event log found"
+    } else {
+        Write-CommandLog -Command "Test-Path $Drive`:\Windows\System32\winevt\Logs\System.evtx" -Output "Event log not found"
     }
+    
+    # Final progress update
+    Update-Progress -PhaseNumber 8 -Message "Analysis complete" -Command ""
+    
+    $elapsed = (Get-Date) - $startTime
+    $report.AppendLine("") | Out-Null
+    $report.AppendLine("===============================================================") | Out-Null
+    $report.AppendLine("DIAGNOSIS COMPLETE") | Out-Null
+    $report.AppendLine("Total Time: $([math]::Round($elapsed.TotalMinutes, 2)) minutes") | Out-Null
+    $report.AppendLine("Issues Found: $($issues.Count)") | Out-Null
+    $report.AppendLine("===============================================================") | Out-Null
     
     # Summary Section
     $report.AppendLine("")
@@ -5178,11 +5614,190 @@ function Run-BootDiagnosis {
         }
     }
     
+    # Write command log summary if verbose or log file provided
+    if ($Verbose -or $LogFile) {
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("COMMAND LOG:") | Out-Null
+        $report.AppendLine("===============================================================") | Out-Null
+        foreach ($logEntry in $commandLog) {
+            $report.AppendLine($logEntry) | Out-Null
+        }
+    }
+    
+    # Open log file in Notepad if provided
+    if ($LogFile -and (Test-Path $LogFile)) {
+        try {
+            Start-Process notepad.exe $LogFile -ErrorAction SilentlyContinue
+        } catch {
+            # Ignore if Notepad can't be opened
+        }
+    }
+    
     return @{
         Report = $report.ToString()
         Issues = $issues
         HasCriticalIssues = ($issues | Where-Object { $_.Severity -eq "Critical" }).Count -gt 0
+        CommandLog = $commandLog
+        ElapsedTime = (Get-Date) - $startTime
     }
+}
+
+function Start-BootDiagnosisAndRepair {
+    <#
+    .SYNOPSIS
+    Comprehensive boot diagnosis with optional automated repair.
+    .DESCRIPTION
+    This function provides three modes:
+    1. DIAGNOSIS ONLY - Finds what's broken without fixing
+    2. DIAGNOSIS + FIX - Automatically diagnoses and fixes issues
+    3. DIAGNOSIS THEN ASK - Diagnoses first, then asks user if they want to fix
+    
+    The diagnosis covers 8 phases:
+    1. UEFI/GPT Integrity Check
+    2. BCD File & Integrity
+    3. BCD Entries Validation
+    4. WinRE Access
+    5. Driver Matching
+    6. Windows Kernel
+    7. Boot Log Analysis
+    8. Event Log Analysis
+    .PARAMETER Drive
+    Target Windows drive letter (default C)
+    .PARAMETER Mode
+    Operation mode: "DiagnosisOnly", "DiagnosisAndFix", or "DiagnosisThenAsk" (default: "DiagnosisOnly")
+    .PARAMETER Verbose
+    Enable verbose mode with detailed command logging
+    .PARAMETER ProgressCallback
+    Scriptblock to call for progress updates
+    .PARAMETER LogFile
+    Path to log file for command output
+    #>
+    param(
+        $Drive = "C",
+        [ValidateSet("DiagnosisOnly", "DiagnosisAndFix", "DiagnosisThenAsk")]
+        [string]$Mode = "DiagnosisOnly",
+        [switch]$Verbose,
+        [scriptblock]$ProgressCallback,
+        [string]$LogFile
+    )
+    
+    $result = @{
+        Success = $false
+        Diagnosis = $null
+        Repair = $null
+        Mode = $Mode
+        Report = ""
+        IssuesFound = 0
+        IssuesFixed = 0
+    }
+    
+    $report = New-Object System.Text.StringBuilder
+    $separator = "=" * 80
+    
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("BOOT DIAGNOSIS AND REPAIR") | Out-Null
+    $report.AppendLine("Mode: $Mode") | Out-Null
+    $report.AppendLine("Target Drive: $Drive`:") | Out-Null
+    $report.AppendLine($separator) | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    # Step 1: Run Diagnosis
+    $report.AppendLine("STEP 1: Running Boot Diagnosis...") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    try {
+        $diagnosis = Run-BootDiagnosis -Drive $Drive -Verbose:$Verbose -ProgressCallback $ProgressCallback -LogFile $LogFile
+        $result.Diagnosis = $diagnosis
+        $result.IssuesFound = $diagnosis.Issues.Count
+        
+        $report.AppendLine($diagnosis.Report) | Out-Null
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("Diagnosis Complete: $($diagnosis.Issues.Count) issue(s) found") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($diagnosis.Issues.Count -eq 0) {
+            $report.AppendLine("[SUCCESS] No boot issues detected. System appears healthy.") | Out-Null
+            $result.Success = $true
+            $result.Report = $report.ToString()
+            return $result
+        }
+        
+        # Show issues summary
+        $report.AppendLine("ISSUES DETECTED:") | Out-Null
+        $report.AppendLine($separator) | Out-Null
+        $num = 1
+        foreach ($issue in $diagnosis.Issues) {
+            $report.AppendLine("$num. [$($issue.Severity)] $($issue.Type)") | Out-Null
+            $report.AppendLine("   Description: $($issue.Description)") | Out-Null
+            $report.AppendLine("   Recommendation: $($issue.Recommendation)") | Out-Null
+            $report.AppendLine("") | Out-Null
+            $num++
+        }
+        $report.AppendLine($separator) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+    } catch {
+        $errorMsg = "Diagnosis failed: $_"
+        $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    # Step 2: Handle repair based on mode
+    if ($Mode -eq "DiagnosisOnly") {
+        $report.AppendLine("Mode: DIAGNOSIS ONLY - No fixes will be applied.") | Out-Null
+        $report.AppendLine("Review the issues above and run again with Mode='DiagnosisAndFix' to apply fixes.") | Out-Null
+        $result.Success = $true
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    if ($Mode -eq "DiagnosisThenAsk") {
+        # Return result with AskForFix flag
+        $result.AskForFix = $true
+        $result.Report = $report.ToString()
+        return $result
+    }
+    
+    # Mode: DiagnosisAndFix - Automatically run repair
+    $report.AppendLine("STEP 2: Running Automated Boot Repair...") | Out-Null
+    $report.AppendLine("") | Out-Null
+    
+    try {
+        $repair = Start-AutomatedBootRepair -TargetDrive $Drive -SkipConfirmation:$false -CreateRestorePoint:$true
+        $result.Repair = $repair
+        
+        $report.AppendLine($repair.Report) | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        if ($repair.Success) {
+            $report.AppendLine("[SUCCESS] Boot repair completed successfully.") | Out-Null
+            $report.AppendLine("Steps Completed: $($repair.StepsCompleted.Count)") | Out-Null
+            if ($repair.StepsFailed.Count -gt 0) {
+                $report.AppendLine("Steps Failed: $($repair.StepsFailed.Count)") | Out-Null
+            }
+            $result.Success = $true
+            $result.IssuesFixed = $repair.StepsCompleted.Count
+        } else {
+            $report.AppendLine("[WARNING] Boot repair completed with some failures.") | Out-Null
+            $report.AppendLine("Steps Completed: $($repair.StepsCompleted.Count)") | Out-Null
+            $report.AppendLine("Steps Failed: $($repair.StepsFailed.Count)") | Out-Null
+            if ($repair.Errors.Count -gt 0) {
+                $report.AppendLine("Errors:") | Out-Null
+                foreach ($error in $repair.Errors) {
+                    $report.AppendLine("  - $error") | Out-Null
+                }
+            }
+        }
+        
+    } catch {
+        $errorMsg = "Repair failed: $_"
+        $report.AppendLine("[ERROR] $errorMsg") | Out-Null
+        $result.Errors = @($errorMsg)
+    }
+    
+    $result.Report = $report.ToString()
+    return $result
 }
 
 function Find-DuplicateBCEEntries {
@@ -8745,6 +9360,38 @@ Forces Windows Setup to perform a "repair-only" in-place upgrade that:
   - KEEPS: Apps, Data, User profiles
   - WITHOUT: Feature jump, Build bump, Edition change
 
+⚠️ WHAT GETS KEPT vs WHAT NEEDS REINSTALL ⚠️
+-------------------------------------------------------------------------------
+✅ YOUR FILES ARE SAFE:
+  ✓ All user documents (Documents, Pictures, Videos, Downloads, Desktop)
+  ✓ All user data in user profile folders
+  ✓ Files on other drives (D:, E:, etc.) are completely untouched
+  ✓ Personal files in C:\Users\<YourUsername> are preserved
+
+✅ YOUR INSTALLED PROGRAMS ARE KEPT:
+  ✓ All installed applications remain functional
+  ✓ Program Files and Program Files (x86) are preserved
+  ✓ Application settings and configurations are maintained
+  ✓ Installed games and software continue to work
+
+✅ MOST SETTINGS ARE PRESERVED:
+  ✓ User account settings
+  ✓ Desktop wallpaper and personalization
+  ✓ File associations
+  ✓ Most Windows settings
+  ⚠️ Some system-level settings may reset to defaults
+
+⚠️ WHAT MAY NEED REINSTALL:
+  ⚠️ Windows Updates: Some updates may need to be reinstalled after repair
+  ⚠️ Drivers: Some third-party drivers may need reinstallation if they were
+     corrupted (Windows will attempt to reinstall automatically)
+  ⚠️ Some system-level customizations may be reset
+
+❌ WHAT DOES NOT GET KEPT (Clean Install Only):
+  This repair install KEEPS everything. Only a clean install would require
+  reinstalling programs. This repair install does NOT require reinstalling
+  anything - it's designed to preserve your entire system.
+
 HARD REQUIREMENTS (MUST MATCH):
 -------------------------------------------------------------------------------
   [OK] Edition: EXACT match (Pro → Pro, Home → Home)
@@ -8812,9 +9459,10 @@ IMPORTANT NOTES:
 -------------------------------------------------------------------------------
   - This is NOT a true "repair-only" button - it's a same-build in-place upgrade
   - Microsoft uses this exact method internally to fix "zombie Windows" machines
-  - Always backup important data before proceeding
+  - Always backup important data before proceeding (though files are preserved)
   - Have BitLocker recovery key ready if drive is encrypted
   - Process can take 30-60 minutes depending on system speed
+  - Your files and programs will remain intact - this is NOT a clean install
 
 "@
     return $instructions
@@ -9088,7 +9736,7 @@ function Start-OfflineRepairInstall {
 
 function Get-OfflineRepairInstallInstructions {
     $instructions = @"
-OFFLINE REPAIR INSTALL FORCER - INSTRUCTIONS
+OFFLINE REPAIR INSTALL FORCER - INSTRUCTIONS (WinPE/WinRE)
 ===============================================================
 
 WHAT THIS DOES:
@@ -9110,6 +9758,46 @@ This method:
 This method is documented only in advanced forums (MDL, Win-Raid).
 Use at your own risk. This is NOT officially supported by Microsoft.
 
+⚠️ CRITICAL: WHAT GETS KEPT vs WHAT NEEDS REINSTALL (OFFLINE MODE) ⚠️
+-------------------------------------------------------------------------------
+The success of preserving your files and programs depends on the condition
+of your offline Windows installation:
+
+✅ YOUR FILES WILL BE KEPT IF:
+  ✓ Registry hives (SYSTEM, SOFTWARE) are loadable and not severely corrupted
+  ✓ User profile folders (C:\Users\<YourUsername>) are intact
+  ✓ Files on other drives (D:, E:, etc.) are completely untouched
+  ✓ Documents, Pictures, Videos, Downloads folders are accessible
+
+✅ YOUR INSTALLED PROGRAMS WILL BE KEPT IF:
+  ✓ SOFTWARE registry hive is loadable and contains program registry entries
+  ✓ Program Files and Program Files (x86) folder structures are intact
+  ✓ Application files are not corrupted or missing
+  ✓ Registry entries for installed programs are present
+
+❌ YOUR PROGRAMS MAY NEED REINSTALL IF:
+  ❌ SOFTWARE registry hive is corrupted or unloadable
+     → Programs will be lost and need reinstall
+  ❌ Program Files structure is severely damaged
+     → Programs may not function and need reinstall
+  ❌ Component store (WinSxS) is corrupted
+     → Some programs may fail and need reinstall
+
+❌ YOUR FILES MAY BE LOST IF:
+  ❌ User profile folders are corrupted or inaccessible
+  ❌ Registry is too damaged for migration engine to run
+  ❌ Disk corruption prevents file access
+
+⚠️ BOTTOM LINE FOR OFFLINE REPAIR INSTALL:
+-------------------------------------------------------------------------------
+  ✅ FILES: Usually KEPT if registry and folders are intact
+  ⚠️ PROGRAMS: KEPT if SOFTWARE registry and Program Files are intact
+  ❌ PROGRAMS: NEED REINSTALL if SOFTWARE registry is corrupted
+  ❌ EVERYTHING: NEEDS REINSTALL if registry is too damaged (clean install)
+
+  → If your system won't boot due to registry corruption, there's a HIGH RISK
+    that programs will need to be reinstalled, even though files may be preserved.
+
 HARD REQUIREMENTS:
 -------------------------------------------------------------------------------
   [OK] Must boot from WinPE or WinRE (SystemDrive = X:)
@@ -9118,20 +9806,30 @@ HARD REQUIREMENTS:
   [OK] ISO must match: Edition, Architecture, Build Family
   [OK] Component store (WinSxS) should be readable
 
-WHEN THIS WORKS:
+WHEN THIS WORKS (Best Case Scenario):
 -------------------------------------------------------------------------------
   [OK] Registry is intact (can be loaded)
   [OK] Program Files structure is consistent
   [OK] Component store is readable
   [OK] Migration engine can access offline files
+  → Result: Files AND programs are preserved ✅
 
-WHEN THIS FAILS:
+WHEN THIS PARTIALLY WORKS (Files Kept, Programs Lost):
+-------------------------------------------------------------------------------
+  [OK] SYSTEM registry is loadable
+  [⚠️] SOFTWARE registry is corrupted or missing program entries
+  [OK] User profile folders are intact
+  → Result: Files preserved ✅, Programs need reinstall ❌
+
+WHEN THIS FAILS (Everything Needs Reinstall):
 -------------------------------------------------------------------------------
   [X] Pending CBS operations (pending.xml exists)
-  [X] Corrupt SOFTWARE registry hive
+  [X] Corrupt SOFTWARE registry hive (unloadable)
   [X] Missing servicing metadata
   [X] Component store (WinSxS) is corrupted
   [X] Program Files structure is inconsistent
+  [X] Registry too damaged for migration
+  → Result: Clean install required ❌
 
 STEP-BY-STEP PROCESS:
 -------------------------------------------------------------------------------
@@ -9158,6 +9856,7 @@ STEP-BY-STEP PROCESS:
    - Click "Check Prerequisites" button
    - Review any warnings or issues
    - Fix blocking issues before proceeding
+   - ⚠️ Pay attention to registry hive status - this determines if programs are kept
 
 6. START OFFLINE REPAIR INSTALL
    - Tool will:
@@ -9180,6 +9879,7 @@ ADVANCED NOTES:
   - If repair fails, you can restore hives from backup
   - Migration engine runs offline, so it may take longer
   - This method bypasses normal Setup checks
+  - ⚠️ If SOFTWARE registry is corrupted, expect to reinstall programs
 
 ALTERNATIVES IF THIS FAILS:
 -------------------------------------------------------------------------------

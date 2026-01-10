@@ -25,7 +25,7 @@ LLMs fail most often when they generate too early.
 🔍 LAYER 2 — PARSER-ONLY MODE (NO LOGIC)
 
 Rule: Syntax correctness before logic correctness.
-
+, an
 Enforced Prompt Snippet
 You are in PARSER MODE.
 

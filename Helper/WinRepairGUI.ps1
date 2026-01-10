@@ -90,18 +90,28 @@
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
 # Load centralized logging system
 try {
-    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-    if (Test-Path "$scriptRoot\ErrorLogging.ps1") {
-        . "$scriptRoot\ErrorLogging.ps1"
-        $null = Initialize-ErrorLogging -ScriptRoot $scriptRoot -RetentionDays 7
-        Add-MiracleBootLog -Level "INFO" -Message "WinRepairGUI.ps1 loaded" -Location "WinRepairGUI.ps1"
+    # Determine script root safely
+    if ($PSScriptRoot) {
+        $scriptRoot = $PSScriptRoot
+    } elseif ($MyInvocation.MyCommand.Path) {
+        $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        # Fallback: try to get from current location
+        $scriptRoot = if (Test-Path "Helper\ErrorLogging.ps1") { "Helper" } else { Get-Location }
+    }
+    
+    if ($scriptRoot -and (Test-Path "$scriptRoot\ErrorLogging.ps1")) {
+        . "$scriptRoot\ErrorLogging.ps1" -ErrorAction SilentlyContinue
+        $null = Initialize-ErrorLogging -ScriptRoot $scriptRoot -RetentionDays 7 -ErrorAction SilentlyContinue
+        Add-MiracleBootLog -Level "INFO" -Message "WinRepairGUI.ps1 loaded" -Location "WinRepairGUI.ps1" -ErrorAction SilentlyContinue
     }
 } catch {
-    # Silently continue if logging fails
+    # Silently continue if logging fails - don't block GUI launch
 }
 
 # Helper function to safely get controls with null checking
@@ -332,7 +342,9 @@ function Start-GUI {
                             <TextBlock Name="TxtBootDiagnosis" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to run comprehensive boot diagnosis"/>
                             
                             <Button Content="7. Precision Detection &amp; Repair (ordered plan)" Height="40" Name="BtnPrecisionScan" Background="#d78700" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtPrecisionScan" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Runs precision detection with dry-run preview by default. Uncheck Test Mode to apply fixes and honor BRICKME/BitLocker safeguards."/>
+                            <TextBlock Name="TxtPrecisionScan" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="DIAGNOSE-ONLY MODE (Default): Runs precision detection with dry-run preview. Shows what's broken without fixing. Uncheck Test Mode checkbox to apply fixes. Location: Boot Fixer tab → Button 7."/>
+                            <Button Content="8. ONE-CLICK PRECISION FIXER" Height="40" Name="BtnOneClickPrecisionFix" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5" ToolTip="Automatically fixes all detected issues. For extreme cases, offers repair install with clear warnings."/>
+                            <TextBlock Name="TxtOneClickPrecisionFix" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Fully automated: scans, fixes, verifies, and offers repair install for critical issues. No user intervention needed - just click and Windows will be fixed."/>
 </StackPanel>
                     </ScrollViewer>
                 </GroupBox>
@@ -391,7 +403,7 @@ function Start-GUI {
                         <Button Content="Driver Forensics" Height="35" Name="BtnDriverForensics" Background="#dc3545" Foreground="White" Width="150" Margin="0,0,10,0"/>
                         <Button Content="Analyze Boot Log" Height="35" Name="BtnAnalyzeBootLog" Background="#dc3545" Foreground="White" Width="150" Margin="0,0,10,0"/>
                         <Button Content="Analyze Event Logs" Height="35" Name="BtnAnalyzeEventLogs" Background="#17a2b8" Foreground="White" Width="150" Margin="0,0,10,0"/>
-                    <Button Content="Full Boot Diagnosis" Height="35" Name="BtnFullBootDiagnosis" Background="#28a745" Foreground="White" Width="150" Margin="0,0,10,0"/>
+                    <Button Content="Boot Diagnosis &amp; Repair" Height="35" Name="BtnFullBootDiagnosis" Background="#28a745" Foreground="White" Width="200" Margin="0,0,10,0" ToolTip="Diagnose boot issues with 3 modes: Diagnosis Only, Diagnosis + Fix, or Diagnosis Then Ask"/>
                     <Button Content="Hardware Support" Height="35" Name="BtnHardwareSupport" Background="#6f42c1" Foreground="White" Width="150" Margin="0,0,10,0"/>
                     <Button Content="Unofficial Repair Tips" Height="35" Name="BtnRepairTips" Background="#ffc107" Foreground="Black" Width="180" Margin="0,0,10,0"/>
                     <Button Content="Generate Registry Override Script" Height="35" Name="BtnGenRegScript" Background="#dc3545" Foreground="White" Width="220" Margin="0,0,10,0"/>
@@ -642,7 +654,63 @@ try {
         throw "XAML XML structure is invalid: $_"
     }
     
-    $W=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$XAML)))
+    # Parse XAML with enhanced error handling and stack overflow protection
+    try {
+        # Validate XAML size to prevent stack overflow (10MB limit)
+        $xamlSizeBytes = [System.Text.Encoding]::UTF8.GetByteCount($XAML)
+        $xamlSizeMB = [math]::Round($xamlSizeBytes / 1MB, 2)
+        
+        if ($xamlSizeMB -gt 10) {
+            throw "XAML is too large ($xamlSizeMB MB). This may cause stack overflow. Maximum recommended size: 10 MB."
+        }
+        
+        Write-Host "Parsing XAML ($xamlSizeMB MB)..." -ForegroundColor Gray
+        
+        # Use direct parsing with proper resource cleanup
+        # Note: WPF requires STA mode, so we cannot use jobs for XAML parsing
+        $xmlReader = $null
+        try {
+            # Ensure we have the XML document (already validated above)
+            if (-not $xmlDoc) {
+                $xmlDoc = [xml]$XAML
+            }
+            
+            $xmlReader = New-Object System.Xml.XmlNodeReader($xmlDoc)
+            
+            # Attempt XAML load with error context
+            Write-Host "Loading XAML into WPF window object..." -ForegroundColor Gray
+            $W = [Windows.Markup.XamlReader]::Load($xmlReader)
+            
+            if ($null -eq $W) {
+                throw "XAML parsing returned null window object"
+            }
+            
+            Write-Host "XAML parsed successfully. Window object created." -ForegroundColor Green
+        } catch {
+            $errorMsg = $_.Exception.Message
+            $innerError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $null }
+            
+            # Check for stack overflow indicators
+            if ($errorMsg -match 'stack|overflow|buffer|memory|0xC0000409|-1073740771|STATUS_STACK_BUFFER_OVERRUN') {
+                throw "CRITICAL: Stack buffer overrun detected during XAML parsing. This indicates the XAML is too complex, has circular references, or exceeds system limits. Error: $errorMsg" + $(if ($innerError) { " (Inner: $innerError)" } else { "" })
+            }
+            
+            throw "Failed to parse XAML: $errorMsg" + $(if ($innerError) { " (Inner: $innerError)" } else { "" })
+        } finally {
+            # Clean up XML reader
+            if ($xmlReader) {
+                try {
+                    $xmlReader.Close()
+                    $xmlReader.Dispose()
+                } catch {
+                    # Ignore cleanup errors
+                }
+            }
+        }
+    } catch {
+        $errorMsg = $_.Exception.Message
+        throw "XAML parsing failed: $errorMsg"
+    }
     
     # #region agent log
     try {
@@ -719,14 +787,33 @@ function Connect-EventHandler {
     }
 }
 
-# Load LogAnalysis module
-$logAnalysisPath = Join-Path $PSScriptRoot "LogAnalysis.ps1"
-if (Test-Path $logAnalysisPath) {
-    try {
-        . $logAnalysisPath
-    } catch {
-        Write-Warning "Failed to load LogAnalysis module: $_"
+# Load LogAnalysis module (with safe path resolution)
+try {
+    # Determine script root safely
+    $guiScriptRoot = if ($PSScriptRoot) { 
+        $PSScriptRoot 
+    } elseif ($MyInvocation.MyCommand.Path) { 
+        Split-Path -Parent $MyInvocation.MyCommand.Path 
+    } else {
+        # Fallback: try common locations
+        if (Test-Path "Helper\LogAnalysis.ps1") { 
+            "Helper" 
+        } elseif (Test-Path "$(Get-Location)\Helper\LogAnalysis.ps1") {
+            Join-Path (Get-Location) "Helper"
+        } else {
+            $null
+        }
     }
+    
+    if ($guiScriptRoot) {
+        $logAnalysisPath = Join-Path $guiScriptRoot "LogAnalysis.ps1"
+        if (Test-Path $logAnalysisPath) {
+            . $logAnalysisPath -ErrorAction SilentlyContinue
+        }
+    }
+} catch {
+    # Silently continue if LogAnalysis fails to load - don't block GUI launch
+    Write-Warning "Failed to load LogAnalysis module: $_" -ErrorAction SilentlyContinue
 }
 
 # Detect environment
@@ -2152,6 +2239,159 @@ if ($btnPrecisionScan) {
     })
 }
 
+# One-Click Precision Fixer button
+$btnOneClickPrecisionFix = Get-Control -Name "BtnOneClickPrecisionFix"
+if ($btnOneClickPrecisionFix) {
+    $btnOneClickPrecisionFix.Add_Click({
+        $fixerOutput = Get-Control -Name "FixerOutput"
+        $txtOneClickPrecisionFix = Get-Control -Name "TxtOneClickPrecisionFix"
+
+        # Ensure core is loaded (idempotent)
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            if ($fixerOutput) { $fixerOutput.Text = "Failed to load core engine: $_" }
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
+
+        $winDrive = [Microsoft.VisualBasic.Interaction]::InputBox("Target Windows drive letter (e.g. C):","One-Click Precision Fixer","C")
+        if ([string]::IsNullOrWhiteSpace($winDrive)) { $winDrive = "C" }
+        $winDrive = $winDrive.TrimEnd(':').ToUpper()
+        $windowsRoot = "$winDrive`:\Windows"
+
+        $espLetter = [Microsoft.VisualBasic.Interaction]::InputBox("EFI System Partition letter (default Z):","One-Click Precision Fixer","Z")
+        if ([string]::IsNullOrWhiteSpace($espLetter)) { $espLetter = "Z" }
+        $espLetter = $espLetter.TrimEnd(':').ToUpper()
+
+        try {
+            Update-StatusBar -Message "Running one-click precision fixer..." -ShowProgress
+            if ($fixerOutput) {
+                $fixerOutput.Text = "ONE-CLICK PRECISION FIXER`n===============================================================`n`nStarting automated repair process...`n`n"
+            }
+
+            # Run in background job to prevent GUI freeze
+            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+            $job = Start-Job -ScriptBlock {
+                param($WindowsRoot, $EspDriveLetter, $ActionLogPath, $CorePath)
+                . $CorePath
+                $result = Start-OneClickPrecisionFix -WindowsRoot $WindowsRoot -EspDriveLetter $EspDriveLetter -PassThru -ActionLogPath $ActionLogPath
+                return $result
+            } -ArgumentList $windowsRoot, $espLetter, "$env:TEMP\precision-actions.log", $corePath
+
+            # Monitor job progress
+            $output = ""
+            while ($job.State -eq 'Running') {
+                Start-Sleep -Milliseconds 500
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+
+            # Check for job errors
+            if ($job.State -eq 'Failed') {
+                $errorMsg = Receive-Job -Job $job -Error
+                Remove-Job -Job $job
+                if ($fixerOutput) {
+                    $fixerOutput.Text = "ONE-CLICK PRECISION FIXER FAILED`n===============================================================`n`nError: $errorMsg`n"
+                }
+                Update-StatusBar -Message "One-click precision fixer failed" -HideProgress
+                [System.Windows.MessageBox]::Show("One-click precision fixer failed: $errorMsg","Error","OK","Error") | Out-Null
+                return
+            }
+
+            $result = Receive-Job -Job $job
+            Remove-Job -Job $job
+
+            # Check if result is null
+            if ($null -eq $result) {
+                if ($fixerOutput) {
+                    $fixerOutput.Text = "ONE-CLICK PRECISION FIXER`n===============================================================`n`nError: Function returned no result. Scan may have been aborted.`n"
+                }
+                Update-StatusBar -Message "One-click precision fixer completed with no result" -HideProgress
+                return
+            }
+
+            $summary = "ONE-CLICK PRECISION FIXER RESULTS`n"
+            $summary += "===============================================================`n"
+            $summary += "Windows: $windowsRoot  ESP: $espLetter`n`n"
+
+            if ($result.Success) {
+                $summary += "[SUCCESS] $($result.Message)`n`n"
+            } else {
+                $summary += "[PARTIAL/FAILED] $($result.Message)`n`n"
+            }
+
+            if ($result.FixedIssues -and $result.FixedIssues.Count -gt 0) {
+                $summary += "FIXED ISSUES ($($result.FixedIssues.Count)):`n"
+                foreach ($issue in $result.FixedIssues) {
+                    $issueId = $issue.Id
+                    $issueTitle = $issue.Title
+                    $issueCategory = $issue.Category
+                    $summary += "  [OK] [$issueId] $issueTitle (Category: $issueCategory)`n"
+                }
+                $summary += "`n"
+            }
+
+            if ($result.RemainingIssues -and $result.RemainingIssues.Count -gt 0) {
+                $summary += "REMAINING ISSUES ($($result.RemainingIssues.Count)):`n"
+                foreach ($issue in $result.RemainingIssues) {
+                    $issueId = $issue.Id
+                    $issueTitle = $issue.Title
+                    $issueCategory = $issue.Category
+                    $summary += "  [WARN] [$issueId] $issueTitle (Category: $issueCategory)`n"
+                }
+                $summary += "`n"
+            }
+
+            if ($result.RequiresRepairInstall) {
+                $summary += "[WARN] REPAIR INSTALL RECOMMENDED [WARN]`n"
+                $summary += "===============================================================`n"
+                $summary += "Reason: $($result.RepairInstallReason)`n`n"
+                $summary += "Critical issues detected that cannot be fixed automatically.`n"
+                $summary += "A repair install (in-place upgrade) is recommended.`n`n"
+                $summary += "WHAT GETS KEPT:`n"
+                $summary += "  [OK] Your files (Documents, Pictures, Videos, etc.)`n"
+                $summary += "  [OK] Your installed programs`n"
+                $summary += "  [OK] Your user profiles and settings`n`n"
+                $summary += "WHAT YOU NEED:`n"
+                $summary += "  - Windows ISO matching your current edition and build family`n"
+                $summary += "  - Same architecture (x64/x86) and language`n`n"
+                $summary += "Use the 'Repair Install Forcer' tab to proceed.`n"
+
+                # Show dialog with repair install recommendation
+                $response = [System.Windows.MessageBox]::Show(
+                    "Critical issues detected that require repair install.`n`n" +
+                    "Your files and programs will be preserved.`n`n" +
+                    "Would you like to open the Repair Install Forcer tab?",
+                    "Repair Install Recommended",
+                    "YesNo",
+                    "Warning"
+                )
+                if ($response -eq "Yes") {
+                    # Switch to Repair Install Forcer tab
+                    $repairInstallTab = $W.FindName("RepairInstallForcerTab")
+                    if ($repairInstallTab) {
+                        $repairInstallTab.IsSelected = $true
+                    }
+                }
+            }
+
+            if ($fixerOutput) {
+                $fixerOutput.Text = $summary
+                $fixerOutput.ScrollToEnd()
+            }
+            if ($txtOneClickPrecisionFix) {
+                $txtOneClickPrecisionFix.Text = "Last run: $(Get-Date -Format 'HH:mm:ss') on $windowsRoot (ESP $espLetter). Result: $($result.Message)"
+            }
+
+            Update-StatusBar -Message "One-click precision fixer completed" -HideProgress
+        } catch {
+            if ($fixerOutput) { $fixerOutput.Text = "One-click precision fixer failed: $_`n" }
+            Update-StatusBar -Message "One-click precision fixer failed" -HideProgress
+            [System.Windows.MessageBox]::Show("One-click precision fixer failed: $_","Error","OK","Error") | Out-Null
+        }
+    })
+}
+
 # Boot Diagnosis button (BCD Editor tab)
 $btnBootDiagnosisBCD = Get-Control -Name "BtnBootDiagnosisBCD"
 if ($btnBootDiagnosisBCD) {
@@ -2706,14 +2946,63 @@ if ($btnOneClickRepair) {
     $btnOneClickRepair.Add_Click({
         $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
         $fixerOutput = Get-Control -Name "FixerOutput"
+        $chkTestMode = Get-Control -Name "ChkTestMode"
+        
+        # Check test mode
+        $testMode = $false
+        if ($chkTestMode) {
+            $testMode = $chkTestMode.IsChecked
+        }
+        
+        # Create log file
+        $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        $logContent = New-Object System.Text.StringBuilder
+        
+        function Write-Log {
+            param([string]$Message)
+            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            $logEntry = "[$timestamp] $Message"
+            $logContent.AppendLine($logEntry) | Out-Null
+            if ($fixerOutput) {
+                $fixerOutput.Text += "$logEntry`n"
+                $fixerOutput.ScrollToEnd()
+            }
+        }
+        
+        function Write-CommandLog {
+            param([string]$Command, [string]$Description, [switch]$IsRepairCommand)
+            if ($IsRepairCommand) {
+                # Repair commands (write operations) - skip in test mode
+                if ($testMode) {
+                    Write-Log "[TEST MODE] Would execute repair: $Command"
+                    Write-Log "  Description: $Description"
+                    Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
+                } else {
+                    Write-Log "[EXECUTING REPAIR] Command: $Command"
+                    Write-Log "  Description: $Description"
+                }
+            } else {
+                # Diagnostic commands (read-only) - always run
+                Write-Log "[DIAGNOSTIC] Running: $Command"
+                Write-Log "  Description: $Description (read-only check)"
+            }
+        }
         
         # Disable button during repair
         $btnOneClickRepair.IsEnabled = $false
         
         try {
+            Write-Log "==============================================================="
+            Write-Log "ONE-CLICK REPAIR - AUTOMATED DIAGNOSIS AND REPAIR"
+            Write-Log "==============================================================="
+            Write-Log "Start Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            Write-Log "Test Mode: $(if ($testMode) { 'ENABLED (Commands will NOT be executed)' } else { 'DISABLED (Commands WILL be executed)' })"
+            Write-Log "Target Drive: $($env:SystemDrive)"
+            Write-Log ""
+            
             # Update status
             if ($txtOneClickStatus) {
-                $txtOneClickStatus.Text = "Starting automated repair... Please wait."
+                $txtOneClickStatus.Text = if ($testMode) { "Starting automated repair (TEST MODE)... Please wait." } else { "Starting automated repair... Please wait." }
             }
             Update-StatusBar -Message "One-Click Repair: Starting diagnostics..." -ShowProgress
             
@@ -2723,36 +3012,147 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Checking hardware health..." -ShowProgress
             
-            $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
-            
-            $drive = $env:SystemDrive.TrimEnd(':')
-            $diskHealth = Test-DiskHealth -WindowsDrive $drive
-            
-            if ($fixerOutput) {
-                $fixerOutput.Text = "ONE-CLICK REPAIR - AUTOMATED DIAGNOSIS AND REPAIR`n"
-                $fixerOutput.Text += "===============================================================`n`n"
-                $fixerOutput.Text += "Step 1: Hardware Diagnostics`n"
-                $fixerOutput.Text += "---------------------------------------------------------------`n"
-                if ($diskHealth.DiskHealthy) {
-                    $fixerOutput.Text += "[OK] Disk health check passed`n"
+            # Use module-level $scriptRoot (defined at top of file) or resolve safely
+            if (-not $scriptRoot) {
+                # Fallback: Safe path resolution (same pattern as used elsewhere)
+                if ($PSScriptRoot) {
+                    $scriptRoot = $PSScriptRoot
+                } elseif ($MyInvocation.MyCommand.Path) {
+                    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
                 } else {
-                    $fixerOutput.Text += "[WARNING] Disk health issues detected:`n"
-                    foreach ($issue in $diskHealth.Issues) {
-                        $fixerOutput.Text += "  - $issue`n"
-                    }
-                    if (-not $diskHealth.CanProceedWithSoftwareRepair) {
-                        $fixerOutput.Text += "`n[CRITICAL] Hardware issues detected. Software repairs NOT recommended.`n"
-                        $fixerOutput.Text += "Please backup data and replace hardware before continuing.`n"
-                        if ($txtOneClickStatus) {
-                            $txtOneClickStatus.Text = "CRITICAL: Hardware failure detected. Backup data immediately!"
-                        }
-                        Update-StatusBar -Message "One-Click Repair: Hardware failure detected - STOPPED" -HideProgress
-                        return
+                    # Final fallback: try common locations
+                    $scriptRoot = if (Test-Path "Helper\WinRepairCore.ps1") { 
+                        "Helper" 
+                    } elseif (Test-Path "$(Get-Location)\Helper\WinRepairCore.ps1") {
+                        Join-Path (Get-Location) "Helper"
+                    } else {
+                        throw "Cannot determine script root. WinRepairCore.ps1 not found."
                     }
                 }
-                $fixerOutput.Text += "`n"
             }
+            
+            # Verify script root is valid
+            if ([string]::IsNullOrWhiteSpace($scriptRoot)) {
+                throw "Script root is null or empty. Cannot load WinRepairCore.ps1."
+            }
+            
+            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+            if (-not (Test-Path $corePath)) {
+                throw "WinRepairCore.ps1 not found at: $corePath"
+            }
+            
+            . $corePath -ErrorAction Stop
+            
+            $drive = $env:SystemDrive.TrimEnd(':')
+            
+            # Step 1: Hardware Diagnostics
+            Write-Log "Step 1: Hardware Diagnostics"
+            Write-Log "---------------------------------------------------------------"
+            Write-CommandLog -Command "Test-DiskHealth -TargetDrive $drive" -Description "Check disk health and file system status" -IsRepairCommand:$false
+            
+            # Diagnostic commands are read-only, so run them even in test mode
+            $diskHealth = Test-DiskHealth -TargetDrive $drive
+            
+            # Test-DiskHealth returns: FileSystemHealthy, HasBadSectors, NeedsRepair, Warnings, Recommendations
+            # Determine if disk is healthy and if we can proceed
+            $isDiskHealthy = $diskHealth.FileSystemHealthy
+            $hasBadSectors = $diskHealth.HasBadSectors
+            $needsRepair = $diskHealth.NeedsRepair
+            
+            # Can proceed with software repair UNLESS:
+            # 1. Disk has bad sectors (physical hardware failure)
+            # 2. Disk health status is not Healthy (physical hardware failure)
+            # 3. Disk is read-only (hardware issue)
+            $canProceed = $true
+            $criticalHardwareFailure = $false
+            
+            if ($hasBadSectors) {
+                $canProceed = $false
+                $criticalHardwareFailure = $true
+            }
+            
+            if (-not $isDiskHealthy) {
+                # Check if it's just file system corruption (can be fixed) vs hardware failure
+                # If volume is null or disk health status is not Healthy, it's likely hardware
+                try {
+                    $volume = Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue
+                    $partition = Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue
+                    if ($partition) {
+                        $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
+                        if ($disk) {
+                            # Check actual disk health status
+                            if ($disk.HealthStatus -ne 'Healthy') {
+                                $canProceed = $false
+                                $criticalHardwareFailure = $true
+                            }
+                            if ($disk.IsReadOnly) {
+                                $canProceed = $false
+                                $criticalHardwareFailure = $true
+                            }
+                        }
+                    }
+                } catch {
+                    # If we can't check, assume it's safe to proceed (don't block on errors)
+                }
+            }
+            
+            if ($isDiskHealthy -and -not $hasBadSectors -and -not $needsRepair) {
+                Write-Log "[OK] Disk health check passed"
+                Write-Log "  File System: $($diskHealth.FileSystem)"
+                Write-Log "  Health Status: Healthy"
+            } else {
+                Write-Log "[WARNING] Disk health issues detected:"
+                
+                if (-not $isDiskHealthy) {
+                    Write-Log "  - File system health status: Not Healthy"
+                }
+                if ($hasBadSectors) {
+                    Write-Log "  - Bad sectors detected (physical disk failure)"
+                }
+                if ($needsRepair) {
+                    Write-Log "  - File system marked as dirty (needs chkdsk)"
+                }
+                if ($diskHealth.BitLockerEncrypted) {
+                    Write-Log "  - BitLocker encrypted (ensure recovery key available)"
+                }
+                
+                # Show warnings and recommendations
+                if ($diskHealth.Warnings -and $diskHealth.Warnings.Count -gt 0) {
+                    foreach ($warning in $diskHealth.Warnings) {
+                        Write-Log "  - $warning"
+                    }
+                }
+                if ($diskHealth.Recommendations -and $diskHealth.Recommendations.Count -gt 0) {
+                    foreach ($rec in $diskHealth.Recommendations) {
+                        Write-Log "  Recommendation: $rec"
+                    }
+                }
+                
+                # Only show CRITICAL hardware failure if it's actually hardware failure
+                if ($criticalHardwareFailure) {
+                    Write-Log ""
+                    Write-Log "[CRITICAL] Hardware failure detected. Software repairs NOT recommended."
+                    Write-Log "Please backup data and replace hardware before continuing."
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "CRITICAL: Hardware failure detected. Backup data immediately!"
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Hardware failure detected - STOPPED" -HideProgress
+                    
+                    # Save log and exit
+                    try {
+                        $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                    } catch { }
+                    $btnOneClickRepair.IsEnabled = $true
+                    return
+                } elseif (-not $canProceed) {
+                    # Less critical but still can't proceed
+                    Write-Log ""
+                    Write-Log "[WARNING] Disk issues detected. Software repairs may not be effective."
+                    Write-Log "Consider running chkdsk first, or backup data before proceeding."
+                }
+            }
+            Write-Log ""
             
             # Step 2: Check for missing storage drivers
             if ($txtOneClickStatus) {
@@ -2760,23 +3160,33 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Checking storage drivers..." -ShowProgress
             
-            $controllers = Get-StorageControllers -WindowsDrive $drive
-            $missingDrivers = $controllers | Where-Object { -not $_.DriverLoaded }
+            Write-Log "Step 2: Storage Driver Check"
+            Write-Log "---------------------------------------------------------------"
+            Write-CommandLog -Command "Get-MissingStorageDevices" -Description "Check for missing or errored storage controller drivers" -IsRepairCommand:$false
             
-            if ($fixerOutput) {
-                $fixerOutput.Text += "Step 2: Storage Driver Check`n"
-                $fixerOutput.Text += "---------------------------------------------------------------`n"
-                if ($missingDrivers.Count -eq 0) {
-                    $fixerOutput.Text += "[OK] All storage drivers are loaded`n"
-                } else {
-                    $fixerOutput.Text += "[WARNING] Missing storage drivers detected:`n"
-                    foreach ($controller in $missingDrivers) {
-                        $fixerOutput.Text += "  - $($controller.FriendlyName) (Hardware ID: $($controller.HardwareID))`n"
-                    }
-                    $fixerOutput.Text += "`nNote: Driver injection may be needed if boot fails.`n"
+            # Diagnostic commands are read-only, so run them even in test mode
+            $missingDevices = Get-MissingStorageDevices
+            $missingDrivers = @()
+            if ($missingDevices -and $missingDevices -ne "No missing or errored storage drivers detected.`n`nNote: Devices with non-zero error codes that are not error codes 1, 3, or 28 (missing driver codes) are excluded to reduce false positives.") {
+                # Parse the missing devices string to count them
+                $missingDrivers = Get-PnpDevice | Where-Object {
+                    ($_.ConfigManagerErrorCode -eq 28 -or $_.ConfigManagerErrorCode -eq 1 -or $_.ConfigManagerErrorCode -eq 3) -and
+                    ($_.Class -match 'SCSI|Storage|System|DiskDrive' -or $_.FriendlyName -match 'VMD|RAID|NVMe|Storage|Controller')
                 }
-                $fixerOutput.Text += "`n"
             }
+            
+            if ($missingDrivers.Count -eq 0) {
+                Write-Log "[OK] All storage drivers are loaded"
+            } else {
+                Write-Log "[WARNING] Missing storage drivers detected:"
+                foreach ($device in $missingDrivers) {
+                    $hwid = if ($device.HardwareID -and $device.HardwareID.Count -gt 0) { $device.HardwareID[0] } else { "Unknown" }
+                    Write-Log "  - $($device.FriendlyName) (Error Code: $($device.ConfigManagerErrorCode), Hardware ID: $hwid)"
+                }
+                Write-Log ""
+                Write-Log "Note: Driver injection may be needed if boot fails."
+            }
+            Write-Log ""
             
             # Step 3: BCD Integrity Check
             if ($txtOneClickStatus) {
@@ -2784,38 +3194,73 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Checking BCD integrity..." -ShowProgress
             
+            Write-Log "Step 3: BCD Integrity Check"
+            Write-Log "---------------------------------------------------------------"
+            Write-CommandLog -Command "bcdedit /enum all" -Description "Check BCD integrity and accessibility" -IsRepairCommand:$false
+            
+            # Diagnostic commands are read-only, so run them even in test mode
             try {
                 $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                
                 if ($bcdCheck -match "The boot configuration data store could not be opened") {
-                    if ($fixerOutput) {
-                        $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
-                        $fixerOutput.Text += "---------------------------------------------------------------`n"
-                        $fixerOutput.Text += "[ERROR] BCD is corrupted or missing`n"
-                        $fixerOutput.Text += "Action: Will attempt to rebuild BCD`n`n"
-                    }
+                    Write-Log "[ERROR] BCD is corrupted or missing"
+                    Write-Log "Action: Will attempt to rebuild BCD"
                     
                     # Attempt BCD rebuild
                     if ($txtOneClickStatus) {
                         $txtOneClickStatus.Text = "Step 3/5: Rebuilding BCD..."
                     }
                     Update-StatusBar -Message "One-Click Repair: Rebuilding BCD..." -ShowProgress
-                    $bcdRebuild = bootrec /rebuildbcd 2>&1 | Out-String
-                    if ($fixerOutput) {
-                        $fixerOutput.Text += "BCD Rebuild Output:`n$bcdRebuild`n`n"
+                    
+                    # Check if bootrec.exe is available (only in WinRE/WinPE)
+                    $bootrecPath = $null
+                    $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                    if ($bootrecCmd) {
+                        $bootrecPath = $bootrecCmd.Source
+                    } else {
+                        # Try common WinRE paths
+                        $possiblePaths = @(
+                            "$env:SystemRoot\System32\bootrec.exe",
+                            "X:\Windows\System32\bootrec.exe",
+                            "C:\Windows\System32\Recovery\bootrec.exe"
+                        )
+                        foreach ($path in $possiblePaths) {
+                            if (Test-Path $path) {
+                                $bootrecPath = $path
+                                break
+                            }
+                        }
+                    }
+                    
+                    if ($bootrecPath) {
+                        $command = "$bootrecPath /rebuildbcd"
+                        Write-CommandLog -Command $command -Description "Rebuild Boot Configuration Data" -IsRepairCommand:$true
+                        
+                        if (-not $testMode) {
+                            try {
+                                $bcdRebuild = & $bootrecPath /rebuildbcd 2>&1 | Out-String
+                                Write-Log "BCD Rebuild Output: $bcdRebuild"
+                            } catch {
+                                Write-Log "[WARNING] BCD rebuild failed: $_"
+                                Write-Log "Note: bootrec.exe may not be available in this environment."
+                                Write-Log "Consider using bcdboot.exe or running from WinRE instead."
+                            }
+                        } else {
+                            Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        }
+                    } else {
+                        Write-Log "[INFO] bootrec.exe not available in this environment."
+                        Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
+                        Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
                     }
                 } else {
-                    if ($fixerOutput) {
-                        $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
-                        $fixerOutput.Text += "---------------------------------------------------------------`n"
-                        $fixerOutput.Text += "[OK] BCD is accessible and appears healthy`n`n"
-                    }
+                    Write-Log "[OK] BCD is accessible and appears healthy"
                 }
+                Write-Log ""
             } catch {
-                if ($fixerOutput) {
-                    $fixerOutput.Text += "Step 3: BCD Integrity Check`n"
-                    $fixerOutput.Text += "---------------------------------------------------------------`n"
-                    $fixerOutput.Text += "[WARNING] Could not verify BCD: $_`n`n"
-                }
+                Write-Log "[WARNING] Could not verify BCD: $_"
+                Write-Log ""
             }
             
             # Step 4: Boot File Check
@@ -2824,6 +3269,11 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Checking boot files..." -ShowProgress
             
+            Write-Log "Step 4: Boot File Check"
+            Write-Log "---------------------------------------------------------------"
+            Write-CommandLog -Command "Test-Path (boot files)" -Description "Check for critical boot files (bootmgfw.efi, winload.efi, winload.exe)" -IsRepairCommand:$false
+            
+            # Diagnostic commands are read-only, so run them even in test mode
             $bootFiles = @("bootmgfw.efi", "winload.efi", "winload.exe")
             $missingFiles = @()
             foreach ($file in $bootFiles) {
@@ -2834,30 +3284,64 @@ if ($btnOneClickRepair) {
                 }
             }
             
-            if ($fixerOutput) {
-                $fixerOutput.Text += "Step 4: Boot File Check`n"
-                $fixerOutput.Text += "---------------------------------------------------------------`n"
-                if ($missingFiles.Count -eq 0) {
-                    $fixerOutput.Text += "[OK] All critical boot files are present`n"
+            if ($missingFiles.Count -eq 0) {
+                Write-Log "[OK] All critical boot files are present"
+            } else {
+                Write-Log "[WARNING] Missing boot files:"
+                foreach ($file in $missingFiles) {
+                    Write-Log "  - $file"
+                }
+                Write-Log "Action: Attempting to repair boot files..."
+                
+                # Attempt boot file repair
+                if ($txtOneClickStatus) {
+                    $txtOneClickStatus.Text = "Step 4/5: Repairing boot files..."
+                }
+                Update-StatusBar -Message "One-Click Repair: Repairing boot files..." -ShowProgress
+                
+                # Check if bootrec.exe is available (only in WinRE/WinPE)
+                $bootrecPath = $null
+                $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                if ($bootrecCmd) {
+                    $bootrecPath = $bootrecCmd.Source
                 } else {
-                    $fixerOutput.Text += "[WARNING] Missing boot files:`n"
-                    foreach ($file in $missingFiles) {
-                        $fixerOutput.Text += "  - $file`n"
-                    }
-                    $fixerOutput.Text += "Action: Attempting to repair boot files...`n"
-                    
-                    # Attempt boot file repair
-                    if ($txtOneClickStatus) {
-                        $txtOneClickStatus.Text = "Step 4/5: Repairing boot files..."
-                    }
-                    Update-StatusBar -Message "One-Click Repair: Repairing boot files..." -ShowProgress
-                    $bootFix = bootrec /fixboot 2>&1 | Out-String
-                    if ($fixerOutput) {
-                        $fixerOutput.Text += "Boot File Repair Output:`n$bootFix`n"
+                    # Try common WinRE paths
+                    $possiblePaths = @(
+                        "$env:SystemRoot\System32\bootrec.exe",
+                        "X:\Windows\System32\bootrec.exe",
+                        "C:\Windows\System32\Recovery\bootrec.exe"
+                    )
+                    foreach ($path in $possiblePaths) {
+                        if (Test-Path $path) {
+                            $bootrecPath = $path
+                            break
+                        }
                     }
                 }
-                $fixerOutput.Text += "`n"
+                
+                if ($bootrecPath) {
+                    $command = "$bootrecPath /fixboot"
+                    Write-CommandLog -Command $command -Description "Fix boot sector" -IsRepairCommand:$true
+                    
+                    if (-not $testMode) {
+                        try {
+                            $bootFix = & $bootrecPath /fixboot 2>&1 | Out-String
+                            Write-Log "Boot File Repair Output: $bootFix"
+                        } catch {
+                            Write-Log "[WARNING] Boot file repair failed: $_"
+                            Write-Log "Note: bootrec.exe may not be available in this environment."
+                            Write-Log "Consider using bcdboot.exe or running from WinRE instead."
+                        }
+                    } else {
+                        Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                    }
+                } else {
+                    Write-Log "[INFO] bootrec.exe not available in this environment."
+                    Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
+                    Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
+                }
             }
+            Write-Log ""
             
             # Step 5: Final Summary
             if ($txtOneClickStatus) {
@@ -2865,50 +3349,90 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Generating summary..." -ShowProgress
             
-            if ($fixerOutput) {
-                $fixerOutput.Text += "===============================================================`n"
-                $fixerOutput.Text += "REPAIR SUMMARY`n"
-                $fixerOutput.Text += "===============================================================`n`n"
-                
-                $issuesFound = 0
-                if (-not $diskHealth.DiskHealthy) { $issuesFound++ }
-                if ($missingDrivers.Count -gt 0) { $issuesFound++ }
-                if ($missingFiles.Count -gt 0) { $issuesFound++ }
-                
-                if ($issuesFound -eq 0) {
-                    $fixerOutput.Text += "[SUCCESS] No critical issues detected. Your system appears healthy.`n"
-                    $fixerOutput.Text += "If you're still experiencing boot problems, try:`n"
-                    $fixerOutput.Text += "  1. Running System File Checker (SFC)`n"
-                    $fixerOutput.Text += "  2. Running DISM repair`n"
-                    $fixerOutput.Text += "  3. Checking for Windows Updates`n"
-                    if ($txtOneClickStatus) {
-                        $txtOneClickStatus.Text = "✅ Repair complete! No critical issues found."
-                    }
-                } else {
-                    $fixerOutput.Text += "[INFO] Found $issuesFound issue(s). Repairs have been attempted.`n"
-                    $fixerOutput.Text += "`nNEXT STEPS:`n"
-                    $fixerOutput.Text += "1. Restart your computer and test if it boots normally`n"
-                    $fixerOutput.Text += "2. If problems persist, consider:`n"
-                    $fixerOutput.Text += "   - Running an in-place repair installation`n"
-                    $fixerOutput.Text += "   - Checking hardware health (if not already done)`n"
-                    $fixerOutput.Text += "   - Injecting missing storage drivers`n"
-                    if ($txtOneClickStatus) {
-                        $txtOneClickStatus.Text = "✅ Repair complete! Found $issuesFound issue(s) and attempted fixes."
-                    }
+            Write-Log ""
+            Write-Log "==============================================================="
+            Write-Log "REPAIR SUMMARY"
+            Write-Log "==============================================================="
+            Write-Log ""
+            
+            $issuesFound = 0
+            if (-not $diskHealth.FileSystemHealthy) { $issuesFound++ }
+            if ($missingDrivers -and $missingDrivers.Count -gt 0) { $issuesFound++ }
+            if ($missingFiles.Count -gt 0) { $issuesFound++ }
+            
+            if ($issuesFound -eq 0) {
+                Write-Log "[SUCCESS] No critical issues detected. Your system appears healthy."
+                Write-Log "If you're still experiencing boot problems, try:"
+                Write-Log "  1. Running System File Checker (SFC)"
+                Write-Log "  2. Running DISM repair"
+                Write-Log "  3. Checking for Windows Updates"
+                if ($txtOneClickStatus) {
+                    $txtOneClickStatus.Text = if ($testMode) { "✅ Test complete! No critical issues found. (TEST MODE)" } else { "✅ Repair complete! No critical issues found." }
                 }
+            } else {
+                Write-Log "[INFO] Found $issuesFound issue(s)."
+                if ($testMode) {
+                    Write-Log "  (In TEST MODE - no repairs were actually executed)"
+                } else {
+                    Write-Log "  Repairs have been attempted."
+                }
+                Write-Log ""
+                Write-Log "NEXT STEPS:"
+                Write-Log "1. Restart your computer and test if it boots normally"
+                Write-Log "2. If problems persist, consider:"
+                Write-Log "   - Running an in-place repair installation"
+                Write-Log "   - Checking hardware health (if not already done)"
+                Write-Log "   - Injecting missing storage drivers"
+                if ($txtOneClickStatus) {
+                    $txtOneClickStatus.Text = if ($testMode) { "✅ Test complete! Found $issuesFound issue(s). (TEST MODE)" } else { "✅ Repair complete! Found $issuesFound issue(s) and attempted fixes." }
+                }
+            }
+            
+            Write-Log ""
+            Write-Log "==============================================================="
+            Write-Log "END OF ONE-CLICK REPAIR"
+            Write-Log "End Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            Write-Log "Log File: $logFile"
+            Write-Log "==============================================================="
+            
+            # Save log file
+            try {
+                $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                Write-Log ""
+                Write-Log "[INFO] Log file saved to: $logFile"
                 
-                $fixerOutput.ScrollToEnd()
+                # Open log file in Notepad
+                Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                Write-Log "[INFO] Log file opened in Notepad"
+            } catch {
+                Write-Log "[WARNING] Could not save/open log file: $_"
             }
             
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
             
         } catch {
+            Write-Log ""
+            Write-Log "==============================================================="
+            Write-Log "[ERROR] One-Click Repair failed"
+            Write-Log "Error: $($_.Exception.Message)"
+            Write-Log "Stack trace: $($_.ScriptStackTrace)"
+            Write-Log "==============================================================="
+            
+            # Save log file even on error
+            try {
+                $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+            } catch {
+                # Ignore log save errors
+            }
+            
             if ($txtOneClickStatus) {
                 $txtOneClickStatus.Text = "❌ Error: $($_.Exception.Message)"
             }
             if ($fixerOutput) {
                 $fixerOutput.Text += "`n[ERROR] One-Click Repair failed: $_`n"
                 $fixerOutput.Text += "Stack trace: $($_.ScriptStackTrace)`n"
+                $fixerOutput.Text += "`nLog file: $logFile`n"
             }
             Update-StatusBar -Message "One-Click Repair: Failed - $($_.Exception.Message)" -HideProgress
         } finally {
@@ -3848,11 +4372,26 @@ if ($btnComprehensiveLogAnalysis) {
         
         try {
             # Run analysis in background job to keep UI responsive
-            $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+            # Use module-level $scriptRoot or resolve safely
+            if (-not $scriptRoot) {
+                if ($PSScriptRoot) {
+                    $scriptRoot = $PSScriptRoot
+                } elseif ($MyInvocation.MyCommand.Path) {
+                    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+                } else {
+                    $scriptRoot = if (Test-Path "Helper\LogAnalysis.ps1") { "Helper" } else { Get-Location }
+                }
+            }
             $analysisJob = Start-Job -ScriptBlock {
                 param($Drive, $ScriptRoot)
                 Set-Location $ScriptRoot
-                . "$ScriptRoot\Helper\LogAnalysis.ps1"
+                $logAnalysisPath = Join-Path $ScriptRoot "Helper\LogAnalysis.ps1"
+                if (-not (Test-Path $logAnalysisPath)) {
+                    $logAnalysisPath = Join-Path $ScriptRoot "LogAnalysis.ps1"
+                }
+                if (Test-Path $logAnalysisPath) {
+                    . $logAnalysisPath
+                }
                 Get-ComprehensiveLogAnalysis -TargetDrive $Drive
             } -ArgumentList $drive, $scriptRoot
             
@@ -4273,31 +4812,215 @@ if ($btnBootChainAnalysis) {
 $btnFullBootDiagnosis = Get-Control -Name "BtnFullBootDiagnosis"
 if ($btnFullBootDiagnosis) {
     $btnFullBootDiagnosis.Add_Click({
-        $logDriveCombo = Get-Control -Name "LogDriveCombo"
         $logAnalysisBox = Get-Control -Name "LogAnalysisBox"
         
-        $selectedDrive = if ($logDriveCombo) { $logDriveCombo.SelectedItem } else { $null }
-        $drive = "C"
+        # Ensure core is loaded (idempotent)
+        try {
+            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
+            return
+        }
         
-        if ($selectedDrive) {
-            if ($selectedDrive -match '^([A-Z]):') {
-                $drive = $matches[1]
+        # Scan for Windows installations
+        try {
+            Update-StatusBar -Message "Scanning for Windows installations..." -ShowProgress
+            $installations = Get-WindowsInstallations
+            
+            if ($installations.Count -eq 0) {
+                [System.Windows.MessageBox]::Show(
+                    "No Windows installations found.`n`nPlease ensure you have access to Windows drives and try again.",
+                    "No Windows Found",
+                    "OK",
+                    "Warning"
+                ) | Out-Null
+                Update-StatusBar -Message "No Windows installations found" -HideProgress
+                return
+            }
+            
+            # Create drive selection dialog
+            $driveSelection = New-Object System.Windows.Forms.Form
+            $driveSelection.Text = "Select Windows Installation"
+            $driveSelection.Size = New-Object System.Drawing.Size(700, 500)
+            $driveSelection.StartPosition = "CenterScreen"
+            $driveSelection.FormBorderStyle = "FixedDialog"
+            $driveSelection.MaximizeBox = $false
+            $driveSelection.MinimizeBox = $false
+            
+            $label = New-Object System.Windows.Forms.Label
+            $label.Location = New-Object System.Drawing.Point(10, 10)
+            $label.Size = New-Object System.Drawing.Size(660, 30)
+            $label.Text = "Select the Windows installation to diagnose:"
+            $driveSelection.Controls.Add($label)
+            
+            $listView = New-Object System.Windows.Forms.ListView
+            $listView.Location = New-Object System.Drawing.Point(10, 40)
+            $listView.Size = New-Object System.Drawing.Size(660, 350)
+            $listView.View = [System.Windows.Forms.View]::Details
+            $listView.FullRowSelect = $true
+            $listView.GridLines = $true
+            $listView.MultiSelect = $false
+            
+            # Add columns
+            $listView.Columns.Add("Drive", 60) | Out-Null
+            $listView.Columns.Add("Label", 120) | Out-Null
+            $listView.Columns.Add("OS Version", 150) | Out-Null
+            $listView.Columns.Add("Size", 80) | Out-Null
+            $listView.Columns.Add("Free", 80) | Out-Null
+            $listView.Columns.Add("Used %", 70) | Out-Null
+            $listView.Columns.Add("Health", 80) | Out-Null
+            $listView.Columns.Add("Boot Type", 100) | Out-Null
+            
+            # Add installations to list
+            foreach ($inst in $installations) {
+                $item = New-Object System.Windows.Forms.ListViewItem($inst.Drive)
+                $item.SubItems.Add($inst.VolumeLabel) | Out-Null
+                $item.SubItems.Add("$($inst.OSVersion) Build $($inst.OSBuild)") | Out-Null
+                $item.SubItems.Add("$($inst.SizeGB) GB") | Out-Null
+                $item.SubItems.Add("$($inst.FreeGB) GB") | Out-Null
+                $item.SubItems.Add("$($inst.UsedPercent)%") | Out-Null
+                $item.SubItems.Add($inst.HealthStatus) | Out-Null
+                $item.SubItems.Add($inst.BootType) | Out-Null
+                $item.Tag = $inst
+                
+                # Highlight current OS
+                if ($inst.IsCurrentOS) {
+                    $item.BackColor = [System.Drawing.Color]::LightGreen
+                    $item.Selected = $true
+                }
+                
+                $listView.Items.Add($item) | Out-Null
+            }
+            
+            $driveSelection.Controls.Add($listView)
+            
+            $okButton = New-Object System.Windows.Forms.Button
+            $okButton.Text = "OK"
+            $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $okButton.Location = New-Object System.Drawing.Point(500, 400)
+            $okButton.Size = New-Object System.Drawing.Size(80, 30)
+            $driveSelection.Controls.Add($okButton)
+            $driveSelection.AcceptButton = $okButton
+            
+            $cancelButton = New-Object System.Windows.Forms.Button
+            $cancelButton.Text = "Cancel"
+            $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+            $cancelButton.Location = New-Object System.Drawing.Point(590, 400)
+            $cancelButton.Size = New-Object System.Drawing.Size(80, 30)
+            $driveSelection.Controls.Add($cancelButton)
+            $driveSelection.CancelButton = $cancelButton
+            
+            # Show dialog
+            $result = $driveSelection.ShowDialog()
+            
+            if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $listView.SelectedItems.Count -gt 0) {
+                $selectedInst = $listView.SelectedItems[0].Tag
+                $drive = $selectedInst.DriveLetter
+            } else {
+                Update-StatusBar -Message "Drive selection cancelled" -HideProgress
+                return
+            }
+            
+            $driveSelection.Dispose()
+        } catch {
+            [System.Windows.MessageBox]::Show(
+                "Error scanning for Windows installations: $_`n`nFalling back to default drive C:",
+                "Scan Error",
+                "OK",
+                "Warning"
+            ) | Out-Null
+            $drive = "C"
+        }
+        
+        Update-StatusBar -Message "Selected: $drive`:" -HideProgress
+        
+        # Ask user for operation mode
+        $modeResponse = [System.Windows.MessageBox]::Show(
+            "BOOT DIAGNOSIS AND REPAIR`n`n" +
+            "This will analyze 8 phases of the boot process:`n" +
+            "1. UEFI/GPT Integrity Check`n" +
+            "2. BCD File & Integrity`n" +
+            "3. BCD Entries Validation`n" +
+            "4. WinRE Access`n" +
+            "5. Driver Matching`n" +
+            "6. Windows Kernel`n" +
+            "7. Boot Log Analysis`n" +
+            "8. Event Log Analysis`n`n" +
+            "Select operation mode:`n`n" +
+            "Yes = DIAGNOSIS + FIX (automatically fixes issues)`n" +
+            "No = DIAGNOSIS ONLY (find what's broken, no fixes)`n`n" +
+            "Cancel = DIAGNOSIS THEN ASK (diagnose first, then ask about fixes)",
+            "Boot Diagnosis Mode",
+            "YesNoCancel",
+            "Question"
+        )
+        
+        $mode = switch ($modeResponse) {
+            "Yes" { "DiagnosisAndFix" }
+            "No" { "DiagnosisOnly" }
+            "Cancel" { "DiagnosisThenAsk" }
+            default { "DiagnosisOnly" }
+        }
+        
+        # Ask user for verbose mode
+        $verboseResponse = [System.Windows.MessageBox]::Show(
+            "Would you like to run in VERBOSE mode?`n`n" +
+            "Yes = Verbose (detailed command logging, opens Notepad)`n" +
+            "No = Regular (standard analysis)`n`n" +
+            "Estimated time: 2-5 minutes (Regular) or 5-10 minutes (Verbose)",
+            "Verbose Mode",
+            "YesNo",
+            "Question"
+        )
+        $verbose = ($verboseResponse -eq "Yes")
+        
+        # Create log file for command tracking
+        $logFile = "$env:TEMP\BootDiagnosis_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        if ($verbose) {
+            try {
+                "BOOT DIAGNOSIS COMMAND LOG`n" +
+                "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n" +
+                "Mode: VERBOSE`n" +
+                "Target Drive: $drive`:`n" +
+                "===============================================================`n`n" | Out-File $logFile -Encoding UTF8
+            } catch {
+                $logFile = $null
             }
         }
         
         if ($logAnalysisBox) {
-            $logAnalysisBox.Text = "Running comprehensive automated boot diagnosis for $drive`:...`n`nInitializing boot stack analysis...`n"
+            $modeText = if ($verbose) { "VERBOSE MODE" } else { "REGULAR MODE" }
+            $logAnalysisBox.Text = "FULL BOOT DIAGNOSIS - $modeText`n" +
+                                   "===============================================================`n" +
+                                   "Target: $drive`:\Windows`n" +
+                                   "Total Phases: 8`n`n" +
+                                   "BOOT DIAGNOSIS PROCESS:`n" +
+                                   "1. UEFI/GPT Integrity Check - Checking EFI partition, format (FAT32), and Microsoft Boot folder structure`n" +
+                                   "2. BCD File & Integrity - Locating and validating Boot Configuration Data file accessibility`n" +
+                                   "3. BCD Entries Validation - Verifying boot manager and default boot entries exist`n" +
+                                   "4. WinRE Access - Checking Windows Recovery Environment availability and accessibility`n" +
+                                   "5. Driver Matching - Scanning for missing or errored storage controller drivers (VMD, RAID, NVMe)`n" +
+                                   "6. Windows Kernel - Verifying critical system files (ntoskrnl.exe) exist`n" +
+                                   "7. Boot Log Analysis - Checking for boot log files (ntbtlog.txt) for driver loading issues`n" +
+                                   "8. Event Log Analysis - Validating system event logs for crash and error information`n`n" +
+                                   "===============================================================`n" +
+                                   "Starting analysis...`n`n"
+            if ($verbose -and $logFile) {
+                $logAnalysisBox.Text += "Command log file: $logFile`n"
+                $logAnalysisBox.Text += "Notepad will open automatically to show real-time updates.`n`n"
+            }
         }
         
-        # Define boot stack phases for visualization
+        # Define the 8 actual phases (matching Run-BootDiagnosis)
         $bootPhases = @(
-            @{ Name = "Phase 1: BIOS/UEFI Initialization"; Description = "Hardware detection and initialization" },
-            @{ Name = "Phase 2: Boot Manager (bootmgr)"; Description = "Boot Configuration Data (BCD) loading" },
-            @{ Name = "Phase 3: Boot Loader (winload.exe)"; Description = "Windows boot loader execution" },
-            @{ Name = "Phase 4: Kernel Initialization"; Description = "Windows kernel (ntoskrnl.exe) starting" },
-            @{ Name = "Phase 5: Driver Loading"; Description = "System drivers initialization" },
-            @{ Name = "Phase 6: Session Manager"; Description = "Session Manager (smss.exe) starting" },
-            @{ Name = "Phase 7: Windows Logon"; Description = "User logon process" }
+            @{ Number = 1; Name = "Phase 1: UEFI/GPT Integrity Check"; Description = "Checking EFI partition, format (FAT32), and Microsoft Boot folder structure" },
+            @{ Number = 2; Name = "Phase 2: BCD File & Integrity"; Description = "Locating and validating Boot Configuration Data file accessibility" },
+            @{ Number = 3; Name = "Phase 3: BCD Entries Validation"; Description = "Verifying boot manager and default boot entries exist" },
+            @{ Number = 4; Name = "Phase 4: WinRE Access"; Description = "Checking Windows Recovery Environment availability and accessibility" },
+            @{ Number = 5; Name = "Phase 5: Driver Matching"; Description = "Scanning for missing or errored storage controller drivers (VMD, RAID, NVMe)" },
+            @{ Number = 6; Name = "Phase 6: Windows Kernel"; Description = "Verifying critical system files (ntoskrnl.exe) exist" },
+            @{ Number = 7; Name = "Phase 7: Boot Log Analysis"; Description = "Checking for boot log files (ntbtlog.txt) for driver loading issues" },
+            @{ Number = 8; Name = "Phase 8: Event Log Analysis"; Description = "Validating system event logs for crash and error information" }
         )
         
         # Show initial boot stack
@@ -4316,43 +5039,53 @@ if ($btnFullBootDiagnosis) {
             $logAnalysisBox.ScrollToEnd()
         }
         
-        # Progress callback for boot diagnosis (capture variables from outer scope)
+        # Progress callback for boot diagnosis with real-time updates
         $progressCallback = {
             param($progress)
             if ($logAnalysisBox) {
-                $currentPhase = if ($progress.Stage) { $progress.Stage } else { 0 }
+                $phaseNum = if ($progress.Phase) { $progress.Phase } else { 0 }
+                $phaseName = if ($progress.PhaseName) { $progress.PhaseName } else { "Unknown" }
                 $percentage = if ($progress.Percentage) { $progress.Percentage } else { 0 }
+                $message = if ($progress.Message) { $progress.Message } else { "" }
+                $command = if ($progress.Command) { $progress.Command } else { "" }
+                $elapsed = if ($progress.Elapsed) { $progress.Elapsed } else { [TimeSpan]::Zero }
                 
-                # Update boot stack visualization
-                $bootStackText = "`n===============================================================`n"
-                $bootStackText += "                    BOOT STACK ANALYSIS`n"
-                $bootStackText += "                    Progress: $percentage%`n"
+                # Update boot stack visualization with real progress
+                $bootStackText = "FULL BOOT DIAGNOSIS - $(if ($verbose) { 'VERBOSE MODE' } else { 'REGULAR MODE' })`n"
+                $bootStackText += "===============================================================`n"
+                $bootStackText += "Target: $drive`:\Windows`n"
+                $bootStackText += "Progress: $percentage% | Elapsed: $([math]::Round($elapsed.TotalMinutes, 1)) minutes`n"
                 $bootStackText += "===============================================================`n`n"
                 
                 for ($i = 0; $i -lt $bootPhases.Count; $i++) {
                     $phase = $bootPhases[$i]
-                    $status = " "
-                    $statusColor = ""
+                    $status = "[  ]"
+                    $statusText = "PENDING"
                     
-                    if ($i -lt $currentPhase) {
+                    if ($phase.Number -lt $phaseNum) {
                         $status = "[OK]"
-                        $statusColor = "PASSED"
-                    } elseif ($i -eq $currentPhase) {
+                        $statusText = "COMPLETE"
+                    } elseif ($phase.Number -eq $phaseNum) {
                         $status = "[>>]"
-                        $statusColor = "CHECKING"
-                    } else {
-                        $status = "[  ]"
-                        $statusColor = "PENDING"
+                        $statusText = "IN PROGRESS"
                     }
                     
-                    $bootStackText += "  $status $($phase.Name) - $statusColor`n"
-                    $bootStackText += "      -> $($phase.Description)`n`n"
+                    $bootStackText += "  $status $($phase.Name) - $statusText`n"
+                    $bootStackText += "      -> $($phase.Description)`n"
+                    if ($phase.Number -eq $phaseNum -and $message) {
+                        $bootStackText += "      Current: $message`n"
+                    }
+                    if ($phase.Number -eq $phaseNum -and $command -and $verbose) {
+                        $bootStackText += "      Command: $command`n"
+                    }
+                    $bootStackText += "`n"
                 }
                 
-                $bootStackText += "===============================================================`n`n"
-                if ($progress.CurrentOperation) {
-                    $bootStackText += "Current: $($progress.CurrentOperation)`n"
+                $bootStackText += "===============================================================`n"
+                if ($logFile -and $verbose) {
+                    $bootStackText += "Command log: $logFile (open in Notepad to see updates)`n"
                 }
+                $bootStackText += "===============================================================`n"
                 
                 $logAnalysisBox.Dispatcher.Invoke([action]{
                     $logAnalysisBox.Text = $bootStackText
@@ -4364,45 +5097,156 @@ if ($btnFullBootDiagnosis) {
         # Run enhanced automated diagnosis with progress
         Update-StatusBar -Message "Running boot diagnosis..." -ShowProgress -Percentage 0 -Stage "Initializing"
         
-        # Run diagnosis in background job to allow progress updates
+        # Run diagnosis and repair in background job
+        $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
         $diagnosisJob = Start-Job -ScriptBlock {
-            param($drive, $scriptRoot)
+            param($drive, $scriptRoot, $mode, $verbose, $logFile)
             Set-Location $scriptRoot
             . "$scriptRoot\Helper\WinRepairCore.ps1"
-            Run-BootDiagnosis -Drive $drive
-        } -ArgumentList $drive, $PSScriptRoot
-        
-        # Monitor progress and update boot stack display
-        $phaseIndex = 0
-        $maxPhases = $bootPhases.Count
-        while ($diagnosisJob.State -eq "Running") {
-            Start-Sleep -Milliseconds 800
-            $phaseIndex = [math]::Min($phaseIndex + 1, $maxPhases - 1)
-            $percentage = [math]::Round((($phaseIndex + 1) / $maxPhases) * 100)
             
-            $progress = @{
-                Stage = $phaseIndex
-                Percentage = $percentage
-                CurrentOperation = $bootPhases[$phaseIndex].Name
+            # Create progress callback that writes to log file
+            $progressCallback = {
+                param($progress)
+                if ($logFile) {
+                    $logEntry = "[$(Get-Date -Format 'HH:mm:ss')] Phase $($progress.Phase): $($progress.Message)"
+                    if ($progress.Command) {
+                        $logEntry += " | Command: $($progress.Command)"
+                    }
+                    Add-Content -Path $logFile -Value $logEntry -ErrorAction SilentlyContinue
+                }
             }
-            & $progressCallback $progress
             
-            Update-StatusBar -Message "Analyzing: $($bootPhases[$phaseIndex].Name)" -ShowProgress -Percentage $percentage -Stage $phaseIndex
+            Start-BootDiagnosisAndRepair -Drive $drive -Mode $mode -Verbose:$verbose -ProgressCallback $progressCallback -LogFile $logFile
+        } -ArgumentList $drive, $PSScriptRoot, $mode, $verbose, $logFile
+        
+        # Monitor progress with real-time updates from job
+        $lastPhase = 0
+        $startTime = Get-Date
+        while ($diagnosisJob.State -eq "Running") {
+            Start-Sleep -Milliseconds 1000
+            
+            # Read log file to get latest progress (if verbose)
+            if ($verbose -and $logFile -and (Test-Path $logFile)) {
+                try {
+                    $logContent = Get-Content $logFile -Tail 5 -ErrorAction SilentlyContinue
+                    if ($logContent) {
+                        $latestLine = $logContent[-1]
+                        if ($latestLine -match "Phase (\d+)") {
+                            $currentPhase = [int]$matches[1]
+                            if ($currentPhase -ne $lastPhase) {
+                                $lastPhase = $currentPhase
+                                $elapsed = (Get-Date) - $startTime
+                                $percentage = [math]::Round(($currentPhase / $bootPhases.Count) * 100)
+                                
+                                $phase = $bootPhases | Where-Object { $_.Number -eq $currentPhase }
+                                $progress = @{
+                                    Phase = $currentPhase
+                                    PhaseName = if ($phase) { $phase.Name } else { "Unknown" }
+                                    Percentage = $percentage
+                                    Message = if ($phase) { $phase.Description } else { "" }
+                                    Command = if ($latestLine -match "Command: (.+)") { $matches[1] } else { "" }
+                                    Elapsed = $elapsed
+                                }
+                                & $progressCallback $progress
+                                
+                                Update-StatusBar -Message "Phase $currentPhase/$($bootPhases.Count): $($phase.Name) | Elapsed: $([math]::Round($elapsed.TotalMinutes, 1))m" -ShowProgress -Percentage $percentage -Stage $currentPhase
+                            }
+                        }
+                    }
+                } catch {
+                    # Ignore log read errors
+                }
+            } else {
+                # Regular mode - estimate progress based on time (fallback)
+                $elapsed = (Get-Date) - $startTime
+                $estimatedPhase = [math]::Min([math]::Floor($elapsed.TotalSeconds / 30) + 1, $bootPhases.Count)
+                if ($estimatedPhase -ne $lastPhase) {
+                    $lastPhase = $estimatedPhase
+                    $percentage = [math]::Round(($estimatedPhase / $bootPhases.Count) * 100)
+                    $phase = $bootPhases | Where-Object { $_.Number -eq $estimatedPhase }
+                    $progress = @{
+                        Phase = $estimatedPhase
+                        PhaseName = if ($phase) { $phase.Name } else { "Unknown" }
+                        Percentage = $percentage
+                        Message = if ($phase) { $phase.Description } else { "" }
+                        Elapsed = $elapsed
+                    }
+                    & $progressCallback $progress
+                    Update-StatusBar -Message "Phase $estimatedPhase/$($bootPhases.Count): $($phase.Name) | Elapsed: $([math]::Round($elapsed.TotalMinutes, 1))m" -ShowProgress -Percentage $percentage -Stage $estimatedPhase
+                }
+            }
+            
+            [System.Windows.Forms.Application]::DoEvents()
         }
         
-        # Get diagnosis results
-        $diagnosis = Receive-Job $diagnosisJob -ErrorAction SilentlyContinue
+        # Get diagnosis and repair results
+        $result = Receive-Job $diagnosisJob -ErrorAction SilentlyContinue
         Remove-Job $diagnosisJob -ErrorAction SilentlyContinue
         
         # Show final boot stack with all phases checked
+        $elapsed = (Get-Date) - $startTime
         $finalProgress = @{
-            Stage = $maxPhases - 1
+            Phase = $bootPhases.Count
+            PhaseName = "Analysis Complete"
             Percentage = 100
-            CurrentOperation = "Analysis Complete"
+            Message = "All phases completed"
+            Elapsed = $elapsed
         }
         & $progressCallback $finalProgress
         
-        $output = $diagnosis.Report
+        # Handle DiagnosisThenAsk mode
+        if ($result -and $result.AskForFix) {
+            $fixResponse = [System.Windows.MessageBox]::Show(
+                "Diagnosis found $($result.IssuesFound) issue(s).`n`n" +
+                "Would you like to automatically fix these issues?`n`n" +
+                "Yes = Run automated boot repair`n" +
+                "No = Show diagnosis report only",
+                "Apply Fixes?",
+                "YesNo",
+                "Question"
+            )
+            
+            if ($fixResponse -eq "Yes") {
+                # Run repair
+                Update-StatusBar -Message "Running automated boot repair..." -ShowProgress
+                $repairJob = Start-Job -ScriptBlock {
+                    param($drive, $scriptRoot)
+                    Set-Location $scriptRoot
+                    . "$scriptRoot\Helper\WinRepairCore.ps1"
+                    Start-AutomatedBootRepair -TargetDrive $drive -SkipConfirmation:$false -CreateRestorePoint:$true
+                } -ArgumentList $drive, $PSScriptRoot
+                
+                while ($repairJob.State -eq "Running") {
+                    Start-Sleep -Milliseconds 500
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
+                
+                $repair = Receive-Job $repairJob -ErrorAction SilentlyContinue
+                Remove-Job $repairJob -ErrorAction SilentlyContinue
+                
+                $result.Repair = $repair
+                $result.Report += "`n`n" + $repair.Report
+                $result.Success = $repair.Success
+            }
+        }
+        
+        $output = if ($result -and $result.Report) { $result.Report } else { "Diagnosis completed but no report available." }
+        
+        # Add summary
+        if ($result) {
+            $output += "`n`n===============================================================`n"
+            $output += "SUMMARY`n"
+            $output += "===============================================================`n"
+            $output += "Mode: $($result.Mode)`n"
+            $output += "Issues Found: $($result.IssuesFound)`n"
+            if ($result.IssuesFixed) {
+                $output += "Issues Fixed: $($result.IssuesFixed)`n"
+            }
+            $output += "Success: $(if ($result.Success) { 'Yes' } else { 'No' })`n"
+            if ($result.Diagnosis -and $result.Diagnosis.ElapsedTime) {
+                $output += "Total Time: $([math]::Round($result.Diagnosis.ElapsedTime.TotalMinutes, 2)) minutes`n"
+            }
+        }
         
         # Add boot log summary if available
         $bootLog = Get-BootLogAnalysis -TargetDrive $drive
@@ -5798,11 +6642,26 @@ try {
 } catch {}
 # #endregion agent log
 
+# Wrap ShowDialog in comprehensive error handling to catch stack overflow
 try {
+    Write-Host "Showing GUI window..." -ForegroundColor Gray
+    
+    # Verify window is valid before showing
+    if ($null -eq $W) {
+        throw "Window object is null - cannot show dialog"
+    }
+    
+    # Check window type
+    if (-not ($W -is [System.Windows.Window])) {
+        throw "Window object is not a valid WPF Window type: $($W.GetType().FullName)"
+    }
+    
+    # Show dialog with error handling
     $W.ShowDialog() | Out-Null
     
     # #region agent log
     try {
+        $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
         $logEntry = @{
             sessionId = "debug-session"
             runId = "gui-launch-verify"
@@ -5815,7 +6674,39 @@ try {
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
     } catch {}
     # #endregion agent log
+    
+    Write-Host "GUI window closed successfully." -ForegroundColor Green
 } catch {
+    $errorMsg = $_.Exception.Message
+    $errorCode = if ($_.Exception.HResult) { "0x$($_.Exception.HResult.ToString('X8'))" } else { "Unknown" }
+    
+    # Check for stack overflow
+    if ($errorMsg -match 'stack|overflow|buffer|0xC0000409|-1073740771|STATUS_STACK_BUFFER_OVERRUN' -or 
+        $errorCode -eq '0xC0000409') {
+        $criticalError = "CRITICAL: Stack buffer overrun detected during ShowDialog().`n`n" +
+                        "This indicates a memory corruption or stack overflow issue.`n`n" +
+                        "Error: $errorMsg`n" +
+                        "Error Code: $errorCode`n`n" +
+                        "Possible causes:`n" +
+                        "  - Too many event handlers causing stack overflow`n" +
+                        "  - Memory exhaustion during window initialization`n" +
+                        "  - Circular references in event handlers`n" +
+                        "  - PowerShell Editor Services memory limits exceeded"
+        
+        Write-Host $criticalError -ForegroundColor Red
+        
+        # Log to file
+        try {
+            $errorLogPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "MiracleBoot_GUI_Error.log"
+            Add-Content -Path $errorLogPath -Value "`n$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'): STACK BUFFER OVERRUN DETECTED" -ErrorAction SilentlyContinue
+            Add-Content -Path $errorLogPath -Value "Error: $errorMsg" -ErrorAction SilentlyContinue
+            Add-Content -Path $errorLogPath -Value "Error Code: $errorCode" -ErrorAction SilentlyContinue
+            Add-Content -Path $errorLogPath -Value "Stack Trace: $($_.ScriptStackTrace)" -ErrorAction SilentlyContinue
+        } catch {}
+        
+        throw $criticalError
+    }
+    
     # #region agent log
     try {
         $logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) ".cursor\debug.log"
@@ -5825,13 +6716,18 @@ try {
             hypothesisId = "VERIFY"
             location = "WinRepairGUI.ps1:ShowDialog-error"
             message = "Error showing GUI window"
-            data = @{ error = $_.Exception.Message; stackTrace = $_.ScriptStackTrace }
+            data = @{ 
+                error = $errorMsg
+                errorCode = $errorCode
+                stackTrace = $_.ScriptStackTrace
+            }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
     } catch {}
     # #endregion agent log
-    throw
+    
+    throw "Failed to show GUI window: $errorMsg"
 }
 } # End of Start-GUI function
 

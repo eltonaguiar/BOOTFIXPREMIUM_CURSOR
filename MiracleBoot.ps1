@@ -422,13 +422,35 @@ if ($envType -eq 'FullOS') {
     }
 }
 
-if ($envType -eq 'FullOS') {
-    Write-Host "Attempting to launch GUI mode..." -ForegroundColor Green
+# GUI can launch in FullOS or WinPE (if WPF is available)
+# WinRE will use TUI for safety
+$canLaunchGUI = ($envType -eq 'FullOS') -or ($envType -eq 'WinPE')
+
+if ($canLaunchGUI) {
+    if ($envType -eq 'WinPE') {
+        Write-Host "=" * 80 -ForegroundColor Yellow
+        Write-Host "WARNING: GUI MODE IN WINPE ENVIRONMENT" -ForegroundColor Yellow
+        Write-Host "=" * 80 -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "You are launching the GUI in Windows Preinstallation Environment (WinPE)." -ForegroundColor Yellow
+        Write-Host "While the GUI interface itself is safe, the repair operations it allows" -ForegroundColor Yellow
+        Write-Host "can be DESTRUCTIVE if misused. Please exercise caution when:" -ForegroundColor Yellow
+        Write-Host "  - Modifying boot configuration (BCD)" -ForegroundColor Yellow
+        Write-Host "  - Repairing system files on offline installations" -ForegroundColor Yellow
+        Write-Host "  - Performing disk repairs" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "The GUI will launch in 3 seconds. Press Ctrl+C to cancel and use TUI instead." -ForegroundColor Cyan
+        Start-Sleep -Seconds 3
+        Write-Host ""
+    } else {
+        Write-Host "Attempting to launch GUI mode..." -ForegroundColor Green
+    }
     
     # Check if WPF is available
     try {
         Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
         Write-Host "WPF assemblies loaded successfully." -ForegroundColor Green
         
         #region agent log - WPF loaded
@@ -474,15 +496,59 @@ if ($envType -eq 'FullOS') {
         }
         
         Write-Host "Loading GUI module..." -ForegroundColor Gray
-        . "$PSScriptRoot\Helper\WinRepairGUI.ps1" -ErrorAction Stop
-        Write-Host "GUI module loaded." -ForegroundColor Green
+        
+        # Load GUI module with comprehensive error handling
+        $guiLoadErrors = @()
+        try {
+            # Capture any errors during module load
+            $ErrorActionPreference = 'Continue'
+            $guiOutput = . "$PSScriptRoot\Helper\WinRepairGUI.ps1" 2>&1
+            $ErrorActionPreference = 'Stop'
+            
+            # Check for errors in output
+            foreach ($line in $guiOutput) {
+                if ($line -is [System.Management.Automation.ErrorRecord]) {
+                    $guiLoadErrors += $line.Exception.Message
+                    Write-Host "WARNING during GUI module load: $($line.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+            
+            # Check for parser errors
+            if ($guiLoadErrors.Count -gt 0) {
+                $criticalErrors = $guiLoadErrors | Where-Object { $_ -match 'ParserError|SyntaxError|Missing|Unexpected' }
+                if ($criticalErrors.Count -gt 0) {
+                    throw "Critical errors during GUI module load: $($criticalErrors -join '; ')"
+                }
+            }
+            
+            Write-Host "GUI module loaded." -ForegroundColor Green
+        } catch {
+            Write-Host "ERROR: Failed to load GUI module: $_" -ForegroundColor Red
+            Write-Host "Falling back to TUI mode..." -ForegroundColor Yellow
+            throw "GUI module load failed: $_"
+        }
         
         # Verify Start-GUI function exists (use Stop to fail fast if missing)
-        if (-not (Get-Command Start-GUI -ErrorAction Stop)) {
+        if (-not (Get-Command Start-GUI -ErrorAction SilentlyContinue)) {
             throw "Start-GUI function not found in WinRepairGUI.ps1"
         }
         
+        Write-Host "GUI function verified." -ForegroundColor Green
         Write-Host "Launching GUI window..." -ForegroundColor Green
+        
+        # Additional safety check: Verify GUI module loaded without errors
+        $guiErrors = $null
+        try {
+            # Test that Start-GUI is callable
+            $guiCmd = Get-Command Start-GUI -ErrorAction Stop
+            if ($null -eq $guiCmd) {
+                throw "Start-GUI command not found after module load"
+            }
+        } catch {
+            $guiErrors = $_.Exception.Message
+            Write-Host "ERROR: GUI module validation failed: $guiErrors" -ForegroundColor Red
+            throw "GUI module validation failed: $guiErrors"
+        }
         #region agent log - GUI starting
         try {
             $logPayload = @{

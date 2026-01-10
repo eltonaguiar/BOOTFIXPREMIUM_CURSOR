@@ -39,8 +39,14 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 1. Boot your computer
 2. When Windows fails to start, you'll see "Preparing Automatic Repair"
 3. Go to **Advanced Options** → **Troubleshoot** → **Command Prompt**
-4. Navigate to your Miracle Boot folder
-5. Run: `RunMiracleBoot.cmd`
+4. **Enable Internet** (if needed - see `SHIFT_F10.txt` for commands)
+5. **Download from GitHub** (if not already on USB):
+   ```powershell
+   cd D:\
+   powershell -Command "$client = New-Object System.Net.WebClient; $client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force"
+   cd D:\MiracleBoot_v7_1_1-main
+   ```
+6. Run: `RunMiracleBoot.cmd`
 
 **Interface:** Text-based menu (MS-DOS Style) - all features available via keyboard navigation.
 
@@ -50,6 +56,17 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 - Fixing boot configuration issues
 - Accessing system when Windows won't start
 
+**Quick Internet Fix in WinRE:**
+If internet doesn't work, run these commands first:
+```cmd
+netsh interface show interface
+netsh interface set interface name="Ethernet" admin=enable
+netsh interface ip set address name="Ethernet" dhcp
+netsh interface ip set dns name="Ethernet" static 8.8.8.8
+ping 8.8.8.8
+```
+See `SHIFT_F10.txt` for complete network troubleshooting guide.
+
 ---
 
 ### ✅ **Windows Preinstallation Environment (WinPE)**
@@ -57,8 +74,21 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 
 **How to access:**
 1. Boot from WinPE USB/DVD (Hiren's BootCD PE, Sergei Strelec's WinPE, or custom WinPE)
-2. Navigate to your Miracle Boot folder (on USB or network)
-3. Run: `RunMiracleBoot.cmd`
+2. **Enable Internet** (if needed - see `SHIFT_F10.txt` for commands):
+   ```cmd
+   netsh interface show interface
+   netsh interface set interface name="Ethernet" admin=enable
+   netsh interface ip set address name="Ethernet" dhcp
+   netsh interface ip set dns name="Ethernet" static 8.8.8.8
+   ping 8.8.8.8
+   ```
+3. **Download from GitHub** (if not already on USB):
+   ```powershell
+   cd D:\
+   powershell -Command "$client = New-Object System.Net.WebClient; $client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force"
+   cd D:\MiracleBoot_v7_1_1-main
+   ```
+4. Run: `RunMiracleBoot.cmd`
 
 **Interface:** Text-based menu (MS-DOS Style) - optimized for minimal environments.
 
@@ -72,6 +102,9 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 - Option to install portable Chrome/Firefox browser for web access
 - Network support for downloading drivers and tools
 - Full offline repair capabilities
+- **GitHub download support** - Download directly in WinPE if internet is enabled
+
+**Note:** If internet doesn't work in WinPE, download on another device and copy via USB (see `SHIFT_F10.txt` Section 2, Option C).
 
 ---
 
