@@ -318,30 +318,50 @@ if errorlevel 1 (
         set /p use_bcdboot="Use bcdboot instead? (Y/N): "
         if /I "!use_bcdboot!"=="Y" (
             echo.
-            REM Check if winload.efi exists in Windows directory
+            REM Step 1: Check if winload.efi exists in Windows directory
             if not exist "!target_drive!:\Windows\System32\winload.efi" (
                 echo [WARNING] winload.efi is missing from Windows directory.
-                echo Attempting to restore winload.efi using DISM and SFC...
                 echo.
-                echo Running: DISM /Image:!target_drive!: /RestoreHealth
-                dism /Image:!target_drive!: /RestoreHealth
-                if errorlevel 1 (
-                    echo [WARNING] DISM restore health reported issues.
-                )
-                echo.
-                echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
-                sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
-                if errorlevel 1 (
-                    echo [WARNING] SFC reported issues.
-                )
-                echo.
-                REM Check if winload.efi was restored
-                if exist "!target_drive!:\Windows\System32\winload.efi" (
-                    echo [SUCCESS] winload.efi restored to Windows directory.
+                echo Step 1: Checking source template folder...
+                if exist "!target_drive!:\Windows\System32\Boot\winload.efi" (
+                    echo [INFO] Source template found in Boot folder.
+                    echo Copying from Boot folder to System32...
+                    copy "!target_drive!:\Windows\System32\Boot\winload.efi" "!target_drive!:\Windows\System32\winload.efi" /y
+                    if exist "!target_drive!:\Windows\System32\winload.efi" (
+                        echo [SUCCESS] winload.efi copied from Boot folder to System32.
+                    )
                 ) else (
-                    echo [WARNING] winload.efi still missing after DISM/SFC.
-                    echo You may need to extract it from Windows installation media.
+                    echo [WARNING] Source template missing from Boot folder.
+                    echo Attempting to restore winload.efi using DISM and SFC...
+                    echo.
+                    echo Running: DISM /Image:!target_drive!: /RestoreHealth
+                    dism /Image:!target_drive!: /RestoreHealth
+                    if errorlevel 1 (
+                        echo [WARNING] DISM restore health reported issues.
+                    )
+                    echo.
+                    echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                    sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                    if errorlevel 1 (
+                        echo [WARNING] SFC reported issues.
+                    )
+                    echo.
+                    REM Check if winload.efi was restored
+                    if exist "!target_drive!:\Windows\System32\winload.efi" (
+                        echo [SUCCESS] winload.efi restored to Windows directory.
+                    ) else (
+                        echo [WARNING] winload.efi still missing after DISM/SFC.
+                        echo You may need to extract it from Windows installation media.
+                    )
                 )
+                echo.
+            )
+            
+            REM Step 2: Verify file attributes (clear hidden/system if needed)
+            if exist "!target_drive!:\Windows\System32\winload.efi" (
+                echo Step 2: Verifying file attributes...
+                attrib -s -h -r "!target_drive!:\Windows\System32\winload.efi"
+                echo [OK] File attributes verified.
                 echo.
             )
             
@@ -353,19 +373,34 @@ if errorlevel 1 (
                 goto :eof
             )
             echo.
-            echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+            echo Step 3: Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
             bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
             if errorlevel 1 (
-                echo ERROR: bcdboot failed.
-            ) else (
+                echo [WARNING] bcdboot reported issues.
                 echo.
-                echo [SUCCESS] Boot files repaired successfully.
-                REM Verify winload.efi was copied to EFI partition
-                if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
-                    echo [SUCCESS] Verified: winload.efi is now present in EFI partition.
+                echo Step 4: Attempting to format EFI partition and retry...
+                echo Formatting EFI partition !EFI_DRIVE!: as FAT32 (quick format)...
+                echo Y | format !EFI_DRIVE!: /fs:FAT32 /q
+                if errorlevel 1 (
+                    echo [WARNING] EFI partition format failed.
                 ) else (
-                    echo [WARNING] winload.efi not found in EFI partition after bcdboot.
+                    echo [OK] EFI partition formatted successfully.
+                    echo.
+                    echo Retrying bcdboot after EFI partition format...
+                    bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                    if errorlevel 1 (
+                        echo [ERROR] bcdboot still failed after format.
+                    )
                 )
+            )
+            echo.
+            
+            REM Verify winload.efi was copied to EFI partition
+            if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+                echo [SUCCESS] Verified: winload.efi is now present in EFI partition.
+            ) else (
+                echo [WARNING] winload.efi not found in EFI partition after bcdboot.
+                echo Step 5: Manual extraction from Windows installation media may be required.
             )
         ) else (
             echo Aborted by user.
@@ -405,45 +440,77 @@ echo.
         )
         echo.
 
-        REM Check if winload.efi exists and restore if missing
+        REM Step 5: Check if winload.efi exists and restore if missing
         echo Step 5: Checking for missing winload.efi...
         if not exist "!target_drive!:\Windows\System32\winload.efi" (
             echo [WARNING] winload.efi is missing from Windows directory.
-            echo Attempting to restore winload.efi using DISM and SFC...
             echo.
-            echo Running: DISM /Image:!target_drive!: /RestoreHealth
-            dism /Image:!target_drive!: /RestoreHealth
-            if errorlevel 1 (
-                echo [WARNING] DISM restore health reported issues.
-            )
-            echo.
-            echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
-            sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
-            if errorlevel 1 (
-                echo [WARNING] SFC reported issues.
-            )
-            echo.
-            REM Check if winload.efi was restored
-            if exist "!target_drive!:\Windows\System32\winload.efi" (
-                echo [SUCCESS] winload.efi restored to Windows directory.
-                echo.
-                echo Attempting to copy winload.efi to EFI partition using bcdboot...
-                call :MountEFIPartition "!target_drive!"
-                if not errorlevel 1 (
-                    echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
-                    bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
-                    if not errorlevel 1 (
-                        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
-                            echo [SUCCESS] winload.efi copied to EFI partition.
-                        )
-                    )
+            echo Step 5.1: Checking source template folder...
+            if exist "!target_drive!:\Windows\System32\Boot\winload.efi" (
+                echo [INFO] Source template found in Boot folder.
+                echo Copying from Boot folder to System32...
+                copy "!target_drive!:\Windows\System32\Boot\winload.efi" "!target_drive!:\Windows\System32\winload.efi" /y
+                if exist "!target_drive!:\Windows\System32\winload.efi" (
+                    echo [SUCCESS] winload.efi copied from Boot folder to System32.
                 )
             ) else (
-                echo [WARNING] winload.efi still missing after DISM/SFC.
-                echo You may need to extract it from Windows installation media.
+                echo [WARNING] Source template missing from Boot folder.
+                echo Attempting to restore winload.efi using DISM and SFC...
+                echo.
+                echo Running: DISM /Image:!target_drive!: /RestoreHealth
+                dism /Image:!target_drive!: /RestoreHealth
+                if errorlevel 1 (
+                    echo [WARNING] DISM restore health reported issues.
+                )
+                echo.
+                echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                if errorlevel 1 (
+                    echo [WARNING] SFC reported issues.
+                )
+                echo.
+                REM Check if winload.efi was restored
+                if exist "!target_drive!:\Windows\System32\winload.efi" (
+                    echo [SUCCESS] winload.efi restored to Windows directory.
+                ) else (
+                    echo [WARNING] winload.efi still missing after DISM/SFC.
+                    echo You may need to extract it from Windows installation media.
+                )
             )
+            echo.
         ) else (
             echo [OK] winload.efi found in Windows directory.
+        )
+        
+        REM Step 5.2: Verify file attributes (clear hidden/system if needed)
+        if exist "!target_drive!:\Windows\System32\winload.efi" (
+            echo Step 5.2: Verifying file attributes...
+            attrib -s -h -r "!target_drive!:\Windows\System32\winload.efi"
+            echo [OK] File attributes verified.
+            echo.
+        )
+        
+        REM Step 5.3: Copy to EFI partition if not already there
+        if exist "!target_drive!:\Windows\System32\winload.efi" (
+            echo Step 5.3: Copying winload.efi to EFI partition using bcdboot...
+            call :MountEFIPartition "!target_drive!"
+            if not errorlevel 1 (
+                echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                if errorlevel 1 (
+                    echo [WARNING] bcdboot failed. Attempting to format EFI partition and retry...
+                    echo Y | format !EFI_DRIVE!: /fs:FAT32 /q
+                    if not errorlevel 1 (
+                        echo Retrying bcdboot after format...
+                        bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                    )
+                )
+                if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+                    echo [SUCCESS] winload.efi copied to EFI partition.
+                ) else (
+                    echo [WARNING] winload.efi not found in EFI partition after bcdboot.
+                )
+            )
         )
         echo.
 

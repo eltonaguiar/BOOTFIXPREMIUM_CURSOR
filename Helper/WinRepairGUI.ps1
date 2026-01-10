@@ -3741,50 +3741,83 @@ if ($btnOneClickRepair) {
                 }
                 
                 if ($efiDrive) {
-                    # First, check if winload.efi exists in Windows directory
+                    # Step 1: Check if winload.efi exists in Windows directory
                     $winloadWindowsPath = "$drive`:\Windows\System32\winload.efi"
+                    $winloadBootPath = "$drive`:\Windows\System32\Boot\winload.efi"
                     $winloadMissing = -not (Test-Path $winloadWindowsPath)
                     
                     if ($winloadMissing) {
                         Write-Log "[WARNING] winload.efi is missing from Windows directory: $winloadWindowsPath"
-                        Write-Log "Attempting to restore winload.efi from Windows Component Store..."
+                        Write-Log "Step 1: Checking source template folder..."
                         
-                        if (-not $testMode) {
-                            try {
-                                # Try to restore winload.efi using DISM
-                                Write-Log "Running: DISM /Image:$drive`: /RestoreHealth"
-                                $dismOutput = & dism /Image:"$drive`:" /RestoreHealth 2>&1 | Out-String
-                                Write-Log "DISM Output: $dismOutput"
-                                
-                                # Also try SFC to restore system files
-                                Write-Log "Running: SFC /ScanNow /OffBootDir=$drive`: /OffWinDir=$drive`:\Windows"
-                                $sfcOutput = & sfc /ScanNow /OffBootDir="$drive`:" /OffWinDir="$drive`:\Windows" 2>&1 | Out-String
-                                Write-Log "SFC Output: $sfcOutput"
-                                
-                                # Check if winload.efi was restored
-                                Start-Sleep -Seconds 2
-                                if (Test-Path $winloadWindowsPath) {
-                                    Write-Log "[SUCCESS] winload.efi restored to Windows directory"
-                                } else {
-                                    Write-Log "[WARNING] winload.efi still missing after DISM/SFC. May need to extract from Windows installation media."
-                                    Write-Log "Alternative: Copy winload.efi from another Windows installation or installation media."
+                        # Check if source template exists in Boot folder (bcdboot source)
+                        if (Test-Path $winloadBootPath) {
+                            Write-Log "[INFO] Source template found in Boot folder: $winloadBootPath"
+                            Write-Log "Copying from Boot folder to System32..."
+                            if (-not $testMode) {
+                                try {
+                                    Copy-Item $winloadBootPath $winloadWindowsPath -Force -ErrorAction Stop
+                                    if (Test-Path $winloadWindowsPath) {
+                                        Write-Log "[SUCCESS] winload.efi copied from Boot folder to System32"
+                                    }
+                                } catch {
+                                    Write-Log "[WARNING] Failed to copy from Boot folder: $_"
                                 }
-                            } catch {
-                                Write-Log "[ERROR] Failed to restore winload.efi: $_"
                             }
                         } else {
-                            Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
+                            Write-Log "[WARNING] Source template missing from Boot folder: $winloadBootPath"
+                            Write-Log "Attempting to restore winload.efi from Windows Component Store..."
+                            
+                            if (-not $testMode) {
+                                try {
+                                    # Try to restore winload.efi using DISM
+                                    Write-Log "Running: DISM /Image:$drive`: /RestoreHealth"
+                                    $dismOutput = & dism /Image:"$drive`:" /RestoreHealth 2>&1 | Out-String
+                                    Write-Log "DISM Output: $dismOutput"
+                                    
+                                    # Also try SFC to restore system files
+                                    Write-Log "Running: SFC /ScanNow /OffBootDir=$drive`: /OffWinDir=$drive`:\Windows"
+                                    $sfcOutput = & sfc /ScanNow /OffBootDir="$drive`:" /OffWinDir="$drive`:\Windows" 2>&1 | Out-String
+                                    Write-Log "SFC Output: $sfcOutput"
+                                    
+                                    # Check if winload.efi was restored
+                                    Start-Sleep -Seconds 2
+                                    if (Test-Path $winloadWindowsPath) {
+                                        Write-Log "[SUCCESS] winload.efi restored to Windows directory"
+                                    } else {
+                                        Write-Log "[WARNING] winload.efi still missing after DISM/SFC."
+                                        Write-Log "May need to extract from Windows installation media (see Step 5 in repair guide)."
+                                    }
+                                } catch {
+                                    Write-Log "[ERROR] Failed to restore winload.efi: $_"
+                                }
+                            } else {
+                                Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
+                            }
                         }
                     }
                     
-                    # Use bcdboot to repair boot files (copies from Windows to EFI)
-                    # This will copy winload.efi from Windows\System32 to EFI partition
+                    # Step 2: Verify file attributes (clear hidden/system if needed)
+                    if (Test-Path $winloadWindowsPath) {
+                        Write-Log "Step 2: Verifying file attributes..."
+                        if (-not $testMode) {
+                            try {
+                                # Clear any problematic attributes
+                                attrib -s -h -r $winloadWindowsPath 2>&1 | Out-Null
+                                Write-Log "[OK] File attributes verified"
+                            } catch {
+                                Write-Log "[WARNING] Could not modify file attributes: $_"
+                            }
+                        }
+                    }
+                    
+                    # Step 3: Use bcdboot to repair boot files (copies from Windows to EFI)
                     $bcdbootCmd = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI"
                     Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition)" -IsRepairCommand:$true
                     
                     if (-not $testMode) {
                         try {
-                            Write-Log "Running: $bcdbootCmd"
+                            Write-Log "Step 3: Running: $bcdbootCmd"
                             $bcdbootOutput = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
                             Write-Log "bcdboot Output: $bcdbootOutput"
                             
@@ -3796,10 +3829,57 @@ if ($btnOneClickRepair) {
                                 if (Test-Path $winloadEfiPath) {
                                     Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
                                 } else {
-                                    Write-Log "[WARNING] winload.efi not found in EFI partition after bcdboot. Check bcdboot output above."
+                                    Write-Log "[WARNING] winload.efi not found in EFI partition after bcdboot."
+                                    Write-Log "Step 4: Attempting to format EFI partition and retry..."
+                                    
+                                    # Step 4: Force clean EFI partition if bcdboot failed
+                                    try {
+                                        Write-Log "Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
+                                        $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
+                                        Write-Log "Format Output: $formatOutput"
+                                        
+                                        Start-Sleep -Seconds 2
+                                        
+                                        # Retry bcdboot after format
+                                        Write-Log "Retrying bcdboot after EFI partition format..."
+                                        $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                                        Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                        
+                                        if (Test-Path $winloadEfiPath) {
+                                            Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+                                        } else {
+                                            Write-Log "[ERROR] winload.efi still missing after format and retry."
+                                            Write-Log "Step 5: Manual extraction from Windows installation media may be required."
+                                        }
+                                    } catch {
+                                        Write-Log "[ERROR] EFI partition format failed: $_"
+                                    }
                                 }
                             } else {
                                 Write-Log "[WARNING] bcdboot reported issues. Check output above."
+                                
+                                # If bcdboot failed, check if EFI partition is corrupted
+                                Write-Log "Step 4: Checking EFI partition health..."
+                                try {
+                                    $efiVolume = Get-Volume -DriveLetter $efiDrive -ErrorAction SilentlyContinue
+                                    if ($efiVolume -and $efiVolume.HealthStatus -ne 'Healthy') {
+                                        Write-Log "[WARNING] EFI partition health is not optimal. Attempting format..."
+                                        
+                                        # Format EFI partition
+                                        Write-Log "Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
+                                        $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
+                                        Write-Log "Format Output: $formatOutput"
+                                        
+                                        Start-Sleep -Seconds 2
+                                        
+                                        # Retry bcdboot
+                                        Write-Log "Retrying bcdboot after EFI partition format..."
+                                        $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                                        Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                    }
+                                } catch {
+                                    Write-Log "[WARNING] Could not check EFI partition health: $_"
+                                }
                             }
                         } catch {
                             Write-Log "[ERROR] bcdboot failed: $_"
