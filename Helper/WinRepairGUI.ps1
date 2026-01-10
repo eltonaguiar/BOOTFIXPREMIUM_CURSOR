@@ -3073,6 +3073,33 @@ if ($btnOneClickRepair) {
                 }
             }
             
+            # Load simulation harness if available
+            $simulationHarnessPath = Join-Path $scriptRoot "SimulationHarness.ps1"
+            if (Test-Path $simulationHarnessPath) {
+                try {
+                    . $simulationHarnessPath -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Log "[INFO] Simulation Harness not available"
+                }
+            }
+            
+            # Determine Repair Mode
+            $repairMode = "DIAGNOSE_ONLY"
+            if (Get-Command "Get-RepairMode" -ErrorAction SilentlyContinue) {
+                $currentMode = Get-RepairMode
+                $repairMode = $currentMode.ToString()
+                
+                Write-Log "Repair Mode: $repairMode" | Out-Null
+                
+                if ($currentMode -eq [RepairMode]::DIAGNOSE_ONLY) {
+                    Write-Log "[INFO] Running in DIAGNOSE_ONLY mode (read-only)" | Out-Null
+                } elseif ($currentMode -eq [RepairMode]::REPAIR_SAFE) {
+                    Write-Log "[INFO] Running in REPAIR_SAFE mode (limited writes, reversible only)" | Out-Null
+                } elseif ($currentMode -eq [RepairMode]::REPAIR_FORCE) {
+                    Write-Log "[INFO] Running in REPAIR_FORCE mode (destructive allowed)" | Out-Null
+                }
+            }
+            
             # Environment Safety Check (Prevents bricking healthy systems)
             Write-Log "==============================================================="
             Write-Log "ENVIRONMENT SAFETY CHECK"

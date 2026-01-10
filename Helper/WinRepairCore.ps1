@@ -1721,6 +1721,29 @@ function Get-WindowsVolumes {
 function Get-WindowsInstallations {
     <#
     .SYNOPSIS
+    Enumerates all Windows installations on available drives.
+    
+    .DESCRIPTION
+    Scans all volumes for Windows installations by checking for:
+    - \Windows\System32\ntoskrnl.exe (kernel)
+    - \Windows\System32\config\SYSTEM (registry hive)
+    
+    Never assumes C: - handles drive letter shifts in PE environments.
+    Returns detailed information for user selection.
+    
+    .OUTPUTS
+    Array of PSCustomObject with properties:
+    - DriveLetter: Drive letter (e.g., "C")
+    - WindowsPath: Full path to Windows directory
+    - SystemHivePath: Path to SYSTEM registry hive
+    - KernelPath: Path to ntoskrnl.exe
+    - OSVersion: Windows version (if detectable)
+    - OSBuild: Build number (if detectable)
+    - IsCurrentOS: Boolean indicating if this is the currently running OS
+    - SizeGB: Total size in GB
+    - FreeGB: Free space in GB
+    - HealthStatus: Volume health status
+    #>
     Scans all drives and finds Windows installations with detailed volume information.
     .DESCRIPTION
     Scans all available drives to find Windows installations by checking for:

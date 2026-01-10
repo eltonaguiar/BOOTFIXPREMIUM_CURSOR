@@ -3,6 +3,130 @@
 # Prevents accidental damage to healthy systems
 # ============================================================================
 
+# Set strict mode for safety
+Set-StrictMode -Version Latest
+
+# Repair Modes
+enum RepairMode {
+    DIAGNOSE_ONLY    # Read-only, no writes
+    REPAIR_SAFE      # Limited writes, reversible only
+    REPAIR_FORCE     # Destructive allowed (WinRE/WinPE only)
+}
+
+function Get-RepairMode {
+    <#
+    .SYNOPSIS
+    Determines the appropriate repair mode based on environment and user preferences.
+    
+    .PARAMETER AllowOnlineRepair
+    Allow REPAIR_SAFE mode in full Windows (not recommended)
+    
+    .PARAMETER ForceMode
+    Force a specific mode (for testing)
+    
+    .OUTPUTS
+    RepairMode enum value
+    #>
+    
+    param(
+        [switch]$AllowOnlineRepair,
+        [string]$ForceMode = $null
+    )
+    
+    if ($ForceMode) {
+        switch ($ForceMode.ToUpper()) {
+            "DIAGNOSE_ONLY" { return [RepairMode]::DIAGNOSE_ONLY }
+            "REPAIR_SAFE" { return [RepairMode]::REPAIR_SAFE }
+            "REPAIR_FORCE" { return [RepairMode]::REPAIR_FORCE }
+            default { return [RepairMode]::DIAGNOSE_ONLY }
+        }
+    }
+    
+    $envCheck = Test-EnvironmentSafety
+    
+    # In WinRE/WinPE, allow REPAIR_FORCE
+    if ($envCheck.IsSafe) {
+        return [RepairMode]::REPAIR_FORCE
+    }
+    
+    # In full Windows, default to DIAGNOSE_ONLY
+    if ($envCheck.Environment -eq "FullOS") {
+        if ($AllowOnlineRepair) {
+            return [RepairMode]::REPAIR_SAFE
+        } else {
+            return [RepairMode]::DIAGNOSE_ONLY
+        }
+    }
+    
+    # Default to safest mode
+    return [RepairMode]::DIAGNOSE_ONLY
+}
+
+function Test-CommandAllowed {
+    <#
+    .SYNOPSIS
+    Checks if a command is allowed in the current repair mode.
+    
+    .PARAMETER Command
+    Command name or description
+    
+    .PARAMETER IsDestructive
+    Whether the command modifies the system
+    
+    .PARAMETER CurrentMode
+    Current repair mode
+    
+    .OUTPUTS
+    Boolean - true if allowed, false if blocked
+    #>
+    
+    param(
+        [string]$Command,
+        [bool]$IsDestructive = $true,
+        [RepairMode]$CurrentMode = [RepairMode]::DIAGNOSE_ONLY
+    )
+    
+    # Read-only commands always allowed
+    if (-not $IsDestructive) {
+        return $true
+    }
+    
+    # Destructive commands blocked in DIAGNOSE_ONLY
+    if ($CurrentMode -eq [RepairMode]::DIAGNOSE_ONLY) {
+        return $false
+    }
+    
+    # Highly destructive commands only in REPAIR_FORCE
+    $highlyDestructive = @(
+        "diskpart clean",
+        "format",
+        "bcdboot targeting different disk",
+        "bootrec writes",
+        "changing firmware boot entries",
+        "deleting/renaming BCD",
+        "wiping EFI\Microsoft\Boot"
+    )
+    
+    foreach ($destructive in $highlyDestructive) {
+        if ($Command -match $destructive) {
+            if ($CurrentMode -ne [RepairMode]::REPAIR_FORCE) {
+                return $false
+            }
+        }
+    }
+    
+    # REPAIR_SAFE allows reversible operations
+    if ($CurrentMode -eq [RepairMode]::REPAIR_SAFE) {
+        # Allow: mount ESP, read BCD, copy files if missing
+        # Block: format, delete, rewrite BCD
+        if ($Command -match "format|delete|rewrite|clean") {
+            return $false
+        }
+    }
+    
+    return $true
+}
+
 function Test-EnvironmentSafety {
     <#
     .SYNOPSIS
