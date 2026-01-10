@@ -12474,9 +12474,19 @@ function Get-WindowsInstallFailureReasons {
 if ($PSScriptRoot) {
     $defensiveBootChainPath = Join-Path $PSScriptRoot "DefensiveBootChain.ps1"
     $bootViabilityPath = Join-Path $PSScriptRoot "BootViabilityEngine.ps1"
+    $safetyGuardrailsPath = Join-Path $PSScriptRoot "SafetyGuardrails.ps1"
 } else {
     $defensiveBootChainPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "DefensiveBootChain.ps1"
     $bootViabilityPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "BootViabilityEngine.ps1"
+    $safetyGuardrailsPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "SafetyGuardrails.ps1"
+}
+
+if (Test-Path $safetyGuardrailsPath) {
+    try {
+        . $safetyGuardrailsPath -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to load SafetyGuardrails.ps1: $_"
+    }
 }
 
 if (Test-Path $defensiveBootChainPath) {

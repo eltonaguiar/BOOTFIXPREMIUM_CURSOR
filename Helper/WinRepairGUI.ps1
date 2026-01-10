@@ -3063,6 +3063,83 @@ if ($btnOneClickRepair) {
                 }
             }
             
+            # Load safety guardrails if available
+            $safetyGuardrailsPath = Join-Path $scriptRoot "SafetyGuardrails.ps1"
+            if (Test-Path $safetyGuardrailsPath) {
+                try {
+                    . $safetyGuardrailsPath -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Log "[INFO] Safety Guardrails not available"
+                }
+            }
+            
+            # Environment Safety Check (Prevents bricking healthy systems)
+            Write-Log "==============================================================="
+            Write-Log "ENVIRONMENT SAFETY CHECK"
+            Write-Log "==============================================================="
+            Write-Log ""
+            
+            if (Get-Command "Test-EnvironmentSafety" -ErrorAction SilentlyContinue) {
+                $envCheck = Test-EnvironmentSafety
+                Write-Log "Environment: $($envCheck.Environment)"
+                Write-Log "System Drive: $($envCheck.SystemDrive)"
+                Write-Log "Safe for Repairs: $($envCheck.IsSafe)"
+                Write-Log "Status: $($envCheck.SafetyMessage)"
+                Write-Log ""
+                
+                if (-not $envCheck.IsSafe) {
+                    Write-Log "[BLOCKED] Destructive repairs are DISABLED because you are in a live Windows session."
+                    Write-Log ""
+                    Write-Log "REASON:"
+                    Write-Log "  - Running from $($envCheck.SystemDrive) in full Windows OS"
+                    Write-Log "  - Destructive commands (format, bcdboot) could damage the active system"
+                    Write-Log ""
+                    Write-Log "SOLUTION:"
+                    foreach ($rec in $envCheck.Recommendations) {
+                        Write-Log "  - $rec"
+                    }
+                    Write-Log ""
+                    Write-Log "Switching to READ-ONLY DIAGNOSTIC MODE..."
+                    Write-Log ""
+                    
+                    # Generate diagnostic state
+                    if (Get-Command "Get-RepairState" -ErrorAction SilentlyContinue) {
+                        $diagnosticState = Get-RepairState -TargetDrive $drive
+                        Write-Log $diagnosticState
+                    }
+                    
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "[BLOCKED] Live Windows detected. Boot from Recovery USB to repair."
+                    }
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "`n[BLOCKED] $($envCheck.SafetyMessage)`n"
+                    }
+                    
+                    Update-StatusBar -Message "One-Click Repair: BLOCKED - Live Windows detected" -HideProgress
+                    
+                    # Save log and exit
+                    try {
+                        $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                    } catch {
+                        # Ignore log save errors
+                    }
+                    
+                    return  # STOP - Do not proceed with repairs
+                }
+            } else {
+                Write-Log "[INFO] Environment safety check not available, proceeding with caution"
+                Write-Log ""
+            }
+            
+            # Check for Simulation Mode (WhatIf)
+            $simulationMode = $false
+            if ($ChkTestMode -and $ChkTestMode.IsChecked) {
+                $simulationMode = $true
+                Write-Log "[SIMULATION MODE] All destructive commands will be simulated (not executed)"
+                Write-Log ""
+            }
+            
             # Pre-flight checks: BitLocker and drive accessibility
             Write-Log "==============================================================="
             Write-Log "PRE-FLIGHT CHECKS"
