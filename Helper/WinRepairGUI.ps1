@@ -3741,7 +3741,44 @@ if ($btnOneClickRepair) {
                 }
                 
                 if ($efiDrive) {
+                    # First, check if winload.efi exists in Windows directory
+                    $winloadWindowsPath = "$drive`:\Windows\System32\winload.efi"
+                    $winloadMissing = -not (Test-Path $winloadWindowsPath)
+                    
+                    if ($winloadMissing) {
+                        Write-Log "[WARNING] winload.efi is missing from Windows directory: $winloadWindowsPath"
+                        Write-Log "Attempting to restore winload.efi from Windows Component Store..."
+                        
+                        if (-not $testMode) {
+                            try {
+                                # Try to restore winload.efi using DISM
+                                Write-Log "Running: DISM /Image:$drive`: /RestoreHealth"
+                                $dismOutput = & dism /Image:"$drive`:" /RestoreHealth 2>&1 | Out-String
+                                Write-Log "DISM Output: $dismOutput"
+                                
+                                # Also try SFC to restore system files
+                                Write-Log "Running: SFC /ScanNow /OffBootDir=$drive`: /OffWinDir=$drive`:\Windows"
+                                $sfcOutput = & sfc /ScanNow /OffBootDir="$drive`:" /OffWinDir="$drive`:\Windows" 2>&1 | Out-String
+                                Write-Log "SFC Output: $sfcOutput"
+                                
+                                # Check if winload.efi was restored
+                                Start-Sleep -Seconds 2
+                                if (Test-Path $winloadWindowsPath) {
+                                    Write-Log "[SUCCESS] winload.efi restored to Windows directory"
+                                } else {
+                                    Write-Log "[WARNING] winload.efi still missing after DISM/SFC. May need to extract from Windows installation media."
+                                    Write-Log "Alternative: Copy winload.efi from another Windows installation or installation media."
+                                }
+                            } catch {
+                                Write-Log "[ERROR] Failed to restore winload.efi: $_"
+                            }
+                        } else {
+                            Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
+                        }
+                    }
+                    
                     # Use bcdboot to repair boot files (copies from Windows to EFI)
+                    # This will copy winload.efi from Windows\System32 to EFI partition
                     $bcdbootCmd = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI"
                     Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition)" -IsRepairCommand:$true
                     
@@ -3753,6 +3790,14 @@ if ($btnOneClickRepair) {
                             
                             if ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created") {
                                 Write-Log "[SUCCESS] Boot files repaired successfully using bcdboot"
+                                
+                                # Verify winload.efi was copied to EFI partition
+                                $winloadEfiPath = "$efiDrive`:\EFI\Microsoft\Boot\winload.efi"
+                                if (Test-Path $winloadEfiPath) {
+                                    Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
+                                } else {
+                                    Write-Log "[WARNING] winload.efi not found in EFI partition after bcdboot. Check bcdboot output above."
+                                }
                             } else {
                                 Write-Log "[WARNING] bcdboot reported issues. Check output above."
                             }
@@ -5638,7 +5683,7 @@ if ($btnFullBootDiagnosis) {
         }
         
         # Run enhanced automated diagnosis with progress
-        Update-StatusBar -Message "Running boot diagnosis..." -ShowProgress -Percentage 0 -Stage "Initializing"
+        Update-StatusBar -Message "Initializing boot diagnosis..." -ShowProgress -Percentage 1 -Stage "Initializing"
         
         # Run diagnosis and repair in background job
         $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
@@ -5661,6 +5706,10 @@ if ($btnFullBootDiagnosis) {
             
             Start-BootDiagnosisAndRepair -Drive $drive -Mode $mode -Verbose:$verbose -ProgressCallback $progressCallback -LogFile $logFile
         } -ArgumentList $drive, $PSScriptRoot, $mode, $verbose, $logFile
+        
+        # Give job a moment to start
+        Start-Sleep -Milliseconds 500
+        Update-StatusBar -Message "Boot diagnosis started..." -ShowProgress -Percentage 5 -Stage "Starting"
         
         # Monitor progress with real-time updates from job
         $lastPhase = 0
@@ -5773,7 +5822,30 @@ if ($btnFullBootDiagnosis) {
             }
         }
         
-        $output = if ($result -and $result.Report) { $result.Report } else { "Diagnosis completed but no report available." }
+        # Ensure report is available
+        if (-not $result) {
+            $output = "Diagnosis failed: No result returned. Please check logs for errors."
+        } elseif (-not $result.Report -or [string]::IsNullOrWhiteSpace($result.Report)) {
+            # Build report from diagnosis if available
+            if ($result.Diagnosis -and $result.Diagnosis.Report) {
+                $output = $result.Diagnosis.Report
+            } else {
+                $output = "Diagnosis completed but report generation failed.`n`n"
+                if ($result.Diagnosis) {
+                    $output += "Issues Found: $($result.Diagnosis.Issues.Count)`n"
+                    if ($result.Diagnosis.Issues.Count -gt 0) {
+                        $output += "`nIssues:`n"
+                        foreach ($issue in $result.Diagnosis.Issues) {
+                            $output += "  - [$($issue.Severity)] $($issue.Type): $($issue.Description)`n"
+                        }
+                    }
+                } else {
+                    $output += "No diagnosis data available."
+                }
+            }
+        } else {
+            $output = $result.Report
+        }
         
         # Add summary
         if ($result) {

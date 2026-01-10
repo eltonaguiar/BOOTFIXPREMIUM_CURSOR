@@ -313,32 +313,65 @@ if errorlevel 1 (
     echo WARNING: bootrec.exe is not available in this environment.
     echo bootrec.exe is only available in Windows Recovery Environment (WinRE/WinPE).
     echo.
-    echo Alternative: Use bcdboot to repair boot files.
-    echo.
-    set /p use_bcdboot="Use bcdboot instead? (Y/N): "
-    if /I "!use_bcdboot!"=="Y" (
+        echo Alternative: Use bcdboot to repair boot files.
         echo.
-        echo Attempting to mount EFI partition...
-        call :MountEFIPartition "!target_drive!"
-        if errorlevel 1 (
-            echo ERROR: Could not mount EFI partition.
-            echo Please mount it manually using diskpart.
-            goto :eof
-        )
-        echo.
-        echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
-        bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
-        if errorlevel 1 (
-            echo ERROR: bcdboot failed.
-        ) else (
+        set /p use_bcdboot="Use bcdboot instead? (Y/N): "
+        if /I "!use_bcdboot!"=="Y" (
             echo.
-            echo [SUCCESS] Boot files repaired successfully.
+            REM Check if winload.efi exists in Windows directory
+            if not exist "!target_drive!:\Windows\System32\winload.efi" (
+                echo [WARNING] winload.efi is missing from Windows directory.
+                echo Attempting to restore winload.efi using DISM and SFC...
+                echo.
+                echo Running: DISM /Image:!target_drive!: /RestoreHealth
+                dism /Image:!target_drive!: /RestoreHealth
+                if errorlevel 1 (
+                    echo [WARNING] DISM restore health reported issues.
+                )
+                echo.
+                echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+                if errorlevel 1 (
+                    echo [WARNING] SFC reported issues.
+                )
+                echo.
+                REM Check if winload.efi was restored
+                if exist "!target_drive!:\Windows\System32\winload.efi" (
+                    echo [SUCCESS] winload.efi restored to Windows directory.
+                ) else (
+                    echo [WARNING] winload.efi still missing after DISM/SFC.
+                    echo You may need to extract it from Windows installation media.
+                )
+                echo.
+            )
+            
+            echo Attempting to mount EFI partition...
+            call :MountEFIPartition "!target_drive!"
+            if errorlevel 1 (
+                echo ERROR: Could not mount EFI partition.
+                echo Please mount it manually using diskpart.
+                goto :eof
+            )
+            echo.
+            echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+            bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+            if errorlevel 1 (
+                echo ERROR: bcdboot failed.
+            ) else (
+                echo.
+                echo [SUCCESS] Boot files repaired successfully.
+                REM Verify winload.efi was copied to EFI partition
+                if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+                    echo [SUCCESS] Verified: winload.efi is now present in EFI partition.
+                ) else (
+                    echo [WARNING] winload.efi not found in EFI partition after bcdboot.
+                )
+            )
+        ) else (
+            echo Aborted by user.
         )
-    ) else (
-        echo Aborted by user.
+        goto :eof
     )
-    goto :eof
-)
 
 REM bootrec.exe is available - use it
 echo Running boot repair commands...
@@ -365,24 +398,66 @@ if errorlevel 1 (
 )
 echo.
 
-echo Step 4: Fixing Master Boot Record (MBR)...
-bootrec /fixmbr
-if errorlevel 1 (
-    echo WARNING: bootrec /fixmbr reported issues.
-)
-echo.
+        echo Step 4: Fixing Master Boot Record (MBR)...
+        bootrec /fixmbr
+        if errorlevel 1 (
+            echo WARNING: bootrec /fixmbr reported issues.
+        )
+        echo.
 
-echo ================================================================
-echo BOOT REPAIR COMPLETE
-echo ================================================================
-echo.
-echo Next steps:
-echo 1. Restart your computer
-echo 2. Test if Windows boots normally
-echo 3. If problems persist, consider running an in-place repair installation
-echo.
+        REM Check if winload.efi exists and restore if missing
+        echo Step 5: Checking for missing winload.efi...
+        if not exist "!target_drive!:\Windows\System32\winload.efi" (
+            echo [WARNING] winload.efi is missing from Windows directory.
+            echo Attempting to restore winload.efi using DISM and SFC...
+            echo.
+            echo Running: DISM /Image:!target_drive!: /RestoreHealth
+            dism /Image:!target_drive!: /RestoreHealth
+            if errorlevel 1 (
+                echo [WARNING] DISM restore health reported issues.
+            )
+            echo.
+            echo Running: SFC /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+            sfc /ScanNow /OffBootDir=!target_drive!: /OffWinDir=!target_drive!:\Windows
+            if errorlevel 1 (
+                echo [WARNING] SFC reported issues.
+            )
+            echo.
+            REM Check if winload.efi was restored
+            if exist "!target_drive!:\Windows\System32\winload.efi" (
+                echo [SUCCESS] winload.efi restored to Windows directory.
+                echo.
+                echo Attempting to copy winload.efi to EFI partition using bcdboot...
+                call :MountEFIPartition "!target_drive!"
+                if not errorlevel 1 (
+                    echo Running: bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                    bcdboot !target_drive!:\Windows /s !EFI_DRIVE!: /f UEFI
+                    if not errorlevel 1 (
+                        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+                            echo [SUCCESS] winload.efi copied to EFI partition.
+                        )
+                    )
+                )
+            ) else (
+                echo [WARNING] winload.efi still missing after DISM/SFC.
+                echo You may need to extract it from Windows installation media.
+            )
+        ) else (
+            echo [OK] winload.efi found in Windows directory.
+        )
+        echo.
 
-goto :eof
+        echo ================================================================
+        echo BOOT REPAIR COMPLETE
+        echo ================================================================
+        echo.
+        echo Next steps:
+        echo 1. Restart your computer
+        echo 2. Test if Windows boots normally
+        echo 3. If problems persist, consider running an in-place repair installation
+        echo.
+
+        goto :eof
 
 :MountEFIPartition
 REM Attempts to mount EFI partition for target drive
