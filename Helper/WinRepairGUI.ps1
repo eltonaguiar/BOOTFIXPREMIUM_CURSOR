@@ -3053,6 +3053,16 @@ if ($btnOneClickRepair) {
                 }
             }
             
+            # Load boot viability engine if available
+            $bootViabilityPath = Join-Path $scriptRoot "BootViabilityEngine.ps1"
+            if (Test-Path $bootViabilityPath) {
+                try {
+                    . $bootViabilityPath -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Log "[INFO] Boot Viability Engine not available"
+                }
+            }
+            
             # Pre-flight checks: BitLocker and drive accessibility
             Write-Log "==============================================================="
             Write-Log "PRE-FLIGHT CHECKS"
@@ -4094,26 +4104,121 @@ if ($btnOneClickRepair) {
                 
                 if ($remainingIssues -eq 0) {
                     Write-Log "[✅ SUCCESS] All detected issues have been FIXED!"
-                    Write-Log ""
-                    Write-Log "Your boot system appears to be repaired. Next steps:"
-                    Write-Log "  1. Restart your computer"
-                    Write-Log "  2. If BitLocker prompts for recovery key, enter your 48-digit key"
-                    Write-Log "  3. Windows should boot normally"
-                    if ($txtOneClickStatus) {
-                        $txtOneClickStatus.Text = "✅ SUCCESS! All issues fixed. Ready to reboot."
-                    }
                 } else {
                     Write-Log "[⚠️  PARTIAL SUCCESS] Some issues remain ($remainingIssues issue(s) still present)"
+                }
+                
+                Write-Log ""
+                Write-Log "==============================================================="
+                Write-Log "POST-REPAIR TRUTH ENGINE - BOOT VIABILITY ASSESSMENT"
+                Write-Log "==============================================================="
+                Write-Log ""
+                Write-Log "Switching to FORENSIC MODE (read-only verification)..."
+                Write-Log ""
+                
+                # Run Boot Viability Engine
+                if (Get-Command "Test-BootViability" -ErrorAction SilentlyContinue) {
+                    try {
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "Running boot viability assessment..."
+                        }
+                        Update-StatusBar -Message "One-Click Repair: Assessing boot viability..." -ShowProgress
+                        
+                        $viabilityResult = Test-BootViability -TargetDrive $drive
+                        
+                        # Append viability report to log
+                        Write-Log $viabilityResult.Report
+                        Write-Log ""
+                        
+                        # Display verdict prominently
+                        Write-Log "==============================================================="
+                        Write-Log "FINAL BOOT VERDICT"
+                        Write-Log "==============================================================="
+                        Write-Log $viabilityResult.UserMessage
+                        Write-Log ""
+                        Write-Log "Confidence: $($viabilityResult.Confidence)%"
+                        Write-Log "Checks Passed: $($viabilityResult.Checks.EFIBootFiles.Count + $($viabilityResult.Checks.BCDRealityMatch.Count) + $($viabilityResult.Checks.WinloadReality.Count) + $($viabilityResult.Checks.BootCriticalDrivers.Count) + $($viabilityResult.Checks.BootHandoffChain.Count)) / 5"
+                        Write-Log ""
+                        
+                        if ($viabilityResult.WillBoot) {
+                            Write-Log "✅ VERDICT: SYSTEM WILL BOOT"
+                            Write-Log ""
+                            Write-Log "Your boot system is repaired and verified. Next steps:"
+                            Write-Log "  1. Restart your computer"
+                            Write-Log "  2. If BitLocker prompts for recovery key, enter your 48-digit key"
+                            Write-Log "  3. Windows should boot normally"
+                            
+                            if ($txtOneClickStatus) {
+                                $txtOneClickStatus.Text = "✅ BOOTABLE! System verified. Ready to reboot."
+                            }
+                            if ($fixerOutput) {
+                                $fixerOutput.Text += "`n`n$($viabilityResult.UserMessage)`n"
+                            }
+                        } else {
+                            Write-Log "❌ VERDICT: SYSTEM WILL NOT BOOT"
+                            Write-Log ""
+                            Write-Log "Blocking Issues:"
+                            foreach ($issue in $viabilityResult.BlockingIssues) {
+                                Write-Log "  - $issue"
+                            }
+                            Write-Log ""
+                            Write-Log "See detailed report above for:"
+                            Write-Log "  - Root cause classification"
+                            Write-Log "  - Evidence"
+                            Write-Log "  - Why automatic repair failed"
+                            Write-Log "  - Next steps for manual repair"
+                            
+                            if ($txtOneClickStatus) {
+                                $txtOneClickStatus.Text = "❌ NOT BOOTABLE: $($viabilityResult.BlockingIssues[0])"
+                            }
+                            if ($fixerOutput) {
+                                $fixerOutput.Text += "`n`n$($viabilityResult.UserMessage)`n"
+                                $fixerOutput.Text += "`nBlocking Issues:`n"
+                                foreach ($issue in $viabilityResult.BlockingIssues) {
+                                    $fixerOutput.Text += "  - $issue`n"
+                                }
+                            }
+                        }
+                        
+                        # Save diagnostic payload to separate file
+                        if ($viabilityResult.DiagnosticPayload) {
+                            $diagnosticFile = "$env:TEMP\BootViability_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+                            try {
+                                $viabilityResult.DiagnosticPayload | ConvertTo-Json -Depth 10 | Out-File -FilePath $diagnosticFile -Encoding UTF8 -Force
+                                Write-Log ""
+                                Write-Log "[INFO] Diagnostic payload saved to: $diagnosticFile"
+                            } catch {
+                                Write-Log "[WARNING] Could not save diagnostic payload: $_"
+                            }
+                        }
+                        
+                    } catch {
+                        Write-Log "[WARNING] Boot viability assessment failed: $_"
+                        Write-Log "Falling back to basic verification results above."
+                    }
+                } else {
+                    Write-Log "[INFO] Boot Viability Engine not available, using basic verification"
                     Write-Log ""
-                    Write-Log "NEXT STEPS:"
-                    Write-Log "1. Restart your computer and test if it boots"
-                    Write-Log "2. If BitLocker prompts for recovery key, enter your 48-digit key"
-                    Write-Log "3. If problems persist, consider:"
-                    Write-Log "   - Running an in-place repair installation"
-                    Write-Log "   - Checking hardware health"
-                    Write-Log "   - Injecting missing storage drivers"
-                    if ($txtOneClickStatus) {
-                        $txtOneClickStatus.Text = "⚠️  Partial success: $remainingIssues issue(s) remain. Check log for details."
+                    
+                    if ($remainingIssues -eq 0) {
+                        Write-Log "Your boot system appears to be repaired. Next steps:"
+                        Write-Log "  1. Restart your computer"
+                        Write-Log "  2. If BitLocker prompts for recovery key, enter your 48-digit key"
+                        Write-Log "  3. Windows should boot normally"
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "✅ SUCCESS! All issues fixed. Ready to reboot."
+                        }
+                    } else {
+                        Write-Log "NEXT STEPS:"
+                        Write-Log "1. Restart your computer and test if it boots"
+                        Write-Log "2. If BitLocker prompts for recovery key, enter your 48-digit key"
+                        Write-Log "3. If problems persist, consider:"
+                        Write-Log "   - Running an in-place repair installation"
+                        Write-Log "   - Checking hardware health"
+                        Write-Log "   - Injecting missing storage drivers"
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "⚠️  Partial success: $remainingIssues issue(s) remain. Check log for details."
+                        }
                     }
                 }
             }

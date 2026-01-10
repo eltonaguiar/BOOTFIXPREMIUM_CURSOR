@@ -12473,8 +12473,10 @@ function Get-WindowsInstallFailureReasons {
 # This module provides professional-grade boot repair with comprehensive verification
 if ($PSScriptRoot) {
     $defensiveBootChainPath = Join-Path $PSScriptRoot "DefensiveBootChain.ps1"
+    $bootViabilityPath = Join-Path $PSScriptRoot "BootViabilityEngine.ps1"
 } else {
     $defensiveBootChainPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "DefensiveBootChain.ps1"
+    $bootViabilityPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "BootViabilityEngine.ps1"
 }
 
 if (Test-Path $defensiveBootChainPath) {
@@ -12482,6 +12484,14 @@ if (Test-Path $defensiveBootChainPath) {
         . $defensiveBootChainPath -ErrorAction Stop
     } catch {
         Write-Warning "Failed to load DefensiveBootChain.ps1: $_"
+    }
+}
+
+if (Test-Path $bootViabilityPath) {
+    try {
+        . $bootViabilityPath -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to load BootViabilityEngine.ps1: $_"
     }
 }
 
