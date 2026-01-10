@@ -6216,6 +6216,108 @@ function Test-BitLockerStatus {
     return $status
 }
 
+function Unlock-BitLockerDrive {
+    <#
+    .SYNOPSIS
+    Unlocks a BitLocker-encrypted drive using a recovery key.
+    
+    .DESCRIPTION
+    Attempts to unlock a BitLocker-encrypted drive using the provided 48-digit recovery key.
+    Validates the key format and verifies the unlock was successful.
+    
+    .PARAMETER TargetDrive
+    The drive letter to unlock (e.g., "C")
+    
+    .PARAMETER RecoveryKey
+    The 48-digit BitLocker recovery key (with or without dashes)
+    
+    .OUTPUTS
+    PSCustomObject with properties:
+    - Success: Boolean indicating if unlock was successful
+    - Message: Status message
+    - DriveUnlocked: Boolean indicating if drive is now accessible
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TargetDrive,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$RecoveryKey
+    )
+    
+    $result = @{
+        Success = $false
+        Message = ""
+        DriveUnlocked = $false
+    }
+    
+    try {
+        $targetDrive = $TargetDrive.TrimEnd(':').ToUpper()
+        $recoveryKey = $RecoveryKey.Trim()
+        
+        # Remove dashes and spaces from recovery key for validation
+        $cleanKey = $recoveryKey -replace '[-\s]', ''
+        
+        # Validate recovery key format (48 digits)
+        if ($cleanKey.Length -ne 48) {
+            $result.Message = "Invalid recovery key format. Recovery key must be 48 digits (with or without dashes)."
+            return $result
+        }
+        
+        if ($cleanKey -notmatch '^\d{48}$') {
+            $result.Message = "Invalid recovery key format. Recovery key must contain only digits."
+            return $result
+        }
+        
+        # Check if manage-bde is available
+        $bitlockerCmd = Get-Command "manage-bde" -ErrorAction SilentlyContinue
+        if (-not $bitlockerCmd) {
+            $result.Message = "BitLocker management tools (manage-bde) not available. Cannot unlock drive."
+            return $result
+        }
+        
+        # Format recovery key with dashes (manage-bde expects format: XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX)
+        $formattedKey = $cleanKey -replace '(.{8})(.{8})(.{8})(.{8})(.{8})(.{8})', '$1-$2-$3-$4-$5-$6'
+        
+        Write-Host "Attempting to unlock drive $targetDrive`: with recovery key..." -ForegroundColor Yellow
+        
+        # Attempt to unlock the drive
+        $unlockOutput = manage-bde -unlock "${targetDrive}:" -RecoveryPassword $formattedKey 2>&1 | Out-String
+        
+        if ($LASTEXITCODE -eq 0 -or $unlockOutput -match "successfully|unlocked") {
+            # Verify drive is now accessible
+            Start-Sleep -Seconds 2  # Give system time to unlock
+            
+            $testPath = "${targetDrive}:\Windows"
+            if (Test-Path $testPath) {
+                $result.Success = $true
+                $result.DriveUnlocked = $true
+                $result.Message = "Drive $targetDrive`: successfully unlocked with recovery key."
+                Write-Host "[SUCCESS] Drive unlocked successfully!" -ForegroundColor Green
+            } else {
+                $result.Success = $false
+                $result.Message = "Unlock command succeeded but drive is still not accessible. Verify the recovery key is correct."
+                Write-Host "[WARNING] Unlock reported success but drive not accessible. Verify key." -ForegroundColor Yellow
+            }
+        } else {
+            $result.Success = $false
+            if ($unlockOutput -match "incorrect|invalid|wrong") {
+                $result.Message = "Recovery key is incorrect. Please verify the 48-digit key and try again."
+            } else {
+                $result.Message = "Failed to unlock drive: $unlockOutput"
+            }
+            Write-Host "[ERROR] Unlock failed: $($result.Message)" -ForegroundColor Red
+        }
+        
+    } catch {
+        $result.Success = $false
+        $result.Message = "Error unlocking drive: $_"
+        Write-Host "[ERROR] Exception during unlock: $_" -ForegroundColor Red
+    }
+    
+    return $result
+}
+
 function Get-MissingStorageDevices {
     # Fix for #2: Format-Table causes truncation. We build a clean string instead.
     # Only report devices that are ACTUALLY missing drivers, not just disabled or in other states

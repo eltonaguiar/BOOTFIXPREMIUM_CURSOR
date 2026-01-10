@@ -3262,30 +3262,20 @@ if ($btnOneClickRepair) {
                 }
             }
             
-            if (-not $driveAccessible) {
-                Write-Log "[ERROR] Drive $drive`: is not accessible or does not contain Windows."
-                Write-Log "Please verify the drive letter and ensure it's unlocked (if BitLocker encrypted)."
-                throw "Drive $drive`: is not accessible. Cannot proceed with repairs."
-            }
-            Write-Log ""
-            
-            # Check BitLocker status BEFORE repairs
-            Write-Log "Checking BitLocker encryption status..."
+            # Check BitLocker status and drive accessibility BEFORE repairs
+            Write-Log "Checking BitLocker encryption status and drive accessibility..."
             $bitlockerStatus = Test-BitLockerStatus -TargetDrive $drive -TimeoutSeconds 5
-            if ($bitlockerStatus.IsEncrypted -or $bitlockerStatus.Warning) {
-                Write-Log "[WARNING] BITLOCKER ENCRYPTION DETECTED OR SUSPECTED"
-                Write-Log "Drive: $drive`:"
-                if ($bitlockerStatus.IsEncrypted) {
-                    Write-Log "Status: ENCRYPTED (Protection: $($bitlockerStatus.ProtectionStatus))"
-                    Write-Log "Encryption: $($bitlockerStatus.EncryptionPercentage)%"
-                }
-                if ($bitlockerStatus.Warning) {
-                    Write-Log "Warning: $($bitlockerStatus.Warning)"
-                }
+            
+            # Check if drive is locked (requires recovery key)
+            $driveLocked = $false
+            if ($bitlockerStatus.VolumeStatus -eq "Locked" -or -not $driveAccessible) {
+                $driveLocked = $true
+                Write-Log "[WARNING] Drive $drive`: appears to be LOCKED (BitLocker encrypted and requires recovery key)"
                 Write-Log ""
-                Write-Log "⚠️  CRITICAL: Modifying boot files on a BitLocker-encrypted drive may trigger"
-                Write-Log "   a recovery key prompt on next boot. Ensure you have your 48-digit"
-                Write-Log "   BitLocker recovery key before proceeding!"
+                Write-Log "The drive is encrypted and locked. You need your BitLocker recovery key to unlock it."
+                Write-Log ""
+                Write-Log "Recovery key format: 48 digits (can include dashes)"
+                Write-Log "Example: 12345678-12345678-12345678-12345678-12345678-12345678"
                 Write-Log ""
                 Write-Log "Recovery key locations:"
                 Write-Log "  - Microsoft Account: https://account.microsoft.com/devices/recoverykey"
@@ -3294,12 +3284,126 @@ if ($btnOneClickRepair) {
                 Write-Log ""
                 
                 if (-not $testMode) {
+                    # Prompt user for recovery key
+                    $recoveryKeyPrompt = [Microsoft.VisualBasic.Interaction]::InputBox(
+                        "⚠️ BITLOCKER DRIVE LOCKED`n`n" +
+                        "Drive $drive`: is encrypted and locked.`n`n" +
+                        "Please enter your 48-digit BitLocker recovery key:`n`n" +
+                        "Format: XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX`n" +
+                        "(You can enter with or without dashes)`n`n" +
+                        "If you don't have the key, click Cancel to retrieve it first.",
+                        "BitLocker Recovery Key Required",
+                        ""
+                    )
+                    
+                    if ([string]::IsNullOrWhiteSpace($recoveryKeyPrompt)) {
+                        Write-Log "[ABORTED] User cancelled recovery key entry."
+                        throw "Operation cancelled. Drive requires BitLocker recovery key to proceed."
+                    }
+                    
+                    # Attempt to unlock with recovery key
+                    Write-Log "Attempting to unlock drive $drive`: with provided recovery key..."
+                    $unlockResult = Unlock-BitLockerDrive -TargetDrive $drive -RecoveryKey $recoveryKeyPrompt
+                    
+                    if ($unlockResult.Success) {
+                        Write-Log "[SUCCESS] $($unlockResult.Message)"
+                        Write-Log "Drive is now unlocked and accessible."
+                        $driveAccessible = $true
+                    } else {
+                        Write-Log "[ERROR] $($unlockResult.Message)"
+                        Write-Log ""
+                        Write-Log "The recovery key you entered is incorrect or unlock failed."
+                        Write-Log "Please verify your recovery key and try again."
+                        
+                        $retry = [System.Windows.MessageBox]::Show(
+                            "❌ UNLOCK FAILED`n`n" +
+                            "$($unlockResult.Message)`n`n" +
+                            "Would you like to try entering the recovery key again?`n`n" +
+                            "Click YES to retry, NO to abort.",
+                            "BitLocker Unlock Failed",
+                            "YesNo",
+                            "Error"
+                        )
+                        
+                        if ($retry -eq "Yes") {
+                            # Retry once
+                            $recoveryKeyRetry = [Microsoft.VisualBasic.Interaction]::InputBox(
+                                "Please enter your 48-digit BitLocker recovery key again:",
+                                "BitLocker Recovery Key (Retry)",
+                                ""
+                            )
+                            
+                            if (-not [string]::IsNullOrWhiteSpace($recoveryKeyRetry)) {
+                                $unlockResult = Unlock-BitLockerDrive -TargetDrive $drive -RecoveryKey $recoveryKeyRetry
+                                if ($unlockResult.Success) {
+                                    Write-Log "[SUCCESS] Drive unlocked on retry: $($unlockResult.Message)"
+                                    $driveAccessible = $true
+                                } else {
+                                    Write-Log "[ERROR] Unlock failed on retry: $($unlockResult.Message)"
+                                    throw "Could not unlock BitLocker drive. Please verify your recovery key and try again later."
+                                }
+                            } else {
+                                throw "Recovery key entry cancelled. Cannot proceed without unlocking drive."
+                            }
+                        } else {
+                            throw "BitLocker unlock cancelled. Cannot proceed without unlocking drive."
+                        }
+                    }
+                    Write-Log ""
+                } else {
+                    Write-Log "[TEST MODE] Drive appears locked but test mode active - would prompt for recovery key"
+                }
+            }
+            
+            # Verify drive is accessible after unlock attempt
+            if (-not $driveAccessible) {
+                $testPaths = @(
+                    "$drive`:\Windows",
+                    "$drive`:\Windows\System32",
+                    "$drive`:\Windows\System32\ntoskrnl.exe"
+                )
+                foreach ($testPath in $testPaths) {
+                    if (Test-Path $testPath) {
+                        $driveAccessible = $true
+                        Write-Log "[OK] Drive accessible: $testPath"
+                        break
+                    }
+                }
+            }
+            
+            if (-not $driveAccessible) {
+                Write-Log "[ERROR] Drive $drive`: is not accessible or does not contain Windows."
+                if ($bitlockerStatus.IsEncrypted) {
+                    Write-Log "Drive is BitLocker encrypted. If it's locked, you need to unlock it with your recovery key first."
+                }
+                throw "Drive $drive`: is not accessible. Cannot proceed with repairs."
+            }
+            Write-Log ""
+            
+            # Check BitLocker status for warnings (even if drive is unlocked)
+            if ($bitlockerStatus.IsEncrypted -or ($bitlockerStatus.Warning -and -not $driveLocked)) {
+                Write-Log "[INFO] BITLOCKER ENCRYPTION DETECTED"
+                Write-Log "Drive: $drive`:"
+                if ($bitlockerStatus.IsEncrypted) {
+                    Write-Log "Status: ENCRYPTED (Protection: $($bitlockerStatus.ProtectionStatus))"
+                    Write-Log "Encryption: $($bitlockerStatus.EncryptionPercentage)%"
+                }
+                if ($bitlockerStatus.Warning) {
+                    Write-Log "Note: $($bitlockerStatus.Warning)"
+                }
+                Write-Log ""
+                Write-Log "⚠️  IMPORTANT: Modifying boot files on a BitLocker-encrypted drive may trigger"
+                Write-Log "   a recovery key prompt on next boot. Ensure you have your 48-digit"
+                Write-Log "   BitLocker recovery key saved before proceeding!"
+                Write-Log ""
+                
+                if (-not $testMode -and -not $driveLocked) {
                     $bitlockerConfirm = [System.Windows.MessageBox]::Show(
                         "⚠️ BITLOCKER ENCRYPTION DETECTED`n`n" +
                         "Modifying boot files may require your BitLocker recovery key on next boot.`n`n" +
-                        "Do you have your 48-digit BitLocker recovery key?`n`n" +
+                        "Do you have your 48-digit BitLocker recovery key saved?`n`n" +
                         "If YES: Click OK to continue.`n" +
-                        "If NO: Click Cancel to abort and retrieve your key first.",
+                        "If NO: Click Cancel to retrieve your key first.",
                         "BitLocker Warning",
                         "OKCancel",
                         "Warning"
