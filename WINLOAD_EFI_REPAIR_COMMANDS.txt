@@ -1,0 +1,349 @@
+================================================================================
+EXACT COMMANDS TO FIX MISSING winload.efi
+================================================================================
+
+This document contains the exact sequence of commands that Miracle Boot uses
+to restore a missing winload.efi file. Use these commands in your VM to test
+the repair process.
+
+================================================================================
+PREREQUISITES
+================================================================================
+
+1. Boot into WinPE/WinRE or run from elevated PowerShell/CMD
+2. Identify your Windows drive letter (usually C:)
+3. Ensure you have administrator privileges
+
+================================================================================
+STEP-BY-STEP REPAIR SEQUENCE
+================================================================================
+
+STEP 1: Verify winload.efi is missing
+--------------------------------------
+Command:
+    dir C:\Windows\System32\winload.efi
+
+Expected Result:
+    File Not Found (if missing)
+
+Alternative Check:
+    if not exist "C:\Windows\System32\winload.efi" (echo MISSING) else (echo EXISTS)
+
+
+STEP 2: Restore winload.efi using DISM
+---------------------------------------
+Command:
+    DISM /Image:C: /RestoreHealth
+
+Expected Result:
+    "The restore operation completed successfully"
+    or
+    "Error: <some error>" (if Component Store is corrupted)
+
+Notes:
+    - This restores system files from the Windows Component Store
+    - If Component Store is corrupted, you'll need Windows installation media
+    - Can take 5-15 minutes depending on system
+
+
+STEP 3: Verify and restore using SFC
+-------------------------------------
+Command:
+    SFC /ScanNow /OffBootDir=C: /OffWinDir=C:\Windows
+
+Expected Result:
+    "Windows Resource Protection found corrupt files and successfully repaired them"
+    or
+    "Windows Resource Protection did not find any integrity violations"
+    or
+    "Windows Resource Protection could not perform the requested operation"
+
+Notes:
+    - SFC verifies and repairs system files
+    - /OffBootDir and /OffWinDir are required when running from WinPE/WinRE
+    - Can take 10-30 minutes
+
+
+STEP 4: Verify winload.efi was restored
+----------------------------------------
+Command:
+    dir C:\Windows\System32\winload.efi
+
+Expected Result:
+    File found with size > 0 bytes
+
+Alternative Check:
+    if exist "C:\Windows\System32\winload.efi" (echo RESTORED) else (echo STILL MISSING)
+
+
+STEP 5: Mount EFI System Partition
+----------------------------------
+First, find the EFI partition:
+
+Command (PowerShell):
+    Get-Partition -DiskNumber 0 | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }
+
+Command (CMD - using diskpart):
+    diskpart
+    list disk
+    select disk 0
+    list partition
+    select partition 1    (usually partition 1 is EFI)
+    assign letter=S
+    exit
+
+Expected Result:
+    EFI partition mounted as S: (or another available drive letter)
+
+
+STEP 6: Copy winload.efi to EFI partition using bcdboot
+-------------------------------------------------------
+Command:
+    bcdboot C:\Windows /s S: /f UEFI
+
+Expected Result:
+    "Boot files successfully created"
+    or
+    "Failure when attempting to copy boot files"
+
+Notes:
+    - This copies winload.efi and other boot files from Windows to EFI partition
+    - /f UEFI forces UEFI firmware mode
+    - If this fails, winload.efi might still be missing from Windows directory
+
+
+STEP 7: Verify winload.efi in EFI partition
+------------------------------------------
+Command:
+    dir S:\EFI\Microsoft\Boot\winload.efi
+
+Expected Result:
+    File found with size > 0 bytes
+
+Alternative Check:
+    if exist "S:\EFI\Microsoft\Boot\winload.efi" (echo SUCCESS) else (echo FAILED)
+
+
+STEP 8: Verify BCD points to correct winload.efi
+--------------------------------------------------
+Command:
+    bcdedit /enum all
+
+Look for:
+    - "osdevice" should point to partition=C:
+    - "path" should contain "\Windows\System32\winload.efi"
+
+If path is wrong, fix it:
+    bcdedit /set {default} path \Windows\System32\winload.efi
+
+
+================================================================================
+COMPLETE AUTOMATED SEQUENCE (PowerShell)
+================================================================================
+
+# Run this entire script in PowerShell (as Administrator)
+
+$drive = "C"
+$efiDrive = "S"
+
+Write-Host "Step 1: Checking for winload.efi..." -ForegroundColor Yellow
+$winloadPath = "$drive`:\Windows\System32\winload.efi"
+if (-not (Test-Path $winloadPath)) {
+    Write-Host "[WARNING] winload.efi is missing from Windows directory" -ForegroundColor Red
+    Write-Host "Step 2: Running DISM /RestoreHealth..." -ForegroundColor Yellow
+    $dismOutput = & DISM /Image:"$drive`:" /RestoreHealth 2>&1 | Out-String
+    Write-Host $dismOutput
+    
+    Write-Host "Step 3: Running SFC /ScanNow..." -ForegroundColor Yellow
+    $sfcOutput = & SFC /ScanNow /OffBootDir:"$drive`:" /OffWinDir:"$drive`:\Windows" 2>&1 | Out-String
+    Write-Host $sfcOutput
+    
+    Start-Sleep -Seconds 2
+    if (Test-Path $winloadPath) {
+        Write-Host "[SUCCESS] winload.efi restored to Windows directory" -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] winload.efi still missing after DISM/SFC" -ForegroundColor Red
+        Write-Host "You may need to extract it from Windows installation media" -ForegroundColor Yellow
+        exit 1
+    }
+} else {
+    Write-Host "[OK] winload.efi found in Windows directory" -ForegroundColor Green
+}
+
+Write-Host "Step 4: Mounting EFI partition..." -ForegroundColor Yellow
+$efiPartition = Get-Partition -DiskNumber 0 | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object -First 1
+if (-not $efiPartition.DriveLetter) {
+    $efiPartition | Set-Partition -NewDriveLetter $efiDrive
+    Start-Sleep -Milliseconds 500
+}
+$efiDrive = $efiPartition.DriveLetter
+
+Write-Host "Step 5: Copying boot files to EFI partition..." -ForegroundColor Yellow
+$bcdbootOutput = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+Write-Host $bcdbootOutput
+
+Write-Host "Step 6: Verifying winload.efi in EFI partition..." -ForegroundColor Yellow
+$efiWinloadPath = "$efiDrive`:\EFI\Microsoft\Boot\winload.efi"
+if (Test-Path $efiWinloadPath) {
+    Write-Host "[SUCCESS] winload.efi is now present in EFI partition" -ForegroundColor Green
+    Write-Host "File size: $((Get-Item $efiWinloadPath).Length) bytes" -ForegroundColor Green
+} else {
+    Write-Host "[ERROR] winload.efi not found in EFI partition after bcdboot" -ForegroundColor Red
+}
+
+
+================================================================================
+COMPLETE AUTOMATED SEQUENCE (CMD/Batch)
+================================================================================
+
+@echo off
+setlocal enabledelayedexpansion
+set "target_drive=C"
+set "EFI_DRIVE=S"
+
+echo Step 1: Checking for winload.efi...
+if not exist "%target_drive%:\Windows\System32\winload.efi" (
+    echo [WARNING] winload.efi is missing from Windows directory
+    echo.
+    echo Step 2: Running DISM /RestoreHealth...
+    DISM /Image:%target_drive%: /RestoreHealth
+    if errorlevel 1 (
+        echo [WARNING] DISM restore health reported issues.
+    )
+    echo.
+    echo Step 3: Running SFC /ScanNow...
+    SFC /ScanNow /OffBootDir=%target_drive%: /OffWinDir=%target_drive%:\Windows
+    if errorlevel 1 (
+        echo [WARNING] SFC reported issues.
+    )
+    echo.
+    REM Check if winload.efi was restored
+    if exist "%target_drive%:\Windows\System32\winload.efi" (
+        echo [SUCCESS] winload.efi restored to Windows directory.
+    ) else (
+        echo [ERROR] winload.efi still missing after DISM/SFC.
+        echo You may need to extract it from Windows installation media.
+        exit /b 1
+    )
+) else (
+    echo [OK] winload.efi found in Windows directory.
+)
+
+echo.
+echo Step 4: Mounting EFI partition...
+REM Use diskpart to mount EFI partition
+(
+    echo select disk 0
+    echo list partition
+    echo select partition 1
+    echo assign letter=%EFI_DRIVE%
+    echo exit
+) > %TEMP%\mount_efi.txt
+diskpart /s %TEMP%\mount_efi.txt >nul 2>&1
+
+echo.
+echo Step 5: Copying boot files to EFI partition...
+bcdboot %target_drive%:\Windows /s %EFI_DRIVE%: /f UEFI
+if errorlevel 1 (
+    echo [ERROR] bcdboot failed.
+    exit /b 1
+)
+
+echo.
+echo Step 6: Verifying winload.efi in EFI partition...
+if exist "%EFI_DRIVE%:\EFI\Microsoft\Boot\winload.efi" (
+    echo [SUCCESS] winload.efi is now present in EFI partition.
+) else (
+    echo [ERROR] winload.efi not found in EFI partition after bcdboot.
+    exit /b 1
+)
+
+echo.
+echo [SUCCESS] winload.efi repair completed successfully!
+
+
+================================================================================
+ALTERNATIVE: If DISM/SFC fails (Component Store corrupted)
+================================================================================
+
+If DISM /RestoreHealth fails with "The source files could not be found",
+you need to provide Windows installation media:
+
+1. Mount Windows ISO or insert Windows USB
+2. Identify the sources folder (e.g., D:\sources)
+
+Then run:
+    DISM /Image:C: /RestoreHealth /Source:D:\sources\install.wim
+
+Or if you have a specific index:
+    DISM /Image:C: /RestoreHealth /Source:D:\sources\install.wim:1
+
+To list available images in WIM:
+    DISM /Get-WimInfo /WimFile:D:\sources\install.wim
+
+
+================================================================================
+MANUAL EXTRACTION FROM WIM (if automated methods fail)
+================================================================================
+
+If winload.efi cannot be restored automatically, extract it manually:
+
+1. Mount the Windows installation WIM:
+   DISM /Mount-Wim /WimFile:D:\sources\install.wim /Index:1 /MountDir:C:\Mount
+
+2. Copy winload.efi:
+   copy C:\Mount\Windows\System32\winload.efi C:\Windows\System32\winload.efi
+
+3. Unmount WIM:
+   DISM /Unmount-Wim /MountDir:C:\Mount /Discard
+
+4. Then run bcdboot to copy to EFI partition:
+   bcdboot C:\Windows /s S: /f UEFI
+
+
+================================================================================
+VERIFICATION CHECKLIST
+================================================================================
+
+After running the repair sequence, verify:
+
+[ ] winload.efi exists in C:\Windows\System32\winload.efi
+[ ] winload.efi exists in S:\EFI\Microsoft\Boot\winload.efi (or your EFI drive)
+[ ] File size > 0 bytes for both files
+[ ] BCD entry points to correct path: \Windows\System32\winload.efi
+[ ] System can boot (test by rebooting)
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: DISM fails with "The source files could not be found"
+Solution: Provide Windows installation media with /Source parameter
+
+Problem: SFC fails with "Windows Resource Protection could not perform"
+Solution: Ensure you're running from WinPE/WinRE or as Administrator
+
+Problem: bcdboot fails with "Failure when attempting to copy boot files"
+Solution: 
+  - Verify winload.efi exists in Windows directory first
+  - Check EFI partition is mounted correctly
+  - Verify EFI partition has free space
+
+Problem: winload.efi restored but system still won't boot
+Solution:
+  - Check BCD entries: bcdedit /enum all
+  - Verify Secure Boot settings match (if enabled)
+  - Check for other missing boot files (bootmgfw.efi, etc.)
+
+
+================================================================================
+NOTES
+================================================================================
+
+- These commands are designed to run from WinPE/WinRE environment
+- If running from a live Windows OS, some commands may need adjustment
+- Always backup BCD before making changes: bcdedit /export C:\BCD_Backup
+- If BitLocker is enabled, have recovery key ready before modifying boot files
+
+================================================================================
