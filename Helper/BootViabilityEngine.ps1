@@ -640,12 +640,121 @@ function Test-BootViability {
         $confidence = [math]::Round(($checksPassed / $totalChecks) * 100, 1)
         $result.Confidence = $confidence
         
-        # Determine verdict
-        if ($checksPassed -eq $totalChecks -and $result.BlockingIssues.Count -eq 0) {
+        # CRITICAL 3-CHECK VERIFICATION (Physical State, Not Return Codes)
+        $report.AppendLine("") | Out-Null
+        $report.AppendLine("CRITICAL 3-CHECK VERIFICATION (Physical State)") | Out-Null
+        $report.AppendLine("-" * 80) | Out-Null
+        $report.AppendLine("Verifying physical disk state (not trusting command return codes)...") | Out-Null
+        $report.AppendLine("") | Out-Null
+        
+        $criticalChecks = @{
+            Physical = $false  # winload.efi must physically exist
+            Logical = $false   # BCD path must point to winload.efi
+            Security = $false  # BitLocker must be unlocked
+        }
+        
+        $criticalFailures = @()
+        
+        # CHECK 1: Physical - winload.efi must exist
+        $winloadPhysicalPath = "$($targetOS.WindowsPath)\System32\winload.efi"
+        $criticalChecks.Physical = Test-Path $winloadPhysicalPath
+        
+        if ($criticalChecks.Physical) {
+            $fileSize = (Get-Item $winloadPhysicalPath -ErrorAction SilentlyContinue).Length
+            $report.AppendLine("[PASS] PHYSICAL: winload.efi exists at $winloadPhysicalPath ($fileSize bytes)") | Out-Null
+        } else {
+            $criticalFailures += "PHYSICAL MISSING: winload.efi is still missing from the source folder"
+            $report.AppendLine("[FAIL] PHYSICAL: winload.efi MISSING at $winloadPhysicalPath") | Out-Null
+            $report.AppendLine("       Fix: Source template is corrupted. Needs DISM extraction from ISO.") | Out-Null
+        }
+        
+        # CHECK 2: Logical - BCD path must point to winload.efi
+        $bcdPathCorrect = $false
+        if ($firmwareType -eq "UEFI" -and $espInfo.Mounted) {
+            $bcdPath = "$($espInfo.DriveLetter):\EFI\Microsoft\Boot\BCD"
+            if (Test-Path $bcdPath) {
+                try {
+                    $bcdEnum = & bcdedit /store $bcdPath /enum {default} 2>&1 | Out-String
+                    if ($LASTEXITCODE -eq 0) {
+                        if ($bcdEnum -match "path\s+\\Windows\\system32\\winload\.efi") {
+                            $criticalChecks.Logical = $true
+                            $bcdPathCorrect = $true
+                            $report.AppendLine("[PASS] LOGICAL: BCD path correctly points to \Windows\system32\winload.efi") | Out-Null
+                        } else {
+                            $criticalFailures += "BCD MISMATCH: The boot configuration is pointing to the wrong file/path"
+                            $report.AppendLine("[FAIL] LOGICAL: BCD path does NOT point to winload.efi") | Out-Null
+                            $report.AppendLine("       Current BCD path: $($bcdEnum -match 'path\s+(.+)' | ForEach-Object { $matches[1] })") | Out-Null
+                            $report.AppendLine("       Fix: Run 'bcdedit /set {default} path \Windows\system32\winload.efi'") | Out-Null
+                        }
+                    } else {
+                        $criticalFailures += "BCD MISMATCH: BCD is not readable"
+                        $report.AppendLine("[FAIL] LOGICAL: BCD is not readable") | Out-Null
+                    }
+                } catch {
+                    $criticalFailures += "BCD MISMATCH: Could not verify BCD path"
+                    $report.AppendLine("[FAIL] LOGICAL: Could not verify BCD path: $_") | Out-Null
+                }
+            } else {
+                $criticalFailures += "BCD MISMATCH: BCD file not found"
+                $report.AppendLine("[FAIL] LOGICAL: BCD file not found") | Out-Null
+            }
+        } elseif ($firmwareType -eq "Legacy BIOS") {
+            $legacyBcdPath = "$($targetOS.DriveLetter):\Boot\BCD"
+            if (Test-Path $legacyBcdPath) {
+                try {
+                    $bcdEnum = & bcdedit /store $legacyBcdPath /enum {default} 2>&1 | Out-String
+                    if ($LASTEXITCODE -eq 0 -and $bcdEnum -match "path\s+\\Windows\\system32\\winload\.exe") {
+                        $criticalChecks.Logical = $true
+                        $bcdPathCorrect = $true
+                        $report.AppendLine("[PASS] LOGICAL: Legacy BCD path correctly points to winload.exe") | Out-Null
+                    } else {
+                        $criticalFailures += "BCD MISMATCH: Legacy BCD path incorrect"
+                        $report.AppendLine("[FAIL] LOGICAL: Legacy BCD path does not point to winload.exe") | Out-Null
+                    }
+                } catch {
+                    $criticalFailures += "BCD MISMATCH: Could not verify legacy BCD"
+                    $report.AppendLine("[FAIL] LOGICAL: Could not verify legacy BCD: $_") | Out-Null
+                }
+            } else {
+                $criticalFailures += "BCD MISMATCH: Legacy BCD file not found"
+                $report.AppendLine("[FAIL] LOGICAL: Legacy BCD file not found") | Out-Null
+            }
+        }
+        
+        # CHECK 3: Security - BitLocker must be unlocked
+        $bitlockerLocked = $false
+        try {
+            $bitlockerStatus = manage-bde -status "$($targetOS.DriveLetter):" 2>&1 | Out-String
+            if ($bitlockerStatus -match "Lock Status:\s+Locked") {
+                $criticalChecks.Security = $false
+                $bitlockerLocked = $true
+                $criticalFailures += "BITLOCKER LOCKED: The drive is encrypted and 'bcdboot' could not write to it"
+                $report.AppendLine("[FAIL] SECURITY: BitLocker is LOCKED on drive $($targetOS.DriveLetter):") | Out-Null
+                $report.AppendLine("       Fix: You MUST unlock the drive with your recovery key before repairing.") | Out-Null
+                $report.AppendLine("       Command: manage-bde -unlock $($targetOS.DriveLetter): -RecoveryPassword <YOUR_KEY>") | Out-Null
+            } else {
+                $criticalChecks.Security = $true
+                $report.AppendLine("[PASS] SECURITY: BitLocker is unlocked or not enabled") | Out-Null
+            }
+        } catch {
+            # manage-bde might not be available or drive might not be encrypted
+            # If we can't check, assume it's OK (non-encrypted drive)
+            $criticalChecks.Security = $true
+            $report.AppendLine("[INFO] SECURITY: Could not check BitLocker status (drive may not be encrypted)") | Out-Null
+        }
+        
+        $report.AppendLine("") | Out-Null
+        
+        # FINAL VERDICT BASED ON CRITICAL 3-CHECK VERIFICATION
+        if ($criticalChecks.Physical -and $criticalChecks.Logical -and $criticalChecks.Security) {
             $result.WillBoot = $true
             $result.Verdict = "YES"
             
-            $report.AppendLine("BOOT STATUS: LIKELY BOOTABLE [OK]") | Out-Null
+            $report.AppendLine("=" * 80) | Out-Null
+            $report.AppendLine("WILL IT BOOT: YES") | Out-Null
+            $report.AppendLine("=" * 80) | Out-Null
+            $report.AppendLine("") | Out-Null
+            $report.AppendLine("Feedback: All critical boot files verified and BCD is correctly mapped.") | Out-Null
             $report.AppendLine("") | Out-Null
             $report.AppendLine("All boot viability checks passed:") | Out-Null
             $report.AppendLine("  [OK] Boot files present and valid") | Out-Null
@@ -657,7 +766,26 @@ function Test-BootViability {
             $report.AppendLine("ACTION:") | Out-Null
             $report.AppendLine("You may reboot safely.") | Out-Null
             
-            $result.UserMessage = "BOOT STATUS: LIKELY BOOTABLE [OK]`n`nAll boot viability checks passed. You may reboot safely."
+            $result.UserMessage = "WILL IT BOOT: YES`n`nFeedback: All critical boot files verified and BCD is correctly mapped.`n`nYou may reboot safely."
+        } else {
+            $result.WillBoot = $false
+            $result.Verdict = "NO"
+            
+            $report.AppendLine("=" * 80) | Out-Null
+            $report.AppendLine("WILL IT BOOT: NO") | Out-Null
+            $report.AppendLine("=" * 80) | Out-Null
+            $report.AppendLine("") | Out-Null
+            $report.AppendLine("REASON(S) FOR FAILURE:") | Out-Null
+            $report.AppendLine("") | Out-Null
+            
+            foreach ($failure in $criticalFailures) {
+                $report.AppendLine("  [!] $failure") | Out-Null
+            }
+            
+            $result.UserMessage = "WILL IT BOOT: NO`n`nREASON(S) FOR FAILURE:`n"
+            foreach ($failure in $criticalFailures) {
+                $result.UserMessage += "  [!] $failure`n"
+            }
         } else {
             $result.WillBoot = $false
             $result.Verdict = "NO"

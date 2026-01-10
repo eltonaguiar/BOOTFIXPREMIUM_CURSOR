@@ -3069,6 +3069,60 @@ if ($btnOneClickRepair) {
             Write-Log "==============================================================="
             Write-Log ""
             
+            # CRITICAL PRE-FLIGHT: Check if BitLocker is LOCKED (blocks all repairs)
+            Write-Log "Checking BitLocker status..."
+            $bitlockerLocked = $false
+            try {
+                $bitlockerStatus = manage-bde -status "$drive`:" 2>&1 | Out-String
+                if ($bitlockerStatus -match "Lock Status:\s+Locked") {
+                    $bitlockerLocked = $true
+                    Write-Log "[BLOCKED] BitLocker is LOCKED on drive $drive`:"
+                    Write-Log ""
+                    Write-Log "CRITICAL: Drive is encrypted and LOCKED."
+                    Write-Log "Repairs cannot proceed until drive is unlocked."
+                    Write-Log ""
+                    Write-Log "REASON:"
+                    Write-Log "  - bcdboot will 'succeed' but write to RAM Disk (X:) or temporary partition"
+                    Write-Log "  - Actual Windows drive remains untouched"
+                    Write-Log "  - This causes 'False Success' - repairs appear to work but don't"
+                    Write-Log ""
+                    Write-Log "SOLUTION:"
+                    Write-Log "  You MUST unlock the drive with your recovery key before repairing."
+                    Write-Log ""
+                    Write-Log "Command to unlock:"
+                    Write-Log "  manage-bde -unlock $drive`: -RecoveryPassword <YOUR_48_DIGIT_KEY>"
+                    Write-Log ""
+                    Write-Log "After unlocking, run this repair again."
+                    Write-Log ""
+                    
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "BLOCKED: BitLocker is LOCKED. Unlock drive first."
+                    }
+                    if ($fixerOutput) {
+                        $fixerOutput.Text += "`n[BLOCKED] BitLocker is LOCKED. Drive must be unlocked before repairs.`n"
+                        $fixerOutput.Text += "Command: manage-bde -unlock $drive`: -RecoveryPassword <YOUR_KEY>`n"
+                    }
+                    
+                    Update-StatusBar -Message "One-Click Repair: BLOCKED - BitLocker locked" -HideProgress
+                    
+                    # Save log and exit
+                    try {
+                        $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                    } catch {
+                        # Ignore log save errors
+                    }
+                    
+                    return  # STOP - Do not proceed with repairs
+                } else {
+                    Write-Log "[OK] BitLocker is unlocked or not enabled"
+                }
+            } catch {
+                # manage-bde might not be available or drive might not be encrypted
+                Write-Log "[INFO] Could not check BitLocker status (drive may not be encrypted)"
+            }
+            Write-Log ""
+            
             # Prompt user to select target Windows drive (exclude X: WinPE drive)
             Write-Log "Detecting Windows installations..."
             $installations = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
