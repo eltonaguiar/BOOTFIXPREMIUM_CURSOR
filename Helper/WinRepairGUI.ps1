@@ -3043,6 +3043,12 @@ if ($btnOneClickRepair) {
             
             . $corePath -ErrorAction Stop
             
+            # Pre-flight checks: BitLocker and drive accessibility
+            Write-Log "==============================================================="
+            Write-Log "PRE-FLIGHT CHECKS"
+            Write-Log "==============================================================="
+            Write-Log ""
+            
             # Prompt user to select target Windows drive (exclude X: WinPE drive)
             Write-Log "Detecting Windows installations..."
             $installations = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
@@ -3238,6 +3244,82 @@ if ($btnOneClickRepair) {
             }
             
             Write-Log "Target Drive: $drive`:"
+            Write-Log ""
+            
+            # Check drive accessibility
+            Write-Log "Checking drive accessibility..."
+            $driveAccessible = $false
+            $testPaths = @(
+                "$drive`:\Windows",
+                "$drive`:\Windows\System32",
+                "$drive`:\Windows\System32\ntoskrnl.exe"
+            )
+            foreach ($testPath in $testPaths) {
+                if (Test-Path $testPath) {
+                    $driveAccessible = $true
+                    Write-Log "[OK] Drive accessible: $testPath"
+                    break
+                }
+            }
+            
+            if (-not $driveAccessible) {
+                Write-Log "[ERROR] Drive $drive`: is not accessible or does not contain Windows."
+                Write-Log "Please verify the drive letter and ensure it's unlocked (if BitLocker encrypted)."
+                throw "Drive $drive`: is not accessible. Cannot proceed with repairs."
+            }
+            Write-Log ""
+            
+            # Check BitLocker status BEFORE repairs
+            Write-Log "Checking BitLocker encryption status..."
+            $bitlockerStatus = Test-BitLockerStatus -TargetDrive $drive -TimeoutSeconds 5
+            if ($bitlockerStatus.IsEncrypted -or $bitlockerStatus.Warning) {
+                Write-Log "[WARNING] BITLOCKER ENCRYPTION DETECTED OR SUSPECTED"
+                Write-Log "Drive: $drive`:"
+                if ($bitlockerStatus.IsEncrypted) {
+                    Write-Log "Status: ENCRYPTED (Protection: $($bitlockerStatus.ProtectionStatus))"
+                    Write-Log "Encryption: $($bitlockerStatus.EncryptionPercentage)%"
+                }
+                if ($bitlockerStatus.Warning) {
+                    Write-Log "Warning: $($bitlockerStatus.Warning)"
+                }
+                Write-Log ""
+                Write-Log "⚠️  CRITICAL: Modifying boot files on a BitLocker-encrypted drive may trigger"
+                Write-Log "   a recovery key prompt on next boot. Ensure you have your 48-digit"
+                Write-Log "   BitLocker recovery key before proceeding!"
+                Write-Log ""
+                Write-Log "Recovery key locations:"
+                Write-Log "  - Microsoft Account: https://account.microsoft.com/devices/recoverykey"
+                Write-Log "  - Azure AD: https://aka.ms/aadrecoverykey"
+                Write-Log "  - Printed or saved copies"
+                Write-Log ""
+                
+                if (-not $testMode) {
+                    $bitlockerConfirm = [System.Windows.MessageBox]::Show(
+                        "⚠️ BITLOCKER ENCRYPTION DETECTED`n`n" +
+                        "Modifying boot files may require your BitLocker recovery key on next boot.`n`n" +
+                        "Do you have your 48-digit BitLocker recovery key?`n`n" +
+                        "If YES: Click OK to continue.`n" +
+                        "If NO: Click Cancel to abort and retrieve your key first.",
+                        "BitLocker Warning",
+                        "OKCancel",
+                        "Warning"
+                    )
+                    if ($bitlockerConfirm -ne "OK") {
+                        Write-Log "[ABORTED] User cancelled due to BitLocker concerns."
+                        throw "Operation cancelled by user due to BitLocker encryption."
+                    }
+                } else {
+                    Write-Log "[TEST MODE] BitLocker warning acknowledged (no actual changes will be made)"
+                }
+                Write-Log ""
+            } else {
+                Write-Log "[OK] Drive is not BitLocker encrypted (or status check unavailable)"
+                Write-Log ""
+            }
+            
+            Write-Log "==============================================================="
+            Write-Log "STARTING REPAIR OPERATIONS"
+            Write-Log "==============================================================="
             Write-Log ""
             
             # Step 1: Hardware Diagnostics
@@ -3469,13 +3551,59 @@ if ($btnOneClickRepair) {
             Write-CommandLog -Command "Test-Path (boot files)" -Description "Check for critical boot files (bootmgfw.efi, winload.efi, winload.exe)" -IsRepairCommand:$false
             
             # Diagnostic commands are read-only, so run them even in test mode
-            $bootFiles = @("bootmgfw.efi", "winload.efi", "winload.exe")
+            # Check boot files in both EFI partition and Windows directory
+            $bootFiles = @(
+                @{Name="bootmgfw.efi"; EFIPath="\EFI\Microsoft\Boot\bootmgfw.efi"; WinPath="\Windows\System32\bootmgfw.efi"},
+                @{Name="winload.efi"; EFIPath="\EFI\Microsoft\Boot\winload.efi"; WinPath="\Windows\System32\winload.efi"},
+                @{Name="winload.exe"; EFIPath="\EFI\Microsoft\Boot\winload.exe"; WinPath="\Windows\System32\winload.exe"}
+            )
+            
             $missingFiles = @()
+            $fileLocations = @{}
+            
+            # First, try to find EFI partition
+            $efiDrive = $null
+            try {
+                $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                if ($efiMount.Success) {
+                    $efiDrive = $efiMount.DriveLetter
+                    Write-Log "[OK] EFI partition mounted as $efiDrive`:"
+                } else {
+                    Write-Log "[INFO] Could not auto-mount EFI partition: $($efiMount.Message)"
+                    Write-Log "Will check Windows directory for boot files instead."
+                }
+            } catch {
+                Write-Log "[INFO] EFI partition mount check failed: $_"
+            }
+            
             foreach ($file in $bootFiles) {
-                $efiPath = "$drive`:\EFI\Microsoft\Boot\$file"
-                $winPath = "$drive`:\Windows\System32\$file"
-                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                    $missingFiles += $file
+                $found = $false
+                $location = ""
+                
+                # Check EFI partition first (if mounted)
+                if ($efiDrive) {
+                    $efiPath = "$efiDrive`:$($file.EFIPath)"
+                    if (Test-Path $efiPath) {
+                        $found = $true
+                        $location = "EFI partition ($efiDrive`:)"
+                    }
+                }
+                
+                # Check Windows directory
+                if (-not $found) {
+                    $winPath = "$drive`:$($file.WinPath)"
+                    if (Test-Path $winPath) {
+                        $found = $true
+                        $location = "Windows directory ($drive`:)"
+                    }
+                }
+                
+                if (-not $found) {
+                    $missingFiles += $file.Name
+                    Write-Log "[MISSING] $($file.Name) - not found in EFI partition or Windows directory"
+                } else {
+                    Write-Log "[OK] $($file.Name) found in $location"
+                    $fileLocations[$file.Name] = $location
                 }
             }
             
@@ -3494,46 +3622,82 @@ if ($btnOneClickRepair) {
                 }
                 Update-StatusBar -Message "One-Click Repair: Repairing boot files..." -ShowProgress
                 
-                # Check if bootrec.exe is available (only in WinRE/WinPE)
-                $bootrecPath = $null
-                $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
-                if ($bootrecCmd) {
-                    $bootrecPath = $bootrecCmd.Source
-                } else {
-                    # Try common WinRE paths
-                    $possiblePaths = @(
-                        "$env:SystemRoot\System32\bootrec.exe",
-                        "X:\Windows\System32\bootrec.exe",
-                        "C:\Windows\System32\Recovery\bootrec.exe"
-                    )
-                    foreach ($path in $possiblePaths) {
-                        if (Test-Path $path) {
-                            $bootrecPath = $path
-                            break
-                        }
+                # Use bcdboot to repair boot files (more reliable than bootrec for UEFI)
+                # First ensure EFI partition is mounted
+                if (-not $efiDrive) {
+                    Write-Log "Mounting EFI partition for boot file repair..."
+                    $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                    if ($efiMount.Success) {
+                        $efiDrive = $efiMount.DriveLetter
+                        Write-Log "[OK] EFI partition mounted as $efiDrive`:"
+                    } else {
+                        Write-Log "[WARNING] Could not mount EFI partition: $($efiMount.Message)"
+                        Write-Log "Boot file repair may be limited. Manual EFI mount may be required."
                     }
                 }
                 
-                if ($bootrecPath) {
-                    $command = "$bootrecPath /fixboot"
-                    Write-CommandLog -Command $command -Description "Fix boot sector" -IsRepairCommand:$true
+                if ($efiDrive) {
+                    # Use bcdboot to repair boot files (copies from Windows to EFI)
+                    $bcdbootCmd = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI"
+                    Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition)" -IsRepairCommand:$true
                     
                     if (-not $testMode) {
                         try {
-                            $bootFix = & $bootrecPath /fixboot 2>&1 | Out-String
-                            Write-Log "Boot File Repair Output: $bootFix"
+                            Write-Log "Running: $bcdbootCmd"
+                            $bcdbootOutput = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                            Write-Log "bcdboot Output: $bcdbootOutput"
+                            
+                            if ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created") {
+                                Write-Log "[SUCCESS] Boot files repaired successfully using bcdboot"
+                            } else {
+                                Write-Log "[WARNING] bcdboot reported issues. Check output above."
+                            }
                         } catch {
-                            Write-Log "[WARNING] Boot file repair failed: $_"
-                            Write-Log "Note: bootrec.exe may not be available in this environment."
-                            Write-Log "Consider using bcdboot.exe or running from WinRE instead."
+                            Write-Log "[ERROR] bcdboot failed: $_"
                         }
                     } else {
                         Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                     }
                 } else {
-                    Write-Log "[INFO] bootrec.exe not available in this environment."
-                    Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
-                    Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
+                    # Fallback: Try bootrec if available
+                    $bootrecPath = $null
+                    $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                    if ($bootrecCmd) {
+                        $bootrecPath = $bootrecCmd.Source
+                    } else {
+                        $possiblePaths = @(
+                            "$env:SystemRoot\System32\bootrec.exe",
+                            "X:\Windows\System32\bootrec.exe",
+                            "C:\Windows\System32\Recovery\bootrec.exe"
+                        )
+                        foreach ($path in $possiblePaths) {
+                            if (Test-Path $path) {
+                                $bootrecPath = $path
+                                break
+                            }
+                        }
+                    }
+                    
+                    if ($bootrecPath) {
+                        $command = "$bootrecPath /fixboot"
+                        Write-CommandLog -Command $command -Description "Fix boot sector (fallback method)" -IsRepairCommand:$true
+                        
+                        if (-not $testMode) {
+                            try {
+                                $bootFix = & $bootrecPath /fixboot 2>&1 | Out-String
+                                Write-Log "Boot File Repair Output: $bootFix"
+                            } catch {
+                                Write-Log "[WARNING] Boot file repair failed: $_"
+                            }
+                        } else {
+                            Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        }
+                    } else {
+                        Write-Log "[INFO] bootrec.exe not available and EFI partition could not be mounted."
+                        Write-Log "Manual repair required:"
+                        Write-Log "  1. Mount EFI partition using diskpart"
+                        Write-Log "  2. Run: bcdboot $drive`:\Windows /s <ESP_DRIVE>: /f UEFI"
+                    }
                 }
             }
             Write-Log ""
@@ -3555,31 +3719,111 @@ if ($btnOneClickRepair) {
             if ($missingDrivers -and $missingDrivers.Count -gt 0) { $issuesFound++ }
             if ($missingFiles.Count -gt 0) { $issuesFound++ }
             
-            if ($issuesFound -eq 0) {
-                Write-Log "[SUCCESS] No critical issues detected. Your system appears healthy."
-                Write-Log "If you're still experiencing boot problems, try:"
-                Write-Log "  1. Running System File Checker (SFC)"
-                Write-Log "  2. Running DISM repair"
-                Write-Log "  3. Checking for Windows Updates"
+            if ($testMode) {
+                Write-Log "[TEST MODE] Summary of issues that would be repaired:"
+                Write-Log "  - Disk Health: $(if ($diskHealth.FileSystemHealthy) { 'OK' } else { 'NEEDS REPAIR' })"
+                Write-Log "  - Storage Drivers: $(if ($missingDrivers -and $missingDrivers.Count -gt 0) { "$($missingDrivers.Count) missing" } else { 'OK' })"
+                Write-Log "  - Boot Files: $(if ($missingFiles.Count -gt 0) { "$($missingFiles.Count) missing" } else { 'OK' })"
+                Write-Log ""
+                Write-Log "  (In TEST MODE - no repairs were actually executed)"
                 if ($txtOneClickStatus) {
-                    $txtOneClickStatus.Text = if ($testMode) { "✅ Test complete! No critical issues found. (TEST MODE)" } else { "✅ Repair complete! No critical issues found." }
+                    $txtOneClickStatus.Text = "✅ Test complete! Found $issuesFound issue(s) that would be repaired. (TEST MODE)"
                 }
             } else {
-                Write-Log "[INFO] Found $issuesFound issue(s)."
-                if ($testMode) {
-                    Write-Log "  (In TEST MODE - no repairs were actually executed)"
+                # POST-REPAIR VERIFICATION: Re-check to see if issues were fixed
+                Write-Log "==============================================================="
+                Write-Log "POST-REPAIR VERIFICATION"
+                Write-Log "==============================================================="
+                Write-Log ""
+                Write-Log "Re-checking system to verify repairs..."
+                
+                $remainingIssues = 0
+                $verificationResults = @()
+                
+                # Re-check boot files
+                Write-Log "Re-checking boot files..."
+                $stillMissingFiles = @()
+                if ($efiDrive) {
+                    foreach ($file in $bootFiles) {
+                        $efiPath = "$efiDrive`:$($file.EFIPath)"
+                        $winPath = "$drive`:$($file.WinPath)"
+                        if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                            $stillMissingFiles += $file.Name
+                        }
+                    }
                 } else {
-                    Write-Log "  Repairs have been attempted."
+                    # Re-mount EFI to check
+                    $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                    if ($efiMount.Success) {
+                        $efiDrive = $efiMount.DriveLetter
+                        foreach ($file in $bootFiles) {
+                            $efiPath = "$efiDrive`:$($file.EFIPath)"
+                            $winPath = "$drive`:$($file.WinPath)"
+                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                $stillMissingFiles += $file.Name
+                            }
+                        }
+                    }
+                }
+                
+                if ($stillMissingFiles.Count -eq 0) {
+                    Write-Log "[✅ FIXED] All boot files are now present"
+                    $verificationResults += "Boot Files: FIXED"
+                } else {
+                    Write-Log "[❌ STILL MISSING] Boot files: $($stillMissingFiles -join ', ')"
+                    $remainingIssues++
+                    $verificationResults += "Boot Files: STILL MISSING ($($stillMissingFiles.Count) files)"
+                }
+                
+                # Re-check BCD
+                Write-Log "Re-checking BCD..."
+                try {
+                    $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                    if ($bcdCheck -match "The boot configuration data store could not be opened") {
+                        Write-Log "[❌ STILL CORRUPTED] BCD is still inaccessible"
+                        $remainingIssues++
+                        $verificationResults += "BCD: STILL CORRUPTED"
+                    } else {
+                        Write-Log "[✅ FIXED] BCD is now accessible"
+                        $verificationResults += "BCD: FIXED"
+                    }
+                } catch {
+                    Write-Log "[⚠️  UNCERTAIN] Could not verify BCD status: $_"
+                    $verificationResults += "BCD: UNCERTAIN"
+                }
+                
+                Write-Log ""
+                Write-Log "==============================================================="
+                Write-Log "VERIFICATION RESULTS"
+                Write-Log "==============================================================="
+                foreach ($result in $verificationResults) {
+                    Write-Log "  $result"
                 }
                 Write-Log ""
-                Write-Log "NEXT STEPS:"
-                Write-Log "1. Restart your computer and test if it boots normally"
-                Write-Log "2. If problems persist, consider:"
-                Write-Log "   - Running an in-place repair installation"
-                Write-Log "   - Checking hardware health (if not already done)"
-                Write-Log "   - Injecting missing storage drivers"
-                if ($txtOneClickStatus) {
-                    $txtOneClickStatus.Text = if ($testMode) { "✅ Test complete! Found $issuesFound issue(s). (TEST MODE)" } else { "✅ Repair complete! Found $issuesFound issue(s) and attempted fixes." }
+                
+                if ($remainingIssues -eq 0) {
+                    Write-Log "[✅ SUCCESS] All detected issues have been FIXED!"
+                    Write-Log ""
+                    Write-Log "Your boot system appears to be repaired. Next steps:"
+                    Write-Log "  1. Restart your computer"
+                    Write-Log "  2. If BitLocker prompts for recovery key, enter your 48-digit key"
+                    Write-Log "  3. Windows should boot normally"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "✅ SUCCESS! All issues fixed. Ready to reboot."
+                    }
+                } else {
+                    Write-Log "[⚠️  PARTIAL SUCCESS] Some issues remain ($remainingIssues issue(s) still present)"
+                    Write-Log ""
+                    Write-Log "NEXT STEPS:"
+                    Write-Log "1. Restart your computer and test if it boots"
+                    Write-Log "2. If BitLocker prompts for recovery key, enter your 48-digit key"
+                    Write-Log "3. If problems persist, consider:"
+                    Write-Log "   - Running an in-place repair installation"
+                    Write-Log "   - Checking hardware health"
+                    Write-Log "   - Injecting missing storage drivers"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "⚠️  Partial success: $remainingIssues issue(s) remain. Check log for details."
+                    }
                 }
             }
             
