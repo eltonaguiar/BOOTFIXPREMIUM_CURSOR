@@ -6138,15 +6138,34 @@ function Test-BitLockerStatus {
         Warning = ""
     }
     
+    # Normalize drive letter (ensure absolute path)
+    $targetDrive = $TargetDrive.TrimEnd(':').ToUpper()
+    $drivePath = "${targetDrive}:"
+    
     # Detect WinPE/WinRE environment - BitLocker checks are often slow or unavailable
+    # Also check if we're in WinPE by checking SystemDrive
     $envType = Get-EnvironmentType
-    if ($envType -eq "WinPE" -or $envType -eq "WinRE") {
-        # In WinPE, BitLocker tools may not be available or may hang
+    $isWinPE = ($envType -eq "WinPE" -or $envType -eq "WinRE" -or $env:SystemDrive -eq "X:")
+    
+    if ($isWinPE) {
+        # In WinPE, BitLocker PowerShell module may cause errors with Get-Volume -FilePath
         # Return a generic warning instead of trying to check
         $status.Warning = "WinPE/WinRE environment detected. BitLocker status check skipped.`n"
         $status.Warning += "If your drive is BitLocker encrypted, ensure you have your recovery key (48-digit number) before proceeding.`n"
         $status.Warning += "You can find it in: Microsoft Account > Devices > BitLocker recovery keys"
         return $status
+    }
+    
+    # Additional check: If BitLocker module is loaded, it might cause issues
+    # Try to unload it if present to avoid Get-Volume -FilePath errors
+    try {
+        $bitlockerModule = Get-Module -Name BitLocker -ErrorAction SilentlyContinue
+        if ($bitlockerModule) {
+            # Don't remove the module, but be aware it might cause issues
+            # Use manage-bde instead of PowerShell cmdlets
+        }
+    } catch {
+        # Ignore module check errors
     }
     
     try {
@@ -6158,10 +6177,11 @@ function Test-BitLockerStatus {
         }
         
         # Use a job with timeout to prevent hanging
+        # Pass absolute drive path to avoid relative path issues
         $job = Start-Job -ScriptBlock {
-            param($drive)
-            manage-bde -status "${drive}:" 2>&1
-        } -ArgumentList $TargetDrive
+            param($drivePath)
+            manage-bde -status $drivePath 2>&1
+        } -ArgumentList $drivePath
         
         $bdeStatus = $null
         $jobCompleted = Wait-Job -Job $job -Timeout $TimeoutSeconds
@@ -13068,14 +13088,22 @@ function Test-DiskHealth {
         Recommendations = @()
     }
     
-    # Check BitLocker status
-    $bitlocker = Test-BitLockerStatus -TargetDrive $TargetDrive
-    if ($bitlocker.IsEncrypted) {
-        $result.BitLockerEncrypted = $true
-        $result.Warnings += "Drive is BitLocker encrypted. Ensure you have recovery key."
+    # Check BitLocker status (with error handling for WinPE)
+    try {
+        $bitlocker = Test-BitLockerStatus -TargetDrive $TargetDrive
+        if ($bitlocker.IsEncrypted) {
+            $result.BitLockerEncrypted = $true
+            $result.Warnings += "Drive is BitLocker encrypted. Ensure you have recovery key."
+        }
+        if ($bitlocker.Warning) {
+            $result.Warnings += $bitlocker.Warning
+        }
+    } catch {
+        # BitLocker check failed (common in WinPE) - add warning but continue
+        $result.Warnings += "Could not check BitLocker status: $_. Assume drive may be encrypted."
     }
     
-    # Get volume information
+    # Get volume information (use DriveLetter parameter, not FilePath to avoid relative path errors)
     try {
         $volume = Get-Volume -DriveLetter $TargetDrive -ErrorAction SilentlyContinue
         if ($volume) {
