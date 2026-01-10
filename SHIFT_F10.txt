@@ -207,6 +207,8 @@ Repair boot files:
     bcdboot C:\Windows
 
 Mount EFI Partition (for UEFI systems):
+    Method 1: Using diskpart (Recommended)
+    ---------------------------------------
     diskpart
     list disk
     select disk 0
@@ -220,12 +222,29 @@ Mount EFI Partition (for UEFI systems):
 
     If S: is occupied, try T:, U:, V:, W:, Y:, or Z:
 
+    Method 2: Using mountvol (Alternative)
+    ---------------------------------------
+    First, create an empty directory or use an existing drive letter:
+    mkdir S:\  (if S: doesn't exist)
+    
+    Then mount EFI to that path:
+    mountvol S: /S
+    
+    Note: mountvol /S mounts the EFI System Partition to the specified drive letter.
+    The drive letter must already exist or be assigned first using diskpart.
+
 Unmount EFI Partition (when done):
+    Method 1: Using diskpart
+    ------------------------
     diskpart
     select disk 0
     select partition 1
     remove letter=S
     exit
+
+    Method 2: Using mountvol
+    --------------------------
+    mountvol S: /D
 
 (Replace C: with your actual Windows drive letter, and S: with your preferred EFI drive letter)
 

@@ -1938,21 +1938,59 @@ function Mount-EFIPartition {
             }
             
             try {
-                # Try to assign the drive letter
-                $efiPartition | Set-Partition -NewDriveLetter $letter -ErrorAction Stop
-                Start-Sleep -Milliseconds 500  # Wait for mount to complete
-                
-                # Verify mount was successful
-                $efiPath = "$letter`:\EFI\Microsoft\Boot"
-                if (Test-Path $efiPath) {
-                    $result.Success = $true
-                    $result.DriveLetter = $letter
-                    $result.EFIPath = "$letter`:"
-                    $result.Message = "EFI partition mounted successfully as $letter`:"
-                    return $result
-                } else {
-                    # Mount succeeded but path doesn't exist - unmount and try next
-                    $efiPartition | Remove-PartitionAccessPath -AccessPath "$letter`:" -ErrorAction SilentlyContinue
+                # Method 1: Try PowerShell Set-Partition (preferred)
+                try {
+                    $efiPartition | Set-Partition -NewDriveLetter $letter -ErrorAction Stop
+                    Start-Sleep -Milliseconds 500  # Wait for mount to complete
+                    
+                    # Verify mount was successful
+                    $efiPath = "$letter`:\EFI\Microsoft\Boot"
+                    if (Test-Path $efiPath) {
+                        $result.Success = $true
+                        $result.DriveLetter = $letter
+                        $result.EFIPath = "$letter`:"
+                        $result.Message = "EFI partition mounted successfully as $letter`:"
+                        return $result
+                    } else {
+                        # Mount succeeded but path doesn't exist - unmount and try next
+                        $efiPartition | Remove-PartitionAccessPath -AccessPath "$letter`:" -ErrorAction SilentlyContinue
+                    }
+                } catch {
+                    # Set-Partition failed, try diskpart as fallback
+                    try {
+                        # Get the partition number
+                        $partNumber = $efiPartition.PartitionNumber
+                        $diskNumber = $efiPartition.DiskNumber
+                        
+                        # Create diskpart script
+                        $diskpartScript = @"
+select disk $diskNumber
+select partition $partNumber
+assign letter=$letter
+exit
+"@
+                        $scriptPath = Join-Path $env:TEMP "assign_efi_$letter.txt"
+                        $diskpartScript | Out-File -FilePath $scriptPath -Encoding ASCII -Force
+                        
+                        # Run diskpart
+                        $diskpartOutput = diskpart /s $scriptPath 2>&1 | Out-String
+                        Remove-Item $scriptPath -ErrorAction SilentlyContinue
+                        
+                        Start-Sleep -Milliseconds 500
+                        
+                        # Verify mount was successful
+                        $efiPath = "$letter`:\EFI\Microsoft\Boot"
+                        if (Test-Path $efiPath) {
+                            $result.Success = $true
+                            $result.DriveLetter = $letter
+                            $result.EFIPath = "$letter`:"
+                            $result.Message = "EFI partition mounted successfully as $letter`: (using diskpart)"
+                            return $result
+                        }
+                    } catch {
+                        # Both methods failed, try next letter
+                        continue
+                    }
                 }
             } catch {
                 # Failed to assign this letter, try next
