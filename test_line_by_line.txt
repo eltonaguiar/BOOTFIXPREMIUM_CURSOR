@@ -1,0 +1,28 @@
+Line 1: @echo off
+Line 2: REM comment
+Line 3: echo(
+Line 4: echo ========================================
+Line 5: echo   Miracle Boot v7.2.0 Launcher
+Line 6: echo ========================================
+Line 7: echo(
+Line 8: REM Safety check
+Line 9: if /I not "C:"=="X" (
+Line 10:     echo SAFETY WARNING
+Line 11: )
+Line 12: REM Get directory
+Line 13: set "SCRIPT_DIR=C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\"
+Line 14: echo SCRIPT_DIR set to: 
+Line 15: REM Check PowerShell
+Line 17: if errorlevel 1 (
+Line 18:     echo PowerShell not available
+Line 19: )
+Line 20: REM Emergency check - THIS IS WHERE IT FAILS
+Line 21: if /i ""=="--emergency" (
+Line 22:     echo Inside emergency block
+Line 23:     cd /d ""
+Line 24:     powershell.exe -Command "Write-Host 'Test'"
+Line 25:     goto :end
+Line 26: )
+Line 27: echo Normal execution
+Line 28: :end
+Line 29: echo Script completed

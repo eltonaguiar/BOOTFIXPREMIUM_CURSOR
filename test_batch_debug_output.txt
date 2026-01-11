@@ -1,0 +1,27 @@
+Test 1: Basic if statement
+Inside if block
+
+Test 2: If with PowerShell command
+Test
+
+Test 3: If with PowerShell command containing dot path
+.\test.ps1
+
+Test 4: If with SystemDrive expansion
+Drive: C
+
+Test 5: If with SystemDrive substring expansion
+Drive: C
+
+Test 6: If with PowerShell and SystemDrive expansion
+C
+
+Test 7: If with SCRIPT_DIR variable
+SCRIPT_DIR: C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\
+
+Test 8: If with PowerShell command using SCRIPT_DIR
+C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\
+
+Test 9: Actual problematic line - Emergency repair command
+
+All tests completed.

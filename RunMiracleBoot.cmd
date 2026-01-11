@@ -1,24 +1,12 @@
 @echo off
-setlocal EnableDelayedExpansion
 REM Miracle Boot v7.2.0 Launcher
 REM Compatible with Windows Recovery Environment (WinRE) Shift+F10 command prompt
 
-echo(
-echo ========================================
-echo   Miracle Boot v7.2.0 Launcher
-echo ========================================
-echo(
 REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
 REM require explicit confirmation before allowing boot writes.
-if /I not "%SystemDrive%"=="X" (
-    echo SAFETY WARNING: You are running from a live Windows OS drive %SystemDrive%
-    echo Destructive boot repairs can brick the system if misused.
-    echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
-    powershell.exe -NoProfile -Command "$confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.' -ForegroundColor Yellow; exit 1 }" >nul 2>&1
-    if errorlevel 1 (
-        exit /b 1
-    )
-)
+REM Use PowerShell to handle the confirmation to avoid batch parsing issues
+powershell.exe -NoProfile -Command "Write-Host ''; Write-Host '========================================' -ForegroundColor Yellow; Write-Host '  Miracle Boot v7.2.0 Launcher' -ForegroundColor Cyan; Write-Host '========================================' -ForegroundColor Yellow; Write-Host ''; if ($env:SystemDrive -ne 'X:') { Write-Host 'SAFETY WARNING: You are running from a live Windows OS drive' $env:SystemDrive -ForegroundColor Red; Write-Host 'Destructive boot repairs can brick the system if misused.' -ForegroundColor Yellow; Write-Host 'To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.' -ForegroundColor Yellow; Write-Host ''; $confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.' -ForegroundColor Yellow; exit 1 } }"
+if errorlevel 1 exit /b 1
 
 :ContinueScript
 

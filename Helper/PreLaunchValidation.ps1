@@ -42,6 +42,37 @@ function Test-PreLaunchValidation {
         [string]$ScriptRoot
     )
     
+    # CRITICAL: Prevent GUI launch during validation
+    $env:MB_VALIDATION_MODE = "1"
+    
+    # Terminate any existing GUI processes before validation
+    Write-Host "`n[VALIDATION] Terminating any existing GUI processes..." -ForegroundColor Cyan
+    try {
+        $guiProcesses = Get-Process | Where-Object {
+            ($_.MainWindowTitle -like "*MiracleBoot*" -or $_.MainWindowTitle -like "*Miracle Boot*") -and
+            $_.ProcessName -like "*powershell*"
+        }
+        if ($guiProcesses) {
+            foreach ($proc in $guiProcesses) {
+                Write-Host "  [INFO] Terminating GUI process: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
+                try {
+                    $proc.CloseMainWindow() | Out-Null
+                    Start-Sleep -Milliseconds 500
+                    if (-not $proc.HasExited) {
+                        $proc.Kill()
+                    }
+                } catch {
+                    Write-Host "  [WARN] Could not terminate process $($proc.Id): $_" -ForegroundColor Yellow
+                }
+            }
+            Start-Sleep -Milliseconds 1000
+        } else {
+            Write-Host "  [OK] No GUI processes found" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "  [WARN] Error checking for GUI processes: $_" -ForegroundColor Yellow
+    }
+    
     $result = @{
         Passed = $true
         Errors = @()
@@ -115,11 +146,14 @@ function Test-PreLaunchValidation {
     
     # PHASE 2: Module Loading Test
     Write-Host "`n[VALIDATION] Phase 2: Module Loading Test..." -ForegroundColor Cyan
+    Write-Host "  [NOTE] WinRepairGUI.ps1 is explicitly excluded from module loading to prevent GUI launch" -ForegroundColor Gray
     $modules = @(
         @{ Name = "WinRepairCore.ps1"; Path = "Helper\WinRepairCore.ps1"; Functions = @("Get-WindowsVolumes", "Get-EnvironmentType") },
         @{ Name = "NetworkDiagnostics.ps1"; Path = "Helper\NetworkDiagnostics.ps1"; Functions = @("Get-NetworkAdapterStatus") },
         @{ Name = "KeyboardSymbols.ps1"; Path = "Helper\KeyboardSymbols.ps1"; Functions = @() },
         @{ Name = "LogAnalysis.ps1"; Path = "Helper\LogAnalysis.ps1"; Functions = @("Get-ComprehensiveLogAnalysis") }
+        # NOTE: WinRepairGUI.ps1 is NOT included here to prevent GUI launch during validation
+        # WinRepairTUI.ps1 is also excluded as it may have interactive elements
     )
     
     $moduleLoadPassed = $true
@@ -227,6 +261,9 @@ function Test-PreLaunchValidation {
             Write-Host "  - $error" -ForegroundColor Yellow
         }
     }
+    
+    # Clear validation mode flag
+    Remove-Item Env:\MB_VALIDATION_MODE -ErrorAction SilentlyContinue
     
     return $result
 }

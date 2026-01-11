@@ -764,6 +764,12 @@ function Get-SafeCount {
 }
 
 function Start-GUI {
+    # CRITICAL: Prevent GUI launch during validation
+    if ($env:MB_VALIDATION_MODE -eq "1") {
+        Write-Host "[VALIDATION MODE] GUI launch blocked - validation in progress" -ForegroundColor Yellow
+        return
+    }
+    
     # XAML definition for the main window
     $XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -6305,37 +6311,6 @@ exit
                 Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
             } catch {
                 # Ignore log save errors
-            }
-            
-            if ($txtOneClickStatus) {
-                $txtOneClickStatus.Text = "❌ Error: $($_.Exception.Message)"
-            }
-            if ($fixerOutput) {
-                $fixerOutput.Text += "`n[ERROR] One-Click Repair failed: $_`n"
-                $fixerOutput.Text += "Stack trace: $($_.ScriptStackTrace)`n"
-                $fixerOutput.Text += "`nLog file: $logFile`n"
-            }
-            Update-StatusBar -Message "One-Click Repair: Failed - $($_.Exception.Message)" -HideProgress
-            
-            # Offer to open advanced diagnostics
-            if ($diagFile -and (Test-Path $diagFile)) {
-                $openDiag = [System.Windows.MessageBox]::Show(
-                    "One-Click Repair failed. Advanced boot diagnostics have been generated.`n`n" +
-                    "This report checks for complex issues beyond simple file corruption:`n" +
-                    "- Intel VMD driver issues (Z790 boards)`n" +
-                    "- Multiple boot drive conflicts`n" +
-                    "- Pending Windows updates blocking repair`n" +
-                    "- Read-only drive issues`n" +
-                    "- MBR/GPT corruption`n" +
-                    "- BIOS/firmware configuration issues`n`n" +
-                    "Would you like to open the advanced diagnostics report?",
-                    "Advanced Diagnostics Available",
-                    "YesNo",
-                    "Question"
-                )
-                if ($openDiag -eq "Yes") {
-                    Start-Process notepad.exe -ArgumentList $diagFile -ErrorAction SilentlyContinue
-                }
             }
         }
         finally {
