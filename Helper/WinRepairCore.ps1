@@ -1746,21 +1746,34 @@ function Get-WindowsInstallations {
     #>
     $installations = @()
     
-    # Get all volumes with drive letters
-    $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystem } | Sort-Object DriveLetter
+    # Get all volumes with drive letters (ensure it's always an array)
+    $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.FileSystem } | Sort-Object DriveLetter)
+    
+    if ($volumes.Count -eq 0) {
+        Write-Warning "No volumes with drive letters found. Windows installations cannot be detected."
+        return @()  # Return empty array explicitly
+    }
     
     foreach ($vol in $volumes) {
         $drive = $vol.DriveLetter
         $windowsPath = "$drive`:\Windows"
         $kernelPath = "$drive`:\Windows\System32\ntoskrnl.exe"
         $systemHive = "$drive`:\Windows\System32\config\SYSTEM"
+        $winloadPath = "$drive`:\Windows\System32\winload.efi"  # UEFI boot loader
         
         # Check if this is a Windows installation
+        # Use multiple indicators for better detection in WinPE environments
         # Use a unique variable name to avoid conflicts with read-only variables
         $hasWindowsInstallation = $false
         if (Test-Path $kernelPath) {
             $hasWindowsInstallation = $true
         } elseif (Test-Path $systemHive) {
+            $hasWindowsInstallation = $true
+        } elseif (Test-Path $winloadPath) {
+            # winload.efi is a strong indicator of a Windows installation (UEFI systems)
+            $hasWindowsInstallation = $true
+        } elseif (Test-Path "$windowsPath\System32\bootmgr.exe") {
+            # bootmgr.exe is another indicator (legacy BIOS systems)
             $hasWindowsInstallation = $true
         }
         
@@ -1842,6 +1855,52 @@ function Get-WindowsInstallations {
             }
             
             $installations += $install
+        }
+    }
+    
+    # Fallback: If no installations found via drive letters, search all PSDrives for winload.efi
+    # This is especially useful in WinPE where drive letters may be shuffled
+    if ($installations.Count -eq 0) {
+        Write-Warning "No Windows installations found via drive letters. Attempting fallback search for winload.efi..."
+        $allDrives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)
+        foreach ($psDrive in $allDrives) {
+            $driveLetter = $psDrive.Name
+            if ($driveLetter -eq 'X') { continue }  # Skip WinPE drive
+            
+            $winloadPath = "$driveLetter`:\Windows\System32\winload.efi"
+            if (Test-Path $winloadPath) {
+                Write-Host "Found Windows installation via winload.efi on $driveLetter`:" -ForegroundColor Green
+                $windowsPath = "$driveLetter`:\Windows"
+                
+                # Get volume info if available
+                $vol = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
+                $sizeGB = if ($vol) { [math]::Round($vol.Size / 1GB, 1) } else { 0 }
+                $freeGB = if ($vol) { [math]::Round($vol.SizeRemaining / 1GB, 1) } else { 0 }
+                $usedPercent = if ($vol -and $vol.Size -gt 0) { [math]::Round((($vol.Size - $vol.SizeRemaining) / $vol.Size) * 100, 1) } else { 0 }
+                
+                # Create a basic installation object
+                $installations += [PSCustomObject]@{
+                    DriveLetter = $driveLetter
+                    Drive = "$driveLetter`:"
+                    WindowsPath = $windowsPath
+                    SystemHivePath = "$windowsPath\System32\config\SYSTEM"
+                    KernelPath = "$windowsPath\System32\ntoskrnl.exe"
+                    OSVersion = "Windows (Detected via winload.efi)"
+                    OSBuild = "Unknown"
+                    OSEdition = "Unknown"
+                    IsCurrentOS = ($driveLetter -eq $env:SystemDrive.TrimEnd(':'))
+                    SizeGB = $sizeGB
+                    FreeGB = $freeGB
+                    UsedPercent = $usedPercent
+                    HealthStatus = if ($vol) { $vol.HealthStatus.ToString() } else { "Unknown" }
+                    BootType = "UEFI (detected via winload.efi)"
+                    VolumeLabel = if ($vol) { $vol.FileSystemLabel } else { "Unknown" }
+                    DisplayName = "Windows on $driveLetter`: (Detected via winload.efi)"
+                    DiskNumber = $null
+                    PartitionNumber = $null
+                    FileSystem = if ($vol) { $vol.FileSystem } else { "Unknown" }
+                }
+            }
         }
     }
     

@@ -19,6 +19,49 @@ enum SimulationScenario {
     bcd_corrupted
 }
 
+# Mock functions for simulation
+$script:SimulationMocks = @{
+    TestPathResults = @{}
+    BcdEditOutput = ""
+    LastExitCode = 0
+}
+
+function Mock-TestPath {
+    <#
+    .SYNOPSIS
+    Mock version of Test-Path for simulation scenarios.
+    #>
+    param(
+        [string]$Path
+    )
+    
+    if ($script:SimulationMocks.TestPathResults.ContainsKey($Path)) {
+        return $script:SimulationMocks.TestPathResults[$Path]
+    }
+    
+    # Default: use real Test-Path if not mocked
+    return Test-Path $Path
+}
+
+function Mock-BcdEdit {
+    <#
+    .SYNOPSIS
+    Mock version of bcdedit for simulation scenarios.
+    #>
+    param(
+        [string[]]$Arguments
+    )
+    
+    if ($script:SimulationMocks.BcdEditOutput) {
+        $script:SimulationMocks.LastExitCode = 0
+        return $script:SimulationMocks.BcdEditOutput
+    }
+    
+    # Default: return empty if not mocked
+    $script:SimulationMocks.LastExitCode = 1
+    return ""
+}
+
 function Invoke-Simulation {
     <#
     .SYNOPSIS
@@ -31,7 +74,7 @@ function Invoke-Simulation {
     Target Windows drive for simulation context
     
     .OUTPUTS
-    PSCustomObject with simulation results
+    PSCustomObject with simulation results including paste-back bundle
     #>
     
     param(
@@ -48,7 +91,10 @@ function Invoke-Simulation {
         Plan = @()
         Verdict = "UNKNOWN"
         Confidence = "LOW"
+        ConfidenceLevel = "LOW"
         Blocker = ""
+        Output = ""
+        PasteBackBundle = ""
     }
     
     $output = New-Object System.Text.StringBuilder
@@ -58,6 +104,11 @@ function Invoke-Simulation {
     $output.AppendLine("") | Out-Null
     $output.AppendLine("NOTE: This is a simulation. No changes are made to the system.") | Out-Null
     $output.AppendLine("") | Out-Null
+    
+    # Reset mocks
+    $script:SimulationMocks.TestPathResults = @{}
+    $script:SimulationMocks.BcdEditOutput = ""
+    $script:SimulationMocks.LastExitCode = 0
     
     # Mock environment detection
     $firmwareType = "UEFI"

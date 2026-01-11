@@ -171,9 +171,9 @@ function Test-NetworkAvailability {
     Tests if network adapters are available (not necessarily connected).
     #>
     try {
-        $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Hidden' }
-        if ($adapters) {
-            $enabled = ($adapters | Where-Object { $_.Status -eq 'Up' }).Count
+        $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Hidden' })
+        if ($adapters.Count -gt 0) {
+            $enabled = @($adapters | Where-Object { $_.Status -eq 'Up' }).Count
             return @{
                 Available = $true
                 AdapterCount = $adapters.Count

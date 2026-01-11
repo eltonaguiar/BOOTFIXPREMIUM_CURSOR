@@ -93,6 +93,287 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
+# ==============================================================================
+# HELPER FUNCTIONS FOR BOOT REPAIR
+# ==============================================================================
+
+# Helper function for bcdboot repair with fallback logic
+function Invoke-BcdbootRepairWithFallback {
+    param(
+        [string]$Drive,
+        [string]$EfiDrive,
+        $VmdIssue
+    )
+    
+    try {
+        $bcdbootCmd = "bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI /v"
+        Write-Log "Step 3c: Running: $bcdbootCmd"
+        $bcdbootOutput = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI /v 2>&1 | Out-String
+        Write-Log "bcdboot Output: $bcdbootOutput"
+        
+        # Check for false positive - bcdboot may report success but not actually copy files
+        $bcdbootSuccess = ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created")
+        
+        # Verify winload.efi was ACTUALLY copied (not just BCD updated)
+        $winloadEfiPath = "$EfiDrive`:\EFI\Microsoft\Boot\winload.efi"
+        $winloadActuallyCopied = Test-Path $winloadEfiPath
+        
+        if ($bcdbootSuccess -and $winloadActuallyCopied) {
+            Write-Log "[SUCCESS] Boot files repaired successfully using bcdboot"
+            Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
+            
+            # Step 3d: Fix BCD drive IDs explicitly (prevents "unknown" partition errors)
+            Write-Log "Step 3d: Fixing BCD drive identifiers..."
+            try {
+                # Get the default boot entry GUID
+                $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                if ($bcdEnum -match '{([a-f0-9\-]{36})}') {
+                    $defaultGuid = $matches[1]
+                    
+                    # Set device and osdevice explicitly to C: partition
+                    $deviceCmd = "bcdedit /set {$defaultGuid} device partition=$Drive`:"
+                    $osdeviceCmd = "bcdedit /set {$defaultGuid} osdevice partition=$Drive`:"
+                    
+                    Write-Log "Running: $deviceCmd"
+                    $deviceOutput = & bcdedit /set "{$defaultGuid}" device "partition=$Drive`:" 2>&1 | Out-String
+                    Write-Log "Device Output: $deviceOutput"
+                    
+                    Write-Log "Running: $osdeviceCmd"
+                    $osdeviceOutput = & bcdedit /set "{$defaultGuid}" osdevice "partition=$Drive`:" 2>&1 | Out-String
+                    Write-Log "OSDevice Output: $osdeviceOutput"
+                    
+                    Write-Log "[OK] BCD drive identifiers fixed"
+                } else {
+                    Write-Log "[INFO] Could not find default boot entry GUID, skipping drive ID fix"
+                }
+            } catch {
+                Write-Log "[WARNING] Could not fix BCD drive IDs: $_"
+            }
+        } elseif ($bcdbootSuccess -and -not $winloadActuallyCopied) {
+            Write-Log "[WARNING] FALSE POSITIVE: bcdboot reported success but winload.efi was NOT copied!"
+            Write-Log "This indicates a write failure (possibly VMD, read-only EFI, or drive access issue)"
+            
+            # Check if VMD is the issue
+            if ($VmdIssue -and $VmdIssue.VMDDetected -and -not $VmdIssue.DriverLoaded) {
+                Write-Log "[CRITICAL] Intel VMD driver not loaded - this is likely the cause!"
+                Write-Log "bcdboot cannot write to NVMe drive without VMD driver."
+            }
+            
+            # Proceed to Force Wipe mode
+            Write-Log "Proceeding to Force Wipe mode..."
+            Invoke-ForceWipeMode -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath -VmdIssue $VmdIssue
+        } else {
+            Write-Log "[WARNING] bcdboot reported issues. Check output above."
+            Invoke-EfiPartitionHealthCheck -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath
+        }
+    } catch {
+        Write-Log "[ERROR] bcdboot failed: $_"
+    }
+}
+
+function Invoke-ForceWipeMode {
+    param(
+        [string]$Drive,
+        [string]$EfiDrive,
+        [string]$WinloadEfiPath,
+        $VmdIssue
+    )
+    
+    # Step 4: FORCE WIPE MODE - Aggressive EFI Partition Repair
+    Write-Log "==============================================================="
+    Write-Log "FORCE WIPE MODE - Aggressive EFI Partition Repair"
+    Write-Log "==============================================================="
+    Write-Log ""
+    
+    # Step 4a: Delete old BCD and winload.efi manually
+    Write-Log "Step 4a: Manually deleting old BCD and winload.efi from EFI partition..."
+    try {
+        $oldBcdPath = "$EfiDrive`:\EFI\Microsoft\Boot\BCD"
+        $oldWinloadPath = "$EfiDrive`:\EFI\Microsoft\Boot\winload.efi"
+        
+        if (Test-Path $oldBcdPath) {
+            Remove-Item $oldBcdPath -Force -ErrorAction SilentlyContinue
+            Write-Log "[OK] Deleted old BCD file"
+        }
+        if (Test-Path $oldWinloadPath) {
+            Remove-Item $oldWinloadPath -Force -ErrorAction SilentlyContinue
+            Write-Log "[OK] Deleted old winload.efi file"
+        }
+    } catch {
+        Write-Log "[WARNING] Could not delete old files: $_"
+    }
+    
+    # Step 4b: Format EFI partition using diskpart (more reliable than format command)
+    Write-Log "Step 4b: Formatting EFI partition using diskpart..."
+    Write-Log "WARNING: This will completely wipe the EFI partition (safe if Windows partition is intact)"
+    
+    try {
+        # Get partition number for diskpart
+        $efiPartition = Get-Partition -DriveLetter $EfiDrive -ErrorAction SilentlyContinue
+        if ($efiPartition) {
+            $diskNumber = $efiPartition.DiskNumber
+            $partitionNumber = $efiPartition.PartitionNumber
+            
+            # Create diskpart script
+            $diskpartScript = @"
+select disk $diskNumber
+select partition $partitionNumber
+format fs=fat32 quick label="System"
+active
+exit
+"@
+            
+            Write-Log "Running diskpart format..."
+            $formatOutput = $diskpartScript | diskpart 2>&1 | Out-String
+            Write-Log "Diskpart Output: $formatOutput"
+            
+            Start-Sleep -Seconds 3
+            
+            # Step 4c: Retry bcdboot with /addlast flag
+            Write-Log "Step 4c: Retrying bcdboot with /addlast flag after format..."
+            $bcdbootRetryCmd = "bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI /v /addlast"
+            Write-Log "Running: $bcdbootRetryCmd"
+            $bcdbootRetry = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI /v /addlast 2>&1 | Out-String
+            Write-Log "bcdboot Retry Output: $bcdbootRetry"
+            
+            # Verify again
+            Start-Sleep -Seconds 2
+            if (Test-Path $WinloadEfiPath) {
+                Write-Log "[SUCCESS] winload.efi copied to EFI partition after Force Wipe"
+                
+                # Fix BCD drive IDs after Force Wipe
+                Write-Log "Fixing BCD drive identifiers after Force Wipe..."
+                try {
+                    $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                    if ($bcdEnum -match '{([a-f0-9\-]{36})}') {
+                        $defaultGuid = $matches[1]
+                        & bcdedit /set "{$defaultGuid}" device "partition=$Drive`:" 2>&1 | Out-Null
+                        & bcdedit /set "{$defaultGuid}" osdevice "partition=$Drive`:" 2>&1 | Out-Null
+                        Write-Log "[OK] BCD drive identifiers fixed after Force Wipe"
+                    }
+                } catch {
+                    Write-Log "[WARNING] Could not fix BCD drive IDs: $_"
+                }
+            } else {
+                Write-Log "[ERROR] winload.efi STILL missing after Force Wipe!"
+                Write-Log ""
+                Write-Log "CRITICAL: This indicates a deeper issue:"
+                Write-Log "  1. Source template missing: C:\Windows\System32\Boot\winload.efi"
+                Write-Log "  2. Intel VMD driver not loaded (check BIOS)"
+                Write-Log "  3. Multiple boot drives causing conflicts"
+                Write-Log "  4. Hardware failure or drive corruption"
+                Write-Log ""
+                Write-Log "MANUAL LAST RESORT COMMANDS:"
+                Write-Log "  # 1. Mount EFI"
+                Write-Log "  mountvol S: /S"
+                Write-Log ""
+                Write-Log "  # 2. Clear old BCD and Winload info"
+                Write-Log "  del S:\EFI\Microsoft\Boot\BCD /f"
+                Write-Log "  del S:\EFI\Microsoft\Boot\winload.efi /f"
+                Write-Log ""
+                Write-Log "  # 3. Force rebuild from local Windows source"
+                Write-Log "  bcdboot C:\Windows /s S: /f UEFI /addlast"
+                Write-Log ""
+                
+                # Check for VMD issue
+                if ($VmdIssue -and $VmdIssue.VMDDetected -and -not $VmdIssue.DriverLoaded) {
+                    Write-Log "[CRITICAL] Intel VMD driver issue confirmed!"
+                    Write-Log "  - VMD is enabled in BIOS but driver not loaded in WinPE"
+                    Write-Log "  - bcdboot cannot write to NVMe drive"
+                    Write-Log "  - SOLUTION: Load VMD driver or disable VMD in BIOS"
+                }
+            }
+        } else {
+            Write-Log "[ERROR] Could not get partition info for diskpart"
+        }
+    } catch {
+        Write-Log "[ERROR] Force Wipe mode failed: $_"
+    }
+}
+
+function Invoke-EfiPartitionHealthCheck {
+    param(
+        [string]$Drive,
+        [string]$EfiDrive,
+        [string]$WinloadEfiPath
+    )
+    
+    # Step 4: Force Clean EFI Partition (if bcdboot failed)
+    Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
+    try {
+        $efiVolume = Get-Volume -DriveLetter $EfiDrive -ErrorAction SilentlyContinue
+        $efiPartition = Get-Partition -DriveLetter $EfiDrive -ErrorAction SilentlyContinue
+        
+        $needsFormat = $false
+        $formatReason = ""
+        
+        if ($efiVolume) {
+            # Check filesystem type
+            if ($efiVolume.FileSystemType -eq "RAW" -or [string]::IsNullOrWhiteSpace($efiVolume.FileSystemType)) {
+                $needsFormat = $true
+                $formatReason = "EFI partition has no filesystem (RAW)"
+            }
+            
+            # Check health status
+            if ($efiVolume.HealthStatus -ne "Healthy") {
+                $needsFormat = $true
+                $formatReason = "EFI partition health is not optimal: $($efiVolume.HealthStatus)"
+            }
+            
+            # Check free space (EFI partition should have at least 10MB free)
+            if ($efiVolume.SizeRemaining -lt 10MB) {
+                $needsFormat = $true
+                $formatReason = "EFI partition is out of space (only $([math]::Round($efiVolume.SizeRemaining/1MB, 2)) MB free)"
+            }
+        }
+        
+        # Check if partition is read-only
+        if ($efiPartition -and $efiPartition.IsReadOnly) {
+            $needsFormat = $true
+            $formatReason = "EFI partition is read-only (write-protected)"
+        }
+        
+        # If bcdboot failed, the EFI partition may be corrupted
+        if (-not $needsFormat) {
+            $needsFormat = $true
+            $formatReason = "bcdboot failed - EFI partition may be corrupted or write-protected"
+        }
+        
+        if ($needsFormat) {
+            Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
+            Write-Log "Step 4: Formatting EFI partition $EfiDrive`: as FAT32 (quick format)..."
+            Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
+            
+            $formatOutput = & format "$EfiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
+            Write-Log "Format Output: $formatOutput"
+            
+            Start-Sleep -Seconds 2
+            
+            # Retry bcdboot after format
+            Write-Log "Retrying bcdboot after EFI partition format..."
+            $bcdbootRetry = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI 2>&1 | Out-String
+            Write-Log "bcdboot Retry Output: $bcdbootRetry"
+            
+            # Verify winload.efi was copied
+            if (Test-Path $WinloadEfiPath) {
+                Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+            } else {
+                Write-Log "[ERROR] winload.efi still missing after format and retry."
+                Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
+                Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
+            }
+        } else {
+            Write-Log "[WARNING] EFI partition appears healthy, but bcdboot failed."
+            Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
+            Write-Log "Step 5: Manual extraction from Windows installation media may be required."
+        }
+    } catch {
+        Write-Log "[ERROR] EFI partition check/format failed: $_"
+    }
+}
+
+# ==============================================================================
+
 # Load centralized logging system
 try {
     # Determine script root safely
@@ -110,12 +391,49 @@ try {
         $null = Initialize-ErrorLogging -ScriptRoot $scriptRoot -RetentionDays 7 -ErrorAction SilentlyContinue
         Add-MiracleBootLog -Level "INFO" -Message "WinRepairGUI.ps1 loaded" -Location "WinRepairGUI.ps1" -ErrorAction SilentlyContinue
     }
+    
+    # Load Advanced Boot Troubleshooting module
+    if ($scriptRoot -and (Test-Path "$scriptRoot\AdvancedBootTroubleshooting.ps1")) {
+        . "$scriptRoot\AdvancedBootTroubleshooting.ps1" -ErrorAction SilentlyContinue
+    }
 } catch {
     # Silently continue if logging fails - don't block GUI launch
 }
 
 # Helper function to safely get controls with null checking
 # Note: This will be defined inside Start-GUI to access $W directly
+
+# Helper function to safely get count from any object (prevents Count property errors)
+function Get-SafeCount {
+    <#
+    .SYNOPSIS
+    Safely gets the count of an object, handling null, empty, and non-array cases.
+    
+    .PARAMETER Object
+    The object to get the count from.
+    
+    .OUTPUTS
+    Integer count (0 if object is null or doesn't have a Count property)
+    #>
+    param(
+        [Parameter(Mandatory=$false)]
+        [object]$Object
+    )
+    
+    if ($null -eq $Object) {
+        return 0
+    }
+    
+    # Ensure it's an array
+    $array = @($Object)
+    
+    # Try to get count
+    try {
+        return $array.Count
+    } catch {
+        return 0
+    }
+}
 
 function Start-GUI {
     # XAML definition for the main window
@@ -774,7 +1092,7 @@ try {
             hypothesisId = "XAML-PARSE"
             location = "WinRepairGUI.ps1:parse-success"
             message = "XAML parsing success"
-            data = @{ windowType = $W.GetType().FullName; windowNotNull = ($W -ne $null) }
+            data = @{ windowType = $W.GetType().FullName; windowNotNull = ($null -ne $W) }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -883,7 +1201,7 @@ try {
         hypothesisId = "B"
         location = "WinRepairGUI.ps1:475"
         message = "Before FindName EnvStatus"
-        data = @{ envType = $envType; windowNotNull = ($W -ne $null) }
+        data = @{ envType = $envType; windowNotNull = ($null -ne $W) }
         timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
     } | ConvertTo-Json -Compress
     Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -900,7 +1218,7 @@ try {
         hypothesisId = "B"
         location = "WinRepairGUI.ps1:477"
         message = "After FindName EnvStatus"
-        data = @{ controlIsNull = ($envStatusControl -eq $null); controlType = if ($envStatusControl) { $envStatusControl.GetType().FullName } else { "null" } }
+        data = @{ controlIsNull = ($null -eq $envStatusControl); controlType = if ($envStatusControl) { $envStatusControl.GetType().FullName } else { "null" } }
         timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
     } | ConvertTo-Json -Compress
     Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -1207,7 +1525,7 @@ $scaleValueText = Get-Control -Name "ScaleValueText"
 $btnResetScale = Get-Control -Name "BtnResetScale"
 
 # Function to apply interface scale
-function Apply-InterfaceScale {
+function Set-InterfaceScale {
     param([double]$Scale)
     
     if ($Scale -lt 0.75 -or $Scale -gt 1.5) {
@@ -1258,12 +1576,12 @@ try {
 if ($interfaceScaleSlider) {
     # Set initial value from saved preference
     $interfaceScaleSlider.Value = $savedScale
-    Apply-InterfaceScale -Scale $savedScale
+    Set-InterfaceScale -Scale $savedScale
     
     # Handle slider value change
     $interfaceScaleSlider.Add_ValueChanged({
         $newScale = $interfaceScaleSlider.Value
-        Apply-InterfaceScale -Scale $newScale
+        Set-InterfaceScale -Scale $newScale
     })
 } else {
     Write-Warning "InterfaceScaleSlider control not found in XAML"
@@ -1276,7 +1594,7 @@ if ($btnResetScale) {
             if ($interfaceScaleSlider) {
                 $interfaceScaleSlider.Value = $defaultScale
             }
-            Apply-InterfaceScale -Scale $defaultScale
+            Set-InterfaceScale -Scale $defaultScale
         } catch {
             [System.Windows.MessageBox]::Show("Failed to reset interface scale: $_", "Error", "OK", "Error")
         }
@@ -1297,11 +1615,11 @@ try {
             
             # Try multiple methods to detect network adapters
             try {
-                $netAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Hidden' }
-                if ($netAdapters) {
+                $netAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Hidden' })
+                if ((Get-SafeCount $netAdapters) -gt 0) {
                     $adaptersAvailable = $true
-                    $connectedAdapters = $netAdapters | Where-Object { $_.Status -eq 'Up' -or $_.Status -eq 'Connected' }
-                    if ($connectedAdapters) {
+                    $connectedAdapters = @($netAdapters | Where-Object { $_.Status -eq 'Up' -or $_.Status -eq 'Connected' })
+                    if ((Get-SafeCount $connectedAdapters) -gt 0) {
                         $adaptersConnected = $true
                     }
                 }
@@ -1319,11 +1637,11 @@ try {
                     # Try Get-NetworkAdapterStatus if NetworkDiagnostics is loaded
                     if (Get-Command Get-NetworkAdapterStatus -ErrorAction SilentlyContinue) {
                         try {
-                            $adapterStatus = Get-NetworkAdapterStatus -ErrorAction SilentlyContinue
-                            if ($adapterStatus -and $adapterStatus.Count -gt 0) {
+                            $adapterStatus = @(Get-NetworkAdapterStatus -ErrorAction SilentlyContinue)
+                            if ((Get-SafeCount $adapterStatus) -gt 0) {
                                 $adaptersAvailable = $true
-                                $connectedAdapters = $adapterStatus | Where-Object { $_.Connected -eq $true }
-                                if ($connectedAdapters) {
+                                $connectedAdapters = @($adapterStatus | Where-Object { $_.Connected -eq $true })
+                                if ((Get-SafeCount $connectedAdapters) -gt 0) {
                                     $adaptersConnected = $true
                                 }
                             }
@@ -1522,7 +1840,7 @@ try {
                 if ($updateEligibilityStatus) {
                     $statusText = "Readiness Score: $($updateEligibility.ReadinessScore)/$($updateEligibility.MaxScore) - Status: $($updateEligibility.Status)"
                     $updateEligibilityStatus.Text = $statusText
-                    if ($updateEligibility.ReadinessScore -ge 80 -and $updateEligibility.Blockers.Count -eq 0) {
+                    if ($updateEligibility.ReadinessScore -ge 80 -and (Get-SafeCount $updateEligibility.Blockers) -eq 0) {
                         $updateEligibilityStatus.Foreground = "Green"
                     } elseif ($updateEligibility.ReadinessScore -ge 60) {
                         $updateEligibilityStatus.Foreground = "Orange"
@@ -2018,8 +2336,8 @@ privileges because they modify critical boot settings that affect system startup
                 )
                 if ($result -eq "Yes") {
                     $fixed = Fix-DuplicateBCEEntries -AppendVolumeLabels
-                    if ($fixed.Count -gt 0) {
-                        [System.Windows.MessageBox]::Show("Fixed $($fixed.Count) duplicate entry name(s).", "Success", "OK", "Information")
+                    if ((Get-SafeCount $fixed) -gt 0) {
+                        [System.Windows.MessageBox]::Show("Fixed $(Get-SafeCount $fixed) duplicate entry name(s).", "Success", "OK", "Information")
                         # Reload BCD
                         $btnBCD.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
                         return
@@ -2176,7 +2494,7 @@ $btnFixDuplicates = Get-Control -Name "BtnFixDuplicates"
 if ($btnFixDuplicates) {
     $btnFixDuplicates.Add_Click({
     $duplicates = Find-DuplicateBCEEntries
-    if ($duplicates -and $duplicates.Count -gt 0) {
+    if ($duplicates -and (Get-SafeCount $duplicates) -gt 0) {
         $dupList = ""
         foreach ($dup in $duplicates) {
             $dupList += "`n- '$($dup.Name)' (appears $($dup.Count) times)"
@@ -2190,14 +2508,14 @@ if ($btnFixDuplicates) {
         )
         if ($result -eq "Yes") {
             $fixed = Fix-DuplicateBCEEntries -AppendVolumeLabels
-            if ($fixed.Count -gt 0) {
-                [System.Windows.MessageBox]::Show("Fixed $($fixed.Count) duplicate entry name(s).", "Success", "OK", "Information")
+                    if ((Get-SafeCount $fixed) -gt 0) {
+                        [System.Windows.MessageBox]::Show("Fixed $(Get-SafeCount $fixed) duplicate entry name(s).", "Success", "OK", "Information")
                 $W.FindName("BtnBCD").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
             }
         } elseif ($result -eq "No") {
             $fixed = Fix-DuplicateBCEEntries
-            if ($fixed.Count -gt 0) {
-                [System.Windows.MessageBox]::Show("Fixed $($fixed.Count) duplicate entry name(s).", "Success", "OK", "Information")
+                    if ((Get-SafeCount $fixed) -gt 0) {
+                        [System.Windows.MessageBox]::Show("Fixed $(Get-SafeCount $fixed) duplicate entry name(s).", "Success", "OK", "Information")
                 $W.FindName("BtnBCD").RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
             }
         }
@@ -2346,7 +2664,7 @@ if ($btnPrecisionScan) {
             $summary += "===============================================================`n"
             $summary += "Windows: $windowsRoot  ESP: $espLetter`n`n"
 
-            if ($result -and $result.Detections -and $result.Detections.Count -gt 0) {
+            if ($result -and $result.Detections -and (Get-SafeCount $result.Detections) -gt 0) {
                 foreach ($det in $result.Detections) {
                     $summary += "[$($det.Id)] $($det.Title)  (Category: $($det.Category))`n"
                     foreach ($ev in $det.Evidence) { $summary += "  Evidence: $ev`n" }
@@ -2418,7 +2736,6 @@ if ($btnOneClickPrecisionFix) {
             } -ArgumentList $windowsRoot, $espLetter, "$env:TEMP\precision-actions.log", $corePath
 
             # Monitor job progress
-            $output = ""
             while ($job.State -eq 'Running') {
                 Start-Sleep -Milliseconds 500
                 [System.Windows.Forms.Application]::DoEvents()
@@ -2458,8 +2775,8 @@ if ($btnOneClickPrecisionFix) {
                 $summary += "[PARTIAL/FAILED] $($result.Message)`n`n"
             }
 
-            if ($result.FixedIssues -and $result.FixedIssues.Count -gt 0) {
-                $summary += "FIXED ISSUES ($($result.FixedIssues.Count)):`n"
+            if ($result.FixedIssues -and (Get-SafeCount $result.FixedIssues) -gt 0) {
+                $summary += "FIXED ISSUES ($(Get-SafeCount $result.FixedIssues)):`n"
                 foreach ($issue in $result.FixedIssues) {
                     $issueId = $issue.Id
                     $issueTitle = $issue.Title
@@ -2469,8 +2786,8 @@ if ($btnOneClickPrecisionFix) {
                 $summary += "`n"
             }
 
-            if ($result.RemainingIssues -and $result.RemainingIssues.Count -gt 0) {
-                $summary += "REMAINING ISSUES ($($result.RemainingIssues.Count)):`n"
+            if ($result.RemainingIssues -and (Get-SafeCount $result.RemainingIssues) -gt 0) {
+                $summary += "REMAINING ISSUES ($(Get-SafeCount $result.RemainingIssues)):`n"
                 foreach ($issue in $result.RemainingIssues) {
                     $issueId = $issue.Id
                     $issueTitle = $issue.Title
@@ -2686,8 +3003,6 @@ if ($btnSetDefault) {
         
         if ($id) {
             $command = "bcdedit /default $id"
-            $explanation = "Sets the selected boot entry as the default option that will boot automatically after the timeout period."
-            
             $testMode = Show-CommandPreview $command $null "Set Default Boot Entry"
             
             if ($testMode) {
@@ -3037,12 +3352,12 @@ if ($W.FindName("BtnFindMatchingDrivers")) {
             }
             Update-StatusBar -Message "Searching for matching drivers..." -ShowProgress
             
-            $matches = Find-MatchingDrivers -ControllerInfo $controllers -SearchPaths $searchPaths -WindowsDrive $drive
+            $driverMatches = Find-MatchingDrivers -ControllerInfo $controllers -SearchPaths $searchPaths -WindowsDrive $drive
             
             $output = "Driver Matching Results:`n"
             $output += "===============================================================`n`n"
             
-            foreach ($match in $matches) {
+            foreach ($match in $driverMatches) {
                 $output += "Controller: $($match.Controller)`n"
                 $output += "  Type: $($match.ControllerType)`n"
                 $output += "  Hardware ID: $($match.HardwareID)`n"
@@ -3101,154 +3416,163 @@ if ($btnOneClickRepair) {
         # Set flag to prevent concurrent repairs
         $script:repairInProgress = $true
         
-        $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
-        $fixerOutput = Get-Control -Name "FixerOutput"
-        $chkTestMode = Get-Control -Name "ChkTestMode"
-        
-        # Check test mode
-        $testMode = $false
-        if ($chkTestMode) {
-            $testMode = $chkTestMode.IsChecked
-        }
-        
-        # Create log file
-        $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-        $logContent = New-Object System.Text.StringBuilder
-        
-        # Determine target drive (will be updated after user selection)
-        $targetDrive = $env:SystemDrive.TrimEnd(':')
-        
-        # Load report generator module
-        $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
-        if (Test-Path $reportGeneratorPath) {
-            try {
-                . $reportGeneratorPath
-                $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-            } catch {
-                Write-Warning "Could not load report generator: $_"
-                $repairReport = $null
-            }
-        } else {
-            $repairReport = $null
-        }
-        
-        function Write-Log {
-            param([string]$Message)
-            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-            $logEntry = "[$timestamp] $Message"
-            $logContent.AppendLine($logEntry) | Out-Null
-            if ($fixerOutput) {
-                $fixerOutput.Text += "$logEntry`n"
-                $fixerOutput.ScrollToEnd()
-            }
-        }
-        
-        function Write-CommandLog {
-            param(
-                [string]$Command, 
-                [string]$Description, 
-                [switch]$IsRepairCommand,
-                [string]$Output = "",
-                [int]$ExitCode = 0,
-                [string]$Error = ""
-            )
+        try {
+            $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
+            $fixerOutput = Get-Control -Name "FixerOutput"
+            $chkTestMode = Get-Control -Name "ChkTestMode"
             
-            $success = ($ExitCode -eq 0 -and -not $Error)
+            # Check test mode
+            $testMode = $false
+            if ($chkTestMode) {
+                $testMode = $chkTestMode.IsChecked
+            }
             
-            # Track in report generator if available
-            if ($repairReport) {
+            # Create log file
+            $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+            $logContent = New-Object System.Text.StringBuilder
+            
+            # Determine target drive (will be updated after user selection)
+            $targetDrive = $env:SystemDrive.TrimEnd(':')
+            $drive = $targetDrive  # Initialize $drive early for use in diagnostic mode
+            
+            # Load report generator module
+            $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
+            if (Test-Path $reportGeneratorPath) {
                 try {
-                    Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                    . $reportGeneratorPath
+                    $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
                 } catch {
-                    # Silently fail if report tracking fails
-                }
-            }
-            
-            if ($IsRepairCommand) {
-                # Repair commands (write operations) - skip in test mode
-                if ($testMode) {
-                    Write-Log "[TEST MODE] Would execute repair: $Command"
-                    Write-Log "  Description: $Description"
-                    Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
-                } else {
-                    Write-Log "[EXECUTING REPAIR] Command: $Command"
-                    Write-Log "  Description: $Description"
-                    if ($Output) {
-                        Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
-                    }
-                    if (-not $success) {
-                        Write-Log "  [FAILED] Exit Code: $ExitCode"
-                        if ($Error) {
-                            Write-Log "  Error: $Error"
-                        }
-                    }
+                    Write-Warning "Could not load report generator: $_"
+                    $repairReport = $null
                 }
             } else {
-                # Diagnostic commands (read-only) - always run
-                Write-Log "[DIAGNOSTIC] Running: $Command"
-                Write-Log "  Description: $Description (read-only check)"
-                if ($Output -and $Output.Length -gt 0) {
-                    Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
-                }
+                $repairReport = $null
             }
-        }
-        
-        function Invoke-TrackedCommand {
-            <#
-            .SYNOPSIS
-            Executes a command and automatically tracks it in the repair report.
-            #>
-            param(
-                [Parameter(Mandatory=$true)]
-                [string]$Command,
-                [string]$Description = "",
-                [switch]$IsRepairCommand,
-                [scriptblock]$ScriptBlock
-            )
             
-            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
-            
-            if ($IsRepairCommand -and $testMode) {
-                Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
-                return @{
-                    Success = $true
-                    Output = ""
-                    ExitCode = 0
-                    Error = ""
+            function Write-Log {
+                param([string]$Message)
+                $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                $logEntry = "[$timestamp] $Message"
+                $logContent.AppendLine($logEntry) | Out-Null
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "$logEntry`n"
+                    $fixerOutput.ScrollToEnd()
                 }
             }
             
-            $output = ""
-            $errorMsg = ""
-            $exitCode = 0
-            $success = $false
-            
-            try {
-                if ($ScriptBlock) {
-                    $output = & $ScriptBlock 2>&1 | Out-String
-                    $exitCode = $LASTEXITCODE
-                    $success = ($exitCode -eq 0)
+            function Write-CommandLog {
+                param(
+                    [string]$Command, 
+                    [string]$Description, 
+                    [switch]$IsRepairCommand,
+                    [string]$Output = "",
+                    [int]$ExitCode = 0,
+                    [string]$ErrorMessage = ""
+                )
+                
+                $success = ($ExitCode -eq 0 -and -not $ErrorMessage)
+                
+                # Track in report generator if available
+                if ($repairReport) {
+                    try {
+                        Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                    } catch {
+                        # Silently fail if report tracking fails
+                    }
+                }
+                
+                if ($IsRepairCommand) {
+                    # Repair commands (write operations) - skip in test mode
+                    if ($testMode) {
+                        Write-Log "[TEST MODE] Would execute repair: $Command"
+                        Write-Log "  Description: $Description"
+                        Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
+                    } else {
+                        Write-Log "[EXECUTING REPAIR] Command: $Command"
+                        Write-Log "  Description: $Description"
+                        if ($Output) {
+                            Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                        }
+                        if (-not $success) {
+                            Write-Log "  [FAILED] Exit Code: $ExitCode"
+                            if ($Error) {
+                                Write-Log "  Error: $Error"
+                            }
+                        }
+                    }
                 } else {
-                    # Execute as string command
-                    $output = Invoke-Expression $Command 2>&1 | Out-String
-                    $exitCode = $LASTEXITCODE
-                    $success = ($exitCode -eq 0)
+                    # Diagnostic commands (read-only) - always run
+                    Write-Log "[DIAGNOSTIC] Running: $Command"
+                    Write-Log "  Description: $Description (read-only check)"
+                    if ($Output -and $Output.Length -gt 0) {
+                        Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                    }
                 }
-            } catch {
-                $errorMsg = $_.Exception.Message
-                $output = $_.Exception.ToString()
+            }
+            
+            function Invoke-TrackedCommand {
+                <#
+                .SYNOPSIS
+                Executes a command and automatically tracks it in the repair report.
+                #>
+                param(
+                    [Parameter(Mandatory=$true)]
+                    [string]$Command,
+                    [string]$Description = "",
+                    [switch]$IsRepairCommand,
+                    [scriptblock]$ScriptBlock
+                )
+                
+                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
+                
+                if ($IsRepairCommand -and $testMode) {
+                    Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
+                    return @{
+                        Success = $true
+                        Output = ""
+                        ExitCode = 0
+                        ErrorMessage = ""
+                    }
+                }
+                
+                $output = ""
+                $errorMsg = ""
+                $exitCode = 0
                 $success = $false
+                
+                try {
+                    if ($ScriptBlock) {
+                        $output = & $ScriptBlock 2>&1 | Out-String
+                        $exitCode = $LASTEXITCODE
+                        $success = ($exitCode -eq 0)
+                    } else {
+                        # Execute as string command
+                        $output = Invoke-Expression $Command 2>&1 | Out-String
+                        $exitCode = $LASTEXITCODE
+                        $success = ($exitCode -eq 0)
+                    }
+                } catch {
+                    $errorMsg = $_.Exception.Message
+                    $output = $_.Exception.ToString()
+                    $success = $false
+                }
+                
+                # Update command log with results
+                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -ErrorMessage $errorMsg
+                
+                return @{
+                    Success = $success
+                    Output = $output
+                    ExitCode = $exitCode
+                    ErrorMessage = $errorMsg
+                }
             }
-            
-            # Update command log with results
-            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -Error $errorMsg
-            
-            return @{
-                Success = $success
-                Output = $output
-                ExitCode = $exitCode
-                Error = $errorMsg
-            }
+        } catch {
+            Write-Warning "Failed to initialize One-Click Repair controls: $_"
+            [System.Windows.MessageBox]::Show("Failed to initialize repair interface: $_", "Initialization Error", "OK", "Error")
+            $script:repairInProgress = $false
+            $btnOneClickRepair.IsEnabled = $true
+            return
         }
         
         # Disable button during repair
@@ -3392,6 +3716,12 @@ if ($btnOneClickRepair) {
                     Write-Log "Switching to READ-ONLY DIAGNOSTIC MODE..."
                     Write-Log ""
                     
+                    # Set drive to system drive if not already set (for FullOS mode)
+                    if (-not $drive) {
+                        $drive = $env:SystemDrive.TrimEnd(':')
+                        Write-Log "[INFO] Using system drive: $drive`:"
+                    }
+                    
                     # Generate diagnostic state
                     if (Get-Command "Get-RepairState" -ErrorAction SilentlyContinue) {
                         $diagnosticState = Get-RepairState -TargetDrive $drive
@@ -3423,9 +3753,7 @@ if ($btnOneClickRepair) {
             }
             
             # Check for Simulation Mode (WhatIf)
-            $simulationMode = $false
             if ($ChkTestMode -and $ChkTestMode.IsChecked) {
-                $simulationMode = $true
                 Write-Log "[SIMULATION MODE] All destructive commands will be simulated (not executed)"
                 Write-Log ""
             }
@@ -3438,11 +3766,9 @@ if ($btnOneClickRepair) {
             
             # CRITICAL PRE-FLIGHT: Check if BitLocker is LOCKED (blocks all repairs)
             Write-Log "Checking BitLocker status..."
-            $bitlockerLocked = $false
             try {
                 $bitlockerStatus = manage-bde -status "$drive`:" 2>&1 | Out-String
                 if ($bitlockerStatus -match "Lock Status:\s+Locked") {
-                    $bitlockerLocked = $true
                     Write-Log "[BLOCKED] BitLocker is LOCKED on drive $drive`:"
                     Write-Log ""
                     Write-Log "CRITICAL: Drive is encrypted and LOCKED."
@@ -3492,7 +3818,7 @@ if ($btnOneClickRepair) {
             
             # Prompt user to select target Windows drive (exclude X: WinPE drive)
             Write-Log "Detecting Windows installations..."
-            $installations = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
+            $installations = @(Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter)
             
             # Always prompt user for drive selection (even if only one found)
             # This ensures user confirms the correct drive and prevents targeting wrong drive
@@ -3511,6 +3837,7 @@ if ($btnOneClickRepair) {
                     throw "No target drive selected."
                 }
                 $drive = $manualDrive.TrimEnd(':').ToUpper()
+                $targetDrive = $drive  # Update targetDrive when drive is set
                 Write-Log "Using manually specified drive: $drive`:"
             } elseif ($installations.Count -eq 1) {
                 # Only one installation found, but still prompt user to confirm
@@ -3531,6 +3858,7 @@ if ($btnOneClickRepair) {
                 )
                 if ($confirm -eq "OK") {
                     $drive = $selectedInst.DriveLetter
+                    $targetDrive = $drive  # Update targetDrive when drive is set
                     Write-Log "Confirmed Windows installation: $($selectedInst.DisplayName)"
                 } else {
                     # User cancelled, allow manual entry
@@ -3611,7 +3939,7 @@ if ($btnOneClickRepair) {
                 $btnRefresh.Size = New-Object System.Drawing.Size(100, 30)
                 $btnRefresh.Add_Click({
                     $listView.Items.Clear()
-                    $refreshed = Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter
+                    $refreshed = @(Get-WindowsInstallations | Where-Object { $_.DriveLetter -ne 'X' } | Sort-Object { if ($_.IsCurrentOS) { 0 } else { 1 } }, DriveLetter)
                     foreach ($inst in $refreshed) {
                         $item = New-Object System.Windows.Forms.ListViewItem($inst.Drive)
                         $item.SubItems.Add($inst.VolumeLabel) | Out-Null
@@ -3669,9 +3997,11 @@ if ($btnOneClickRepair) {
                 if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                     if ($script:selectedDrive) {
                         $drive = $script:selectedDrive
+                        $targetDrive = $drive  # Update targetDrive when drive is set
                         Write-Log "Using manually entered drive: $drive`:"
                     } elseif ($listView.SelectedItems.Count -gt 0) {
                         $drive = $listView.SelectedItems[0].Tag
+                        $targetDrive = $drive  # Update targetDrive when drive is set
                         $selectedInst = $installations | Where-Object { $_.DriveLetter -eq $drive } | Select-Object -First 1
                         Write-Log "Selected: $($selectedInst.DisplayName)"
                     } else {
@@ -3897,7 +4227,6 @@ if ($btnOneClickRepair) {
                 # Check if it's just file system corruption (can be fixed) vs hardware failure
                 # If volume is null or disk health status is not Healthy, it's likely hardware
                 try {
-                    $volume = Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue
                     $partition = Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue
                     if ($partition) {
                         $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue
@@ -3939,12 +4268,12 @@ if ($btnOneClickRepair) {
                 }
                 
                 # Show warnings and recommendations
-                if ($diskHealth.Warnings -and $diskHealth.Warnings.Count -gt 0) {
+                if ($diskHealth.Warnings -and (Get-SafeCount $diskHealth.Warnings) -gt 0) {
                     foreach ($warning in $diskHealth.Warnings) {
                         Write-Log "  - $warning"
                     }
                 }
-                if ($diskHealth.Recommendations -and $diskHealth.Recommendations.Count -gt 0) {
+                if ($diskHealth.Recommendations -and (Get-SafeCount $diskHealth.Recommendations) -gt 0) {
                     foreach ($rec in $diskHealth.Recommendations) {
                         Write-Log "  Recommendation: $rec"
                     }
@@ -3991,18 +4320,24 @@ if ($btnOneClickRepair) {
             $missingDrivers = @()
             if ($missingDevices -and $missingDevices -ne "No missing or errored storage drivers detected.`n`nNote: Devices with non-zero error codes that are not error codes 1, 3, or 28 (missing driver codes) are excluded to reduce false positives.") {
                 # Parse the missing devices string to count them
-                $missingDrivers = Get-PnpDevice | Where-Object {
+                $missingDrivers = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
                     ($_.ConfigManagerErrorCode -eq 28 -or $_.ConfigManagerErrorCode -eq 1 -or $_.ConfigManagerErrorCode -eq 3) -and
                     ($_.Class -match 'SCSI|Storage|System|DiskDrive' -or $_.FriendlyName -match 'VMD|RAID|NVMe|Storage|Controller')
-                }
+                })
             }
             
-            if ($missingDrivers.Count -eq 0) {
+            if ((Get-SafeCount $missingDrivers) -eq 0) {
                 Write-Log "[OK] All storage drivers are loaded"
             } else {
                 Write-Log "[WARNING] Missing storage drivers detected:"
                 foreach ($device in $missingDrivers) {
-                    $hwid = if ($device.HardwareID -and $device.HardwareID.Count -gt 0) { $device.HardwareID[0] } else { "Unknown" }
+                    $hwid = "Unknown"
+                    if ($device.HardwareID) {
+                        $hwidArray = @($device.HardwareID)
+                        if ((Get-SafeCount $hwidArray) -gt 0) {
+                            $hwid = $hwidArray[0]
+                        }
+                    }
                     Write-Log "  - $($device.FriendlyName) (Error Code: $($device.ConfigManagerErrorCode), Hardware ID: $hwid)"
                 }
                 Write-Log ""
@@ -4152,7 +4487,7 @@ if ($btnOneClickRepair) {
                 }
             }
             
-            if ($missingFiles.Count -eq 0) {
+            if ((Get-SafeCount $missingFiles) -eq 0) {
                 Write-Log "[OK] All critical boot files are present"
             } else {
                 Write-Log "[WARNING] Missing boot files:"
@@ -4168,18 +4503,130 @@ if ($btnOneClickRepair) {
                 Update-StatusBar -Message "One-Click Repair: Repairing boot files..." -ShowProgress
                 
                 # Use bcdboot to repair boot files (more reliable than bootrec for UEFI)
-                # First ensure EFI partition is mounted
+                # First ensure EFI partition is mounted - CRITICAL STEP
                 if (-not $efiDrive) {
-                    Write-Log "Mounting EFI partition for boot file repair..."
+                    Write-Log "==============================================================="
+                    Write-Log "CRITICAL: EFI partition must be mounted for boot file repair"
+                    Write-Log "==============================================================="
+                    Write-Log "Attempting to mount EFI partition..."
+                    
+                    # Method 1: Try Mount-EFIPartition function
                     $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
                     if ($efiMount.Success) {
                         $efiDrive = $efiMount.DriveLetter
-                        Write-Log "[OK] EFI partition mounted as $efiDrive`:"
+                        Write-Log "[SUCCESS] EFI partition mounted as $efiDrive`: (Method 1: Set-Partition/diskpart)"
                     } else {
-                        Write-Log "[WARNING] Could not mount EFI partition: $($efiMount.Message)"
-                        Write-Log "Boot file repair may be limited. Manual EFI mount may be required."
+                        Write-Log "[WARNING] Method 1 failed: $($efiMount.Message)"
+                        Write-Log "Trying Method 2: mountvol /S (Windows system EFI mount)..."
+                        
+                        # Method 2: Try mountvol /S (mounts system EFI partition)
+                        try {
+                            $mountvolOutput = & mountvol S: /S 2>&1 | Out-String
+                            Start-Sleep -Seconds 1
+                            
+                            # Verify S: is now the EFI partition
+                            if (Test-Path "S:\EFI\Microsoft\Boot") {
+                                $efiDrive = "S"
+                                Write-Log "[SUCCESS] EFI partition mounted as S`: (Method 2: mountvol /S)"
+                            } else {
+                                Write-Log "[WARNING] mountvol /S succeeded but EFI path not found"
+                                
+                                # Method 3: Try to find EFI partition manually and assign letter
+                                Write-Log "Trying Method 3: Manual EFI partition detection and mount..."
+                                try {
+                                    # Get Windows partition to find disk
+                                    $winPartition = Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue
+                                    if ($winPartition) {
+                                        $diskNumber = $winPartition.DiskNumber
+                                        
+                                        # Find EFI partition on same disk
+                                        $efiPartitions = Get-Partition -DiskNumber $diskNumber -ErrorAction SilentlyContinue | Where-Object {
+                                            $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
+                                        }
+                                        
+                                        if ($efiPartitions -and $efiPartitions.Count -gt 0) {
+                                            $efiPart = $efiPartitions[0]
+                                            Write-Log "Found EFI partition: Disk $diskNumber, Partition $($efiPart.PartitionNumber)"
+                                            
+                                            # Try to assign drive letter using diskpart
+                                            $partNumber = $efiPart.PartitionNumber
+                                            $diskpartScript = @"
+select disk $diskNumber
+select partition $partNumber
+assign letter=S
+active
+exit
+"@
+                                            $scriptPath = Join-Path $env:TEMP "mount_efi_force.txt"
+                                            $diskpartScript | Out-File -FilePath $scriptPath -Encoding ASCII -Force
+                                            
+                                            Write-Log "Running diskpart to assign drive letter S: to EFI partition..."
+                                            $diskpartOutput = diskpart /s $scriptPath 2>&1 | Out-String
+                                            Remove-Item $scriptPath -ErrorAction SilentlyContinue
+                                            Write-Log "Diskpart Output: $diskpartOutput"
+                                            
+                                            Start-Sleep -Seconds 2
+                                            
+                                            # Verify mount
+                                            if (Test-Path "S:\EFI\Microsoft\Boot") {
+                                                $efiDrive = "S"
+                                                Write-Log "[SUCCESS] EFI partition mounted as S`: (Method 3: diskpart manual mount)"
+                                            } else {
+                                                Write-Log "[ERROR] diskpart succeeded but EFI path still not accessible"
+                                            }
+                                        } else {
+                                            Write-Log "[ERROR] Could not find EFI partition on disk $diskNumber"
+                                        }
+                                    } else {
+                                        Write-Log "[ERROR] Could not get partition info for Windows drive $drive`:"
+                                    }
+                                } catch {
+                                    Write-Log "[ERROR] Method 3 failed: $_"
+                                }
+                            }
+                        } catch {
+                            Write-Log "[ERROR] mountvol /S failed: $_"
+                        }
+                    }
+                    
+                    # Final check - if still not mounted, we cannot proceed
+                    if (-not $efiDrive) {
+                        Write-Log ""
+                        Write-Log "==============================================================="
+                        Write-Log "CRITICAL ERROR: EFI PARTITION CANNOT BE MOUNTED"
+                        Write-Log "==============================================================="
+                        Write-Log ""
+                        Write-Log "Boot file repair CANNOT proceed without a mounted EFI partition."
+                        Write-Log "bcdboot requires a drive letter to write boot files."
+                        Write-Log ""
+                        Write-Log "MANUAL FIX REQUIRED:"
+                        Write-Log "  1. Open Command Prompt as Administrator"
+                        Write-Log "  2. Run: mountvol S: /S"
+                        Write-Log "  3. Verify: dir S:\EFI\Microsoft\Boot"
+                        Write-Log "  4. If that fails, use diskpart:"
+                        Write-Log "     diskpart"
+                        Write-Log "     list disk"
+                        Write-Log "     select disk X (where X is your Windows disk)"
+                        Write-Log "     list partition"
+                        Write-Log "     select partition Y (find the ~100MB EFI partition)"
+                        Write-Log "     assign letter=S"
+                        Write-Log "     exit"
+                        Write-Log ""
+                        Write-Log "After mounting, re-run One-Click Repair."
+                        Write-Log ""
+                        
+                        # Add to repair report
+                        if ($repairReport) {
+                            Add-RepairIssue -Report $repairReport -Issue "EFI partition cannot be mounted" -Severity "Critical" -Details "All mount methods failed. Manual mount required before repair can proceed."
+                            Add-Recommendation -Report $repairReport -Recommendation "Run 'mountvol S: /S' in Administrator Command Prompt, then re-run repair"
+                        }
+                        
+                        throw "EFI partition mount failed - cannot proceed with boot file repair"
                     }
                 }
+                
+                Write-Log "[OK] EFI partition is mounted and ready: $efiDrive`:"
+                Write-Log ""
                 
                 if ($efiDrive) {
                     # Use Defensive Boot-Chain Logic if available, otherwise fallback to standard repair
@@ -4212,8 +4659,8 @@ if ($btnOneClickRepair) {
                                 Write-Log $defensiveResult.Report
                                 
                                 # Show errors
-                                foreach ($error in $defensiveResult.Errors) {
-                                    Write-Log "[ERROR] $error"
+                                foreach ($errorItem in $defensiveResult.Errors) {
+                                    Write-Log "[ERROR] $errorItem"
                                 }
                                 
                                 # If blocked by BitLocker, stop here
@@ -4233,17 +4680,27 @@ if ($btnOneClickRepair) {
                     
                     # Standard repair method (fallback or if defensive logic not available)
                     if (-not $useDefensiveLogic) {
-                        # Step 1: Check if winload.efi exists in Windows directory
+                        # CRITICAL: Restore winload.efi in Windows directory FIRST (before bcdboot)
+                        Write-Log "==============================================================="
+                        Write-Log "STEP 1: RESTORE WINLOAD.EFI IN WINDOWS DIRECTORY"
+                        Write-Log "==============================================================="
+                        Write-Log "bcdboot requires winload.efi to exist in Windows directory before it can copy to EFI partition."
+                        Write-Log ""
+                        
                         $winloadWindowsPath = "$drive`:\Windows\System32\winload.efi"
                         $winloadBootPath = "$drive`:\Windows\System32\Boot\winload.efi"
                         $winloadMissing = -not (Test-Path $winloadWindowsPath)
                     
-                    if ($winloadMissing) {
-                        Write-Log "[WARNING] winload.efi is missing from Windows directory: $winloadWindowsPath"
-                        Write-Log "Step 3: Checking source template folder (C:\Windows\System32\Boot\winload.efi)..."
-                        
-                        # Step 3: Check the "Source" folder - bcdboot works by copying files from C:\Windows\System32\Boot
-                        if (Test-Path $winloadBootPath) {
+                        if ($winloadMissing) {
+                            Write-Log "[CRITICAL] winload.efi is missing from Windows directory: $winloadWindowsPath"
+                            Write-Log "This MUST be fixed before bcdboot can copy it to EFI partition."
+                            Write-Log ""
+                            
+                            # Step 1a: Check source template folder first (fastest method)
+                            Write-Log "Step 1a: Checking source template folder ($winloadBootPath)..."
+                            
+                            # Check the "Source" folder - bcdboot works by copying files from C:\Windows\System32\Boot
+                            if (Test-Path $winloadBootPath) {
                             Write-Log "[INFO] Source template found in Boot folder: $winloadBootPath"
                             Write-Log "Copying from Boot folder to System32..."
                             if (-not $testMode) {
@@ -4333,7 +4790,46 @@ if ($btnOneClickRepair) {
                                 Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
                             }
                         }
-                    }  # End of if ($winloadMissing) block
+                        
+                        # CRITICAL: Verify winload.efi exists before proceeding to bcdboot
+                        Write-Log ""
+                        Write-Log "Verifying winload.efi exists in Windows directory..."
+                        if (-not (Test-Path $winloadWindowsPath)) {
+                            Write-Log ""
+                            Write-Log "==============================================================="
+                            Write-Log "CRITICAL ERROR: WINLOAD.EFI STILL MISSING"
+                            Write-Log "==============================================================="
+                            Write-Log "Cannot proceed with bcdboot - source file does not exist."
+                            Write-Log "Location checked: $winloadWindowsPath"
+                            Write-Log ""
+                            Write-Log "All restoration methods have been attempted."
+                            Write-Log "Manual intervention required - see error details above."
+                            Write-Log ""
+                            
+                            # Add to repair report
+                            if ($repairReport) {
+                                Add-RepairIssue -Report $repairReport -Issue "winload.efi missing from Windows directory" -Severity "Critical" -Details "File not found at $winloadWindowsPath. All restoration methods failed."
+                                Add-Recommendation -Report $repairReport -Recommendation "Extract winload.efi from Windows installation media using DISM or manually copy from working system"
+                            }
+                            
+                            throw "winload.efi missing from Windows directory - cannot proceed with boot file repair"
+                        } else {
+                            Write-Log "[SUCCESS] winload.efi verified in Windows directory: $winloadWindowsPath"
+                        }
+                    } else {
+                        Write-Log "[OK] winload.efi already exists in Windows directory: $winloadWindowsPath"
+                    }
+                    
+                    # Final verification before proceeding
+                    Write-Log ""
+                    if (Test-Path $winloadWindowsPath) {
+                        Write-Log "[OK] winload.efi verified - ready for bcdboot"
+                    } else {
+                        Write-Log "[ERROR] winload.efi verification failed - cannot proceed"
+                        throw "winload.efi verification failed"
+                    }
+                    Write-Log ""
+                        }  # End of if ($winloadMissing) block
                     
                     # Step 2: Verify file attributes (clear hidden/system if needed)
                     if (Test-Path $winloadWindowsPath) {
@@ -4349,195 +4845,67 @@ if ($btnOneClickRepair) {
                         }
                     }
                     
-                    # Step 3: Use bcdboot to repair boot files (copies from Windows to EFI)
-                    $bcdbootCmd = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI"
-                    Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition)" -IsRepairCommand:$true
-                    
+                    # Step 3: Clear read-only attributes on EFI boot files BEFORE bcdboot
+                    Write-Log "Step 3a: Clearing read-only attributes on EFI boot files..."
                     if (-not $testMode) {
                         try {
-                            Write-Log "Step 3: Running: $bcdbootCmd"
-                            $bcdbootOutput = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
-                            Write-Log "bcdboot Output: $bcdbootOutput"
-                            
-                            if ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created") {
-                                Write-Log "[SUCCESS] Boot files repaired successfully using bcdboot"
-                                
-                                # Verify winload.efi was copied to EFI partition
-                                $winloadEfiPath = "$efiDrive`:\EFI\Microsoft\Boot\winload.efi"
-                                if (Test-Path $winloadEfiPath) {
-                                    Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
-                                } else {
-                                    Write-Log "[WARNING] winload.efi not found in EFI partition after bcdboot."
-                                    Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
-                                    
-                                    # Step 4: Force Clean EFI Partition
-                                    # Check if EFI partition is write-protected, out of space, or corrupted
-                                    try {
-                                        $efiVolume = Get-Volume -DriveLetter $efiDrive -ErrorAction SilentlyContinue
-                                        $efiPartition = Get-Partition -DriveLetter $efiDrive -ErrorAction SilentlyContinue
-                                        
-                                        $needsFormat = $false
-                                        $formatReason = ""
-                                        
-                                        if ($efiVolume) {
-                                            # Check filesystem type
-                                            if ($efiVolume.FileSystemType -eq "RAW" -or [string]::IsNullOrWhiteSpace($efiVolume.FileSystemType)) {
-                                                $needsFormat = $true
-                                                $formatReason = "EFI partition has no filesystem (RAW)"
-                                            }
-                                            
-                                            # Check health status
-                                            if ($efiVolume.HealthStatus -ne "Healthy") {
-                                                $needsFormat = $true
-                                                $formatReason = "EFI partition health is not optimal: $($efiVolume.HealthStatus)"
-                                            }
-                                            
-                                            # Check free space (EFI partition should have at least 10MB free)
-                                            if ($efiVolume.SizeRemaining -lt 10MB) {
-                                                $needsFormat = $true
-                                                $formatReason = "EFI partition is out of space (only $([math]::Round($efiVolume.SizeRemaining/1MB, 2)) MB free)"
-                                            }
-                                        }
-                                        
-                                        # Check if partition is read-only
-                                        if ($efiPartition -and $efiPartition.IsReadOnly) {
-                                            $needsFormat = $true
-                                            $formatReason = "EFI partition is read-only (write-protected)"
-                                        }
-                                        
-                                        # If bcdboot failed, the EFI partition may be corrupted
-                                        if ($LASTEXITCODE -ne 0 -and -not $needsFormat) {
-                                            $needsFormat = $true
-                                            $formatReason = "bcdboot failed - EFI partition may be corrupted"
-                                        }
-                                        
-                                        if ($needsFormat) {
-                                            Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
-                                            Write-Log "Step 4: Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
-                                            Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
-                                            
-                                            if (-not $testMode) {
-                                                $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
-                                                Write-Log "Format Output: $formatOutput"
-                                                
-                                                Start-Sleep -Seconds 2
-                                                
-                                                # Retry bcdboot after format
-                                                Write-Log "Retrying bcdboot after EFI partition format..."
-                                                $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
-                                                Write-Log "bcdboot Retry Output: $bcdbootRetry"
-                                                
-                                                if (Test-Path $winloadEfiPath) {
-                                                    Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
-                                                } else {
-                                                    Write-Log "[ERROR] winload.efi still missing after format and retry."
-                                                    Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
-                                                    Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
-                                                }
-                                            } else {
-                                                Write-CommandLog -Command "format $efiDrive`: /fs:FAT32 /q /y" -Description "Format EFI partition (Step 4)" -IsRepairCommand:$true
-                                                Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI" -Description "Retry bcdboot after format" -IsRepairCommand:$true
-                                            }
-                                        } else {
-                                            Write-Log "[WARNING] EFI partition appears healthy, but winload.efi was not copied."
-                                            Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
-                                            Write-Log "Step 5: Manual extraction from Windows installation media may be required."
-                                        }
-                                    } catch {
-                                        Write-Log "[ERROR] EFI partition check/format failed: $_"
-                                    }
-                                }
-                            } else {
-                                Write-Log "[WARNING] bcdboot reported issues. Check output above."
-                                
-                                # Step 4: Force Clean EFI Partition (if bcdboot failed)
-                                Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
-                                try {
-                                    $efiVolume = Get-Volume -DriveLetter $efiDrive -ErrorAction SilentlyContinue
-                                    $efiPartition = Get-Partition -DriveLetter $efiDrive -ErrorAction SilentlyContinue
-                                    
-                                    $needsFormat = $false
-                                    $formatReason = ""
-                                    
-                                    if ($efiVolume) {
-                                        # Check filesystem type
-                                        if ($efiVolume.FileSystemType -eq "RAW" -or [string]::IsNullOrWhiteSpace($efiVolume.FileSystemType)) {
-                                            $needsFormat = $true
-                                            $formatReason = "EFI partition has no filesystem (RAW)"
-                                        }
-                                        
-                                        # Check health status
-                                        if ($efiVolume.HealthStatus -ne "Healthy") {
-                                            $needsFormat = $true
-                                            $formatReason = "EFI partition health is not optimal: $($efiVolume.HealthStatus)"
-                                        }
-                                        
-                                        # Check free space (EFI partition should have at least 10MB free)
-                                        if ($efiVolume.SizeRemaining -lt 10MB) {
-                                            $needsFormat = $true
-                                            $formatReason = "EFI partition is out of space (only $([math]::Round($efiVolume.SizeRemaining/1MB, 2)) MB free)"
-                                        }
-                                    }
-                                    
-                                    # Check if partition is read-only
-                                    if ($efiPartition -and $efiPartition.IsReadOnly) {
-                                        $needsFormat = $true
-                                        $formatReason = "EFI partition is read-only (write-protected)"
-                                    }
-                                    
-                                    # If bcdboot failed, the EFI partition may be corrupted
-                                    if (-not $needsFormat) {
-                                        $needsFormat = $true
-                                        $formatReason = "bcdboot failed - EFI partition may be corrupted or write-protected"
-                                    }
-                                    
-                                    if ($needsFormat) {
-                                        Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
-                                        Write-Log "Step 4: Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
-                                        Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
-                                        
-                                        if (-not $testMode) {
-                                            $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
-                                            Write-Log "Format Output: $formatOutput"
-                                            
-                                            Start-Sleep -Seconds 2
-                                            
-                                            # Retry bcdboot after format
-                                            Write-Log "Retrying bcdboot after EFI partition format..."
-                                            $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
-                                            Write-Log "bcdboot Retry Output: $bcdbootRetry"
-                                            
-                                            # Verify winload.efi was copied
-                                            $winloadEfiPath = "$efiDrive`:\EFI\Microsoft\Boot\winload.efi"
-                                            if (Test-Path $winloadEfiPath) {
-                                                Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
-                                            } else {
-                                                Write-Log "[ERROR] winload.efi still missing after format and retry."
-                                                Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
-                                                Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
-                                            }
-                                        } else {
-                                            Write-CommandLog -Command "format $efiDrive`: /fs:FAT32 /q /y" -Description "Format EFI partition (Step 4)" -IsRepairCommand:$true
-                                            Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI" -Description "Retry bcdboot after format" -IsRepairCommand:$true
-                                        }
-                                    } else {
-                                        Write-Log "[WARNING] EFI partition appears healthy, but bcdboot failed."
-                                        Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
-                                        Write-Log "Step 5: Manual extraction from Windows installation media may be required."
-                                    }
-                                } catch {
-                                    Write-Log "[ERROR] EFI partition check/format failed: $_"
-                                }
+                            $efiBootPath = "$efiDrive`:\EFI\Microsoft\Boot"
+                            if (Test-Path $efiBootPath) {
+                                # Clear attributes on all boot files
+                                $attribOutput = & attrib -r -s -h "$efiBootPath\*.*" 2>&1 | Out-String
+                                Write-Log "Attrib Output: $attribOutput"
+                                Write-Log "[OK] Read-only attributes cleared on EFI boot files"
                             }
                         } catch {
-                            Write-Log "[ERROR] bcdboot failed: $_"
+                            Write-Log "[WARNING] Could not clear attributes: $_"
                         }
                     } else {
-                        Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        Write-CommandLog -Command "attrib -r -s -h $efiDrive`:\EFI\Microsoft\Boot\*.*" -Description "Clear read-only attributes on EFI boot files" -IsRepairCommand:$true
                     }
-                    }  # End of if (-not $useDefensiveLogic) block
+                    
+                    # Step 3b: Check for Intel VMD before attempting write operations
+                    Write-Log "Step 3b: Checking for Intel VMD driver issues..."
+                    $vmdIssue = $null
+                    if (Get-Command "Test-VMDDriverIssue" -ErrorAction SilentlyContinue) {
+                        $vmdIssue = Test-VMDDriverIssue
+                        if ($vmdIssue.VMDDetected -and -not $vmdIssue.DriverLoaded) {
+                            Write-Log "[CRITICAL] Intel VMD detected without driver!"
+                            Write-Log "  Hardware ID: $($vmdIssue.HardwareID)"
+                            Write-Log "  This may prevent bcdboot from writing to the NVMe drive."
+                            Write-Log ""
+                            Write-Log "RECOMMENDATION:"
+                            Write-Log "  1. Check BIOS -> Storage Configuration -> Intel VMD"
+                            Write-Log "  2. If VMD is enabled, either:"
+                            Write-Log "     a) Disable VMD in BIOS (may require reinstall if originally installed with VMD on)"
+                            Write-Log "     b) Load VMD driver in WinPE: drvload [path]\iaStorVD.inf"
+                            if ($vmdIssue.DriverPath) {
+                                Write-Log "     Driver found at: $($vmdIssue.DriverPath)"
+                            }
+                            Write-Log ""
+                            
+                            # Show warning to user
+                            if ($txtOneClickStatus) {
+                                $txtOneClickStatus.Text = "WARNING: Intel VMD detected - boot repair may fail"
+                            }
+                        } else {
+                            Write-Log "[OK] VMD status: $($vmdIssue.Recommendation)"
+                        }
+                    }
+                    
+                    # Step 3c: Use bcdboot to repair boot files (copies from Windows to EFI)
+                    $bcdbootCmd = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI /v"
+                    Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition) - VERBOSE MODE" -IsRepairCommand:$true
+                    
+                    if (-not $testMode) {
+                        Invoke-BcdbootRepairWithFallback -Drive $drive -EfiDrive $efiDrive -VmdIssue $vmdIssue
+                    } else {
+                        Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI /v" -Description "bcdboot command (TEST MODE)" -IsRepairCommand:$true
+                    }
+                }  # End of if (-not $useDefensiveLogic) block
                 } else {
-                    # Fallback: Try bootrec if available
+                    try {
+                    # Fallback: EFI partition not mounted - try bootrec if available
                     $bootrecPath = $null
                     $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
                     if ($bootrecCmd) {
@@ -4576,8 +4944,13 @@ if ($btnOneClickRepair) {
                         Write-Log "  1. Mount EFI partition using diskpart"
                         Write-Log "  2. Run: bcdboot $drive`:\Windows /s <ESP_DRIVE>: /f UEFI"
                     }
-                }
-            }
+                    } catch {
+                        Write-Log "[ERROR] Fallback boot repair (bootrec) failed: $_"
+                        Write-Log "[INFO] Manual repair required:"
+                        Write-Log "  1. Mount EFI partition using diskpart"
+                        Write-Log "  2. Run: bcdboot $drive`:\Windows /s <ESP_DRIVE>: /f UEFI"
+                    }
+                }  # End of else block (EFI partition not mounted)
             Write-Log ""
             
             # Step 5: Final Summary
@@ -4594,14 +4967,14 @@ if ($btnOneClickRepair) {
             
             $issuesFound = 0
             if (-not $diskHealth.FileSystemHealthy) { $issuesFound++ }
-            if ($missingDrivers -and $missingDrivers.Count -gt 0) { $issuesFound++ }
-            if ($missingFiles.Count -gt 0) { $issuesFound++ }
+            if ((Get-SafeCount $missingDrivers) -gt 0) { $issuesFound++ }
+            if ((Get-SafeCount $missingFiles) -gt 0) { $issuesFound++ }
             
             if ($testMode) {
                 Write-Log "[TEST MODE] Summary of issues that would be repaired:"
                 Write-Log "  - Disk Health: $(if ($diskHealth.FileSystemHealthy) { 'OK' } else { 'NEEDS REPAIR' })"
-                Write-Log "  - Storage Drivers: $(if ($missingDrivers -and $missingDrivers.Count -gt 0) { "$($missingDrivers.Count) missing" } else { 'OK' })"
-                Write-Log "  - Boot Files: $(if ($missingFiles.Count -gt 0) { "$($missingFiles.Count) missing" } else { 'OK' })"
+                Write-Log "  - Storage Drivers: $(if ((Get-SafeCount $missingDrivers) -gt 0) { "$(Get-SafeCount $missingDrivers) missing" } else { 'OK' })"
+                Write-Log "  - Boot Files: $(if ((Get-SafeCount $missingFiles) -gt 0) { "$(Get-SafeCount $missingFiles) missing" } else { 'OK' })"
                 Write-Log ""
                 Write-Log "  (In TEST MODE - no repairs were actually executed)"
                 if ($txtOneClickStatus) {
@@ -4644,13 +5017,34 @@ if ($btnOneClickRepair) {
                     }
                 }
                 
-                if ($stillMissingFiles.Count -eq 0) {
+                if ((Get-SafeCount $stillMissingFiles) -eq 0) {
                     Write-Log "[✅ FIXED] All boot files are now present"
                     $verificationResults += "Boot Files: FIXED"
                 } else {
                     Write-Log "[❌ STILL MISSING] Boot files: $($stillMissingFiles -join ', ')"
-                    $remainingIssues++
-                    $verificationResults += "Boot Files: STILL MISSING ($($stillMissingFiles.Count) files)"
+                    Write-Log "[INFO] Note: If repairs just completed, file system cache may need time to update."
+                    Write-Log "[INFO] Re-checking after brief delay..."
+                    Start-Sleep -Seconds 2
+                    
+                    # Re-check with fresh cache
+                    $stillMissingFilesRetry = @()
+                    if ($efiDrive) {
+                        foreach ($file in $bootFiles) {
+                            $efiPath = "$efiDrive`:$($file.EFIPath)"
+                            $winPath = "$drive`:$($file.WinPath)"
+                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                $stillMissingFilesRetry += $file.Name
+                            }
+                        }
+                    }
+                    
+                    if ((Get-SafeCount $stillMissingFilesRetry) -eq 0) {
+                        Write-Log "[✅ FIXED] All boot files are now present (after cache refresh)"
+                        $verificationResults += "Boot Files: FIXED"
+                    } else {
+                        $remainingIssues++
+                        $verificationResults += "Boot Files: STILL MISSING ($(Get-SafeCount $stillMissingFilesRetry) files)"
+                    }
                 }
                 
                 # Re-check BCD
@@ -4693,6 +5087,23 @@ if ($btnOneClickRepair) {
                 Write-Log "Switching to FORENSIC MODE (read-only verification)..."
                 Write-Log ""
                 
+                # CRITICAL: Wait for file system caches to update after repairs
+                Write-Log "[INFO] Waiting for file system caches to update after repairs..."
+                Write-Log "This ensures newly created files are visible to verification checks."
+                Start-Sleep -Seconds 3
+                
+                # Ensure EFI partition is still mounted for verification
+                if (-not $efiDrive) {
+                    Write-Log "[INFO] Re-mounting EFI partition for verification..."
+                    $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                    if ($efiMount.Success) {
+                        $efiDrive = $efiMount.DriveLetter
+                        Write-Log "[OK] EFI partition mounted as $efiDrive`: for verification"
+                    } else {
+                        Write-Log "[WARNING] Could not mount EFI partition for verification: $($efiMount.Message)"
+                    }
+                }
+                
                 # Run Boot Viability Engine
                 if (Get-Command "Test-BootViability" -ErrorAction SilentlyContinue) {
                     try {
@@ -4701,6 +5112,7 @@ if ($btnOneClickRepair) {
                         }
                         Update-StatusBar -Message "One-Click Repair: Assessing boot viability..." -ShowProgress
                         
+                        # Pass EFI drive letter if available to help with verification
                         $viabilityResult = Test-BootViability -TargetDrive $drive
                         
                         # Append viability report to log
@@ -4914,13 +5326,27 @@ if ($btnOneClickRepair) {
                     Write-Log "[INFO] Report opened in Notepad"
                     
                     # If there are remaining issues, offer to fix them and generate failure report
-                    if ($repairReport.IssuesRemaining.Count -gt 0) {
+                    if ((Get-SafeCount $repairReport.IssuesRemaining) -gt 0) {
                         Write-Log ""
                         Write-Log "[WARNING] Some issues could not be fixed automatically."
+                        
+                        # Run advanced diagnostics
+                        Write-Log "[INFO] Running advanced boot diagnostics..."
+                        try {
+                            if (Get-Command "Start-AdvancedBootDiagnostics" -ErrorAction SilentlyContinue) {
+                                $advancedDiag = Start-AdvancedBootDiagnostics -WindowsDrive $drive
+                                $diagFile = Join-Path $env:TEMP "AdvancedBootDiagnostics_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+                                $advancedDiag | Out-File -FilePath $diagFile -Encoding UTF8 -Force
+                                Write-Log "[INFO] Advanced diagnostics report saved: $diagFile"
+                            }
+                        } catch {
+                            Write-Log "[WARNING] Could not run advanced diagnostics: $_"
+                        }
                         
                         $fixAgain = [System.Windows.MessageBox]::Show(
                             "Some issues could not be fixed automatically.`n`n" +
                             "Remaining issues: $($repairReport.IssuesRemaining.Count)`n`n" +
+                            "Advanced diagnostics have been run to identify root causes.`n`n" +
                             "Would you like to attempt additional repair steps?`n`n" +
                             "Yes = Try additional fixes`n" +
                             "No = View failure report with manual commands",
@@ -4939,6 +5365,27 @@ if ($btnOneClickRepair) {
                         $failureReportPath = Export-FailureReport -Report $repairReport -TargetDrive $targetDrive -OpenInNotepad:$true
                         Write-Log "[INFO] Failure report generated: $failureReportPath"
                         Write-Log "[INFO] Failure report opened in Notepad with alternative commands to try"
+                        
+                        # Offer to open advanced diagnostics
+                        if (Test-Path $diagFile) {
+                            $openDiag = [System.Windows.MessageBox]::Show(
+                                "Advanced boot diagnostics have been generated.`n`n" +
+                                "This report includes checks for:`n" +
+                                "- Intel VMD driver issues (Z790 boards)`n" +
+                                "- Multiple boot drive conflicts`n" +
+                                "- Pending Windows updates`n" +
+                                "- Read-only drive issues`n" +
+                                "- MBR/GPT corruption`n" +
+                                "- BIOS/firmware recommendations`n`n" +
+                                "Would you like to open the diagnostics report?",
+                                "Advanced Diagnostics Available",
+                                "YesNo",
+                                "Question"
+                            )
+                            if ($openDiag -eq "Yes") {
+                                Start-Process notepad.exe -ArgumentList $diagFile -ErrorAction SilentlyContinue
+                            }
+                        }
                     }
                 } catch {
                     Write-Log "[WARNING] Could not generate comprehensive report: $_"
@@ -4953,13 +5400,33 @@ if ($btnOneClickRepair) {
             
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
             
-        } catch {
+        } catch {  # End of try block started at line 3419
             Write-Log ""
             Write-Log "==============================================================="
             Write-Log "[ERROR] One-Click Repair failed"
             Write-Log "Error: $($_.Exception.Message)"
             Write-Log "Stack trace: $($_.ScriptStackTrace)"
             Write-Log "==============================================================="
+            
+            # Run advanced diagnostics when repair fails
+            Write-Log "[INFO] Running advanced boot diagnostics to identify root cause..."
+            $diagFile = $null
+            try {
+                # Ensure drive is set before running diagnostics
+                if (-not $drive) {
+                    $drive = $env:SystemDrive.TrimEnd(':')
+                    Write-Log "[INFO] Using system drive for diagnostics: $drive`:"
+                }
+                
+                if (Get-Command "Start-AdvancedBootDiagnostics" -ErrorAction SilentlyContinue) {
+                    $advancedDiag = Start-AdvancedBootDiagnostics -WindowsDrive $drive
+                    $diagFile = Join-Path $env:TEMP "AdvancedBootDiagnostics_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+                    $advancedDiag | Out-File -FilePath $diagFile -Encoding UTF8 -Force
+                    Write-Log "[INFO] Advanced diagnostics report saved: $diagFile"
+                }
+            } catch {
+                Write-Log "[WARNING] Could not run advanced diagnostics: $_"
+            }
             
             # Save log file even on error
             try {
@@ -4978,7 +5445,29 @@ if ($btnOneClickRepair) {
                 $fixerOutput.Text += "`nLog file: $logFile`n"
             }
             Update-StatusBar -Message "One-Click Repair: Failed - $($_.Exception.Message)" -HideProgress
-        } finally {
+            
+            # Offer to open advanced diagnostics
+            if ($diagFile -and (Test-Path $diagFile)) {
+                $openDiag = [System.Windows.MessageBox]::Show(
+                    "One-Click Repair failed. Advanced boot diagnostics have been generated.`n`n" +
+                    "This report checks for complex issues beyond simple file corruption:`n" +
+                    "- Intel VMD driver issues (Z790 boards)`n" +
+                    "- Multiple boot drive conflicts`n" +
+                    "- Pending Windows updates blocking repair`n" +
+                    "- Read-only drive issues`n" +
+                    "- MBR/GPT corruption`n" +
+                    "- BIOS/firmware configuration issues`n`n" +
+                    "Would you like to open the advanced diagnostics report?",
+                    "Advanced Diagnostics Available",
+                    "YesNo",
+                    "Question"
+                )
+                if ($openDiag -eq "Yes") {
+                    Start-Process notepad.exe -ArgumentList $diagFile -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        finally {
             # FLAW-007 FIX: Always reset repair flag, even on error
             $script:repairInProgress = $false
             # Re-enable button
@@ -5182,17 +5671,92 @@ if ($btnFixBoot) {
         
         try {
             Update-StatusBar -Message "Executing boot fix commands..." -ShowProgress
-            $result1 = bootrec /fixboot 2>&1
-            $result2 = bootrec /fixmbr 2>&1
-            $result3 = bootrec /rebuildbcd 2>&1
-            if ($fixerOutput) {
-                $fixerOutput.Text += "`nOutput:`n$result1`n$result2`n$result3`n"
+            
+            # Find bootrec.exe path (required for proper execution)
+            $bootrecPath = $null
+            $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+            if ($bootrecCmd) {
+                $bootrecPath = $bootrecCmd.Source
+            } else {
+                # Try common WinRE/WinPE paths
+                $possiblePaths = @(
+                    "$env:SystemRoot\System32\bootrec.exe",
+                    "X:\Windows\System32\bootrec.exe",
+                    "C:\Windows\System32\Recovery\bootrec.exe"
+                )
+                foreach ($path in $possiblePaths) {
+                    if (Test-Path $path) {
+                        $bootrecPath = $path
+                        break
+                    }
+                }
             }
-            Update-StatusBar -Message "Boot fix completed" -HideProgress
+            
+            if (-not $bootrecPath) {
+                throw "bootrec.exe not found. This tool is only available in WinRE/WinPE environments."
+            }
+            
+            # Execute bootrec commands with full path and proper error handling
+            $results = @()
+            
+            # bootrec /fixboot
+            Write-Log "Executing: $bootrecPath /fixboot"
+            try {
+                $result1 = & $bootrecPath /fixboot 2>&1 | Out-String
+                $results += "bootrec /fixboot:`n$result1"
+                if ($result1 -match "Access is denied|access denied") {
+                    Write-Log "[WARNING] bootrec /fixboot returned 'Access is denied'. This may be normal if boot files are already correct or if running from FullOS."
+                    $results += "`n[NOTE] Access denied may indicate the boot sector is already correct or the command requires different privileges."
+                }
+            } catch {
+                Write-Log "[WARNING] bootrec /fixboot failed: $_"
+                $results += "bootrec /fixboot ERROR: $_"
+            }
+            
+            # bootrec /fixmbr (only for legacy BIOS systems)
+            Write-Log "Executing: $bootrecPath /fixmbr"
+            try {
+                $result2 = & $bootrecPath /fixmbr 2>&1 | Out-String
+                $results += "`n`nbootrec /fixmbr:`n$result2"
+                if ($result2 -match "Access is denied|access denied") {
+                    Write-Log "[WARNING] bootrec /fixmbr returned 'Access is denied'. This is normal for UEFI systems."
+                    $results += "`n[NOTE] Access denied is normal for UEFI systems (MBR is not used)."
+                }
+            } catch {
+                Write-Log "[WARNING] bootrec /fixmbr failed: $_"
+                $results += "`n`nbootrec /fixmbr ERROR: $_"
+            }
+            
+            # bootrec /rebuildbcd
+            Write-Log "Executing: $bootrecPath /rebuildbcd"
+            try {
+                $result3 = & $bootrecPath /rebuildbcd 2>&1 | Out-String
+                $results += "`n`nbootrec /rebuildbcd:`n$result3"
+                if ($result3 -match "Access is denied|access denied") {
+                    Write-Log "[WARNING] bootrec /rebuildbcd returned 'Access is denied'. Trying alternative method with bcdboot..."
+                    $results += "`n[NOTE] Access denied on rebuildbcd. Consider using bcdboot as alternative."
+                }
+            } catch {
+                Write-Log "[WARNING] bootrec /rebuildbcd failed: $_"
+                $results += "`n`nbootrec /rebuildbcd ERROR: $_"
+            }
+            
+            if ($fixerOutput) {
+                $fixerOutput.Text += "`nOutput:`n$($results -join "`n")`n"
+            }
+            
+            # Check if any command succeeded
+            $hasSuccess = $results -match "successfully|completed successfully|The operation completed successfully"
+            if ($hasSuccess) {
+                Update-StatusBar -Message "Boot fix completed (some commands may have warnings)" -HideProgress
+            } else {
+                Update-StatusBar -Message "Boot fix completed with warnings (see output)" -HideProgress
+            }
         } catch {
             if ($fixerOutput) {
                 $fixerOutput.Text += "`nError: $_`n"
             }
+            Write-Log "[ERROR] Boot fix operation failed: $_"
             Update-StatusBar -Message "Boot fix failed: $_" -HideProgress
         }
     } else {
@@ -5224,7 +5788,38 @@ if ($btnScanWindows) {
         $fixerOutput = Get-Control -Name "FixerOutput"
         try {
             Update-StatusBar -Message "Scanning for Windows installations..." -ShowProgress
-            $result = bootrec /scanos 2>&1
+            
+            # Find bootrec.exe path
+            $bootrecPath = $null
+            $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+            if ($bootrecCmd) {
+                $bootrecPath = $bootrecCmd.Source
+            } else {
+                $possiblePaths = @(
+                    "$env:SystemRoot\System32\bootrec.exe",
+                    "X:\Windows\System32\bootrec.exe",
+                    "C:\Windows\System32\Recovery\bootrec.exe"
+                )
+                foreach ($path in $possiblePaths) {
+                    if (Test-Path $path) {
+                        $bootrecPath = $path
+                        break
+                    }
+                }
+            }
+            
+            if (-not $bootrecPath) {
+                throw "bootrec.exe not found. This tool is only available in WinRE/WinPE environments."
+            }
+            
+            Write-Log "Executing: $bootrecPath /scanos"
+            $result = & $bootrecPath /scanos 2>&1 | Out-String
+            
+            if ($result -match "Access is denied|access denied") {
+                Write-Log "[WARNING] bootrec /scanos returned 'Access is denied'"
+                $result += "`n[NOTE] Access denied may indicate insufficient privileges or the command is not available in this environment."
+            }
+            
             if ($fixerOutput) {
                 $fixerOutput.Text += "`nOutput: $result`n"
             }
@@ -5233,6 +5828,7 @@ if ($btnScanWindows) {
             if ($fixerOutput) {
                 $fixerOutput.Text += "`nError: $_`n"
             }
+            Write-Log "[ERROR] Windows scan failed: $_"
             Update-StatusBar -Message "Windows scan failed: $_" -HideProgress
         }
     } else {
@@ -5264,7 +5860,38 @@ if ($btnRebuildBCD2) {
         $fixerOutput = Get-Control -Name "FixerOutput"
         try {
             Update-StatusBar -Message "Rebuilding BCD..." -ShowProgress
-            $result = bootrec /rebuildbcd 2>&1
+            
+            # Find bootrec.exe path
+            $bootrecPath = $null
+            $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+            if ($bootrecCmd) {
+                $bootrecPath = $bootrecCmd.Source
+            } else {
+                $possiblePaths = @(
+                    "$env:SystemRoot\System32\bootrec.exe",
+                    "X:\Windows\System32\bootrec.exe",
+                    "C:\Windows\System32\Recovery\bootrec.exe"
+                )
+                foreach ($path in $possiblePaths) {
+                    if (Test-Path $path) {
+                        $bootrecPath = $path
+                        break
+                    }
+                }
+            }
+            
+            if (-not $bootrecPath) {
+                throw "bootrec.exe not found. This tool is only available in WinRE/WinPE environments."
+            }
+            
+            Write-Log "Executing: $bootrecPath /rebuildbcd"
+            $result = & $bootrecPath /rebuildbcd 2>&1 | Out-String
+            
+            if ($result -match "Access is denied|access denied") {
+                Write-Log "[WARNING] bootrec /rebuildbcd returned 'Access is denied'. This may require elevated privileges or alternative method."
+                $result += "`n[NOTE] If access denied persists, try using bcdboot as an alternative method."
+            }
+            
             if ($fixerOutput) {
                 $fixerOutput.Text += "`nOutput: $result`n"
             }
@@ -5273,6 +5900,7 @@ if ($btnRebuildBCD2) {
             if ($fixerOutput) {
                 $fixerOutput.Text += "`nError: $_`n"
             }
+            Write-Log "[ERROR] BCD rebuild failed: $_"
             Update-StatusBar -Message "BCD rebuild failed: $_" -HideProgress
         }
     } else {
@@ -5293,7 +5921,6 @@ if ($btnSetDefaultBoot) {
     }
     
     $command = "bcdedit /default $($selected.Id)"
-    $explanation = "Sets the selected boot entry as the default option that will boot automatically after the timeout period. This is useful when you have multiple Windows installations and want to change which one boots by default."
     $TxtSetDefault = Get-Control -Name "TxtSetDefault"
     if ($TxtSetDefault) {
         $TxtSetDefault.Text = "COMMAND: $command`n"
@@ -5385,16 +6012,6 @@ $btnCreateRestorePoint = Get-Control -Name "BtnCreateRestorePoint"
 if ($btnCreateRestorePoint) {
     $btnCreateRestorePoint.Add_Click({
 
-    $diagDriveCombo = Get-Control -Name "DiagDriveCombo"
-    $selectedDrive = if ($diagDriveCombo) { $diagDriveCombo.SelectedItem } else { $null }
-    $drive = $env:SystemDrive.TrimEnd(':')
-    
-    if ($selectedDrive) {
-        if ($selectedDrive -match '^([A-Z]):') {
-            $drive = $matches[1]
-        }
-    }
-    
     # Use a simple input dialog
     $description = "Miracle Boot Manual Restore Point - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     
@@ -5591,7 +6208,7 @@ if ($btnGetOSInfo) {
         } catch {}
         # #endregion agent log
         $osInfo = @{
-            Error = "Failed to retrieve OS information: $($_.Exception.Message)"
+            ErrorMessage = "Failed to retrieve OS information: $($_.Exception.Message)"
             IsCurrentOS = $false
         }
     }
@@ -5604,7 +6221,7 @@ if ($btnGetOSInfo) {
             hypothesisId = "OSINFO-NULL"
             location = "WinRepairGUI.ps1:after-Get-OSInfo"
             message = "Get-OSInfo returned"
-            data = @{ osInfoIsNull = ($osInfo -eq $null); hasError = if ($osInfo) { ($osInfo.Error -ne $null) } else { $false }; hasIsCurrentOS = if ($osInfo) { ($osInfo.IsCurrentOS -ne $null) } else { $false } }
+            data = @{ osInfoIsNull = ($null -eq $osInfo); hasError = if ($osInfo) { ($null -ne $osInfo.ErrorMessage) } else { $false }; hasIsCurrentOS = if ($osInfo) { ($null -ne $osInfo.IsCurrentOS) } else { $false } }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -6370,7 +6987,7 @@ if ($btnFullBootDiagnosis) {
         # Scan for Windows installations
         try {
             Update-StatusBar -Message "Scanning for Windows installations..." -ShowProgress
-            $installations = Get-WindowsInstallations
+            $installations = @(Get-WindowsInstallations)
             
             if ($installations.Count -eq 0) {
                 [System.Windows.MessageBox]::Show(
@@ -6589,7 +7206,6 @@ if ($btnFullBootDiagnosis) {
             param($progress)
             if ($logAnalysisBox) {
                 $phaseNum = if ($progress.Phase) { $progress.Phase } else { 0 }
-                $phaseName = if ($progress.PhaseName) { $progress.PhaseName } else { "Unknown" }
                 $percentage = if ($progress.Percentage) { $progress.Percentage } else { 0 }
                 $message = if ($progress.Message) { $progress.Message } else { "" }
                 $command = if ($progress.Command) { $progress.Command } else { "" }
@@ -6643,7 +7259,6 @@ if ($btnFullBootDiagnosis) {
         Update-StatusBar -Message "Initializing boot diagnosis..." -ShowProgress -Percentage 1 -Stage "Initializing"
         
         # Run diagnosis and repair in background job
-        $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
         $diagnosisJob = Start-Job -ScriptBlock {
             param($drive, $scriptRoot, $mode, $verbose, $logFile)
             Set-Location $scriptRoot
@@ -7713,7 +8328,7 @@ if ($btnRepairTemplates) {
     
     # Enable execute button when template is selected
     $listBox.Add_SelectionChanged({
-        $executeBtn.IsEnabled = ($listBox.SelectedItem -ne $null)
+        $executeBtn.IsEnabled = ($null -ne $listBox.SelectedItem)
     })
     
     # Execute button handler
@@ -8207,7 +8822,7 @@ try {
         hypothesisId = "VERIFY"
         location = "WinRepairGUI.ps1:ShowDialog"
         message = "About to show GUI window"
-        data = @{ windowNotNull = ($W -ne $null) }
+        data = @{ windowNotNull = ($null -ne $W) }
         timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
     } | ConvertTo-Json -Compress
     Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue

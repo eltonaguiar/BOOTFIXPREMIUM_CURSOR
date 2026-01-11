@@ -137,6 +137,10 @@ function Test-EnvironmentSafety {
     - WinRE/WinPE (X: drive) = SAFE (destructive repairs allowed)
     - Full Windows OS (C: drive) = UNSAFE (read-only diagnostic mode)
     
+    Uses specific checks:
+    - MiniNT registry key (WinPE indicator)
+    - SystemDrive = X: (RAM disk indicator)
+    
     .OUTPUTS
     PSCustomObject with properties:
     - IsSafe: Boolean (true if safe for destructive repairs)
@@ -154,65 +158,48 @@ function Test-EnvironmentSafety {
     }
     
     try {
-        # Check if running from X: (WinPE/WinRE RAM disk)
-        $currentDrive = (Get-Location).Drive.Name
-        $systemDrive = $env:SystemDrive.TrimEnd(':')
+        # Specific WinPE/WinRE detection as per user requirements
+        $IsWinPE = Test-Path "HKLM:\System\CurrentControlSet\Control\MiniNT" -ErrorAction SilentlyContinue
+        $IsRAMDisk = ($env:SystemDrive -eq "X:")
         
-        # Check for WinPE/WinRE indicators
-        $isWinPE = $false
-        $isWinRE = $false
-        
-        # Method 1: Check if running from X: drive
-        if ($currentDrive -eq "X" -or $systemDrive -eq "X") {
-            $isWinPE = $true
-            $result.Environment = "WinPE"
-            $result.IsSafe = $true
-            $result.SafetyMessage = "Running in Windows Preinstallation Environment (WinPE) - Safe for destructive repairs"
-        }
-        
-        # Method 2: Check for WinRE registry key
-        try {
-            $winrePath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "SystemStartOptions" -ErrorAction SilentlyContinue).SystemStartOptions
-            if ($winrePath -match "WINRE") {
-                $isWinRE = $true
+        # If either condition is true, we're in WinPE/WinRE
+        if ($IsWinPE -or $IsRAMDisk) {
+            if ($IsWinPE) {
+                $result.Environment = "WinPE"
+                $result.SafetyMessage = "Running in Windows Preinstallation Environment (WinPE) - Safe for destructive repairs"
+            } else {
                 $result.Environment = "WinRE"
-                $result.IsSafe = $true
                 $result.SafetyMessage = "Running in Windows Recovery Environment (WinRE) - Safe for destructive repairs"
             }
-        } catch {
-            # Registry check failed, continue with other methods
-        }
-        
-        # Method 3: Check for WinPE environment variables
-        if ($env:_SMSTSBootPEID -or $env:SYSTEMROOT -eq "X:\Windows") {
-            $isWinPE = $true
-            $result.Environment = "WinPE"
             $result.IsSafe = $true
-            $result.SafetyMessage = "Running in Windows Preinstallation Environment (WinPE) - Safe for destructive repairs"
-        }
-        
-        # Method 4: Check if Windows directory is on different drive than system drive
-        # In WinPE, Windows is typically on X:, but target OS is on C:, D:, etc.
-        if (-not $isWinPE -and -not $isWinRE) {
-            $windowsPath = "$env:SystemRoot"
-            $windowsDrive = (Split-Path -Qualifier $windowsPath).TrimEnd(':')
+        } else {
+            # Additional check: WinRE registry key
+            try {
+                $winrePath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "SystemStartOptions" -ErrorAction SilentlyContinue).SystemStartOptions
+                if ($winrePath -match "WINRE") {
+                    $result.Environment = "WinRE"
+                    $result.IsSafe = $true
+                    $result.SafetyMessage = "Running in Windows Recovery Environment (WinRE) - Safe for destructive repairs"
+                }
+            } catch {
+                # Registry check failed, continue with other methods
+            }
             
-            if ($windowsDrive -eq "X") {
-                $result.Environment = "WinPE"
-                $result.IsSafe = $true
-                $result.SafetyMessage = "Running in Windows Preinstallation Environment (WinPE) - Safe for destructive repairs"
-            } elseif ($systemDrive -eq "C" -and $windowsDrive -eq "C") {
-                # Running in full Windows OS
-                $result.Environment = "FullOS"
-                $result.IsSafe = $false
-                $result.SafetyMessage = "Running in LIVE Windows OS - Destructive repairs are DISABLED"
-                $result.Recommendations += "Boot from Windows Recovery USB/DVD to apply fixes"
-                $result.Recommendations += "Or use 'Read-Only Diagnostic Mode' to analyze issues"
-            } else {
-                $result.Environment = "Unknown"
-                $result.IsSafe = $false
-                $result.SafetyMessage = "Environment detection uncertain - Proceeding with caution"
-                $result.Recommendations += "Verify you are in WinRE/WinPE before running repairs"
+            # If still not detected as safe, assume FullOS
+            if (-not $result.IsSafe) {
+                $systemDrive = $env:SystemDrive.TrimEnd(':')
+                if ($systemDrive -eq "C" -or (Test-Path "C:\Windows\System32")) {
+                    $result.Environment = "FullOS"
+                    $result.IsSafe = $false
+                    $result.SafetyMessage = "Running in LIVE Windows OS - Destructive repairs are DISABLED"
+                    $result.Recommendations += "Boot from Windows Recovery USB/DVD to apply fixes"
+                    $result.Recommendations += "Or use 'Read-Only Diagnostic Mode' to analyze issues"
+                } else {
+                    $result.Environment = "Unknown"
+                    $result.IsSafe = $false
+                    $result.SafetyMessage = "Environment detection uncertain - Proceeding with caution"
+                    $result.Recommendations += "Verify you are in WinRE/WinPE before running repairs"
+                }
             }
         }
         
@@ -645,6 +632,7 @@ function New-PasteBackBundle {
     $bundle.AppendLine($separator) | Out-Null
     $bundle.AppendLine('BOOTFIX PASTE-BACK BUNDLE END') | Out-Null
     $bundle.AppendLine($separator) | Out-Null
+    $bundle.AppendLine('### BUNDLE END ###') | Out-Null
     
     return $bundle.ToString()
 }

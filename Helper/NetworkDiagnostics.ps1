@@ -880,7 +880,7 @@ function Invoke-NetworkDiagnostics {
     Write-Host "[PHASE 1] Detecting Network Adapters..." -ForegroundColor Cyan
     Write-Host "-------------------------------------------------------------------------------------------" -ForegroundColor Gray
     
-    $adapters = Get-NetworkAdapterStatus -IncludeDisabled
+    $adapters = @(Get-NetworkAdapterStatus -IncludeDisabled)
     $report.Adapters = $adapters
     
     if ($adapters.Count -eq 0) {

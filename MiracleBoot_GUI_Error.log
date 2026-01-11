@@ -6,3 +6,10 @@ at <ScriptBlock>, <No file>: line 1
 Stack trace: at Start-GUI, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1: line 5456
 at <ScriptBlock>, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1: line 492
 at <ScriptBlock>, <No file>: line 1
+2026-01-10 19:07:58: GUI window launch failed: The variable '$script:repairInProgress' cannot be retrieved because it has not been set.
+Stack trace: at Start-GUI, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1: line 3080
+at <ScriptBlock>, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1: line 650
+2026-01-10 19:23:43: GUI window launch failed: Failed to show GUI window: Exception calling "ShowDialog" with "0" argument(s): "The term 'finally' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again."
+Stack trace: at Start-GUI, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1: line 8306
+at <ScriptBlock>, C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1: line 650
