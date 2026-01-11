@@ -5413,7 +5413,6 @@ exit
                         throw "winload.efi verification failed"
                     }
                     Write-Log ""
-                    }  # End of if ($winloadMissing) block
                     
                     # Step 2: Verify file attributes (clear hidden/system if needed)
                     if (Test-Path $winloadWindowsPath) {
