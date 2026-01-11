@@ -1074,6 +1074,7 @@ function Start-GUI {
         <MenuItem Header="_Help">
             <MenuItem Header="Emergency Repair Guide" Name="MenuHelpEmergencyGuide" ToolTip="View emergency boot repair guide"/>
             <Separator/>
+            <MenuItem Header="Support &amp; Contact" Name="MenuHelpSupport" ToolTip="Contact support for issues or feedback"/>
             <MenuItem Header="About Miracle Boot" Name="MenuHelpAbout" ToolTip="About Miracle Boot"/>
         </MenuItem>
     </Menu>
