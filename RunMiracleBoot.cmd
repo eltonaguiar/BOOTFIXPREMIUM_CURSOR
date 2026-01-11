@@ -5,10 +5,15 @@ REM Compatible with Windows Recovery Environment (WinRE) Shift+F10 command promp
 REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
 REM require explicit confirmation before allowing boot writes.
 REM Use PowerShell to handle the confirmation to avoid batch parsing issues
-powershell.exe -NoProfile -Command "Write-Host ''; Write-Host '========================================' -ForegroundColor Yellow; Write-Host '  Miracle Boot v7.2.0 Launcher' -ForegroundColor Cyan; Write-Host '========================================' -ForegroundColor Yellow; Write-Host ''; if ($env:SystemDrive -ne 'X:') { Write-Host 'SAFETY WARNING: You are running from a live Windows OS drive' $env:SystemDrive -ForegroundColor Red; Write-Host 'Destructive boot repairs can brick the system if misused.' -ForegroundColor Yellow; Write-Host 'To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.' -ForegroundColor Yellow; Write-Host ''; $confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.' -ForegroundColor Yellow; exit 1 } }"
-if errorlevel 1 exit /b 1
-
-:ContinueScript
+setlocal
+set "SCRIPT_ROOT=%~dp0"
+cd /d "%SCRIPT_ROOT%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "Helper\CheckBrickmeConfirmation.ps1"
+if errorlevel 1 (
+    endlocal
+    exit /b 1
+)
+endlocal
 
 REM Get the directory where this batch file is located
 set "SCRIPT_DIR=%~dp0"
@@ -58,15 +63,7 @@ powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Get-Process | Where-
 powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '.\MiracleBoot.ps1'"
 
 :end
+exit /b 0
 
-if errorlevel 1 (
-    echo(
-    echo ERROR: Script execution failed.
-    echo(
-    echo Troubleshooting:
-    echo 1. Ensure all .ps1 files are in the same directory as this .cmd file
-    echo 2. Check that you have administrator privileges
-    echo 3. Try running PowerShell directly: powershell.exe -ExecutionPolicy Bypass -File MiracleBoot.ps1
-    echo(
-    pause
-)
+:error_exit
+exit /b 1
