@@ -370,7 +370,7 @@ function Start-WinPESFCDISMRepair {
         
         # Step 1: DISM RestoreHealth
         Write-Host "Running DISM /RestoreHealth..." -ForegroundColor Yellow
-        $dismCmd = "dism /Image:$WindowsDrive`:\ /Cleanup-Image /RestoreHealth /Source:wim:$wimPath:$WIMIndex /LimitAccess"
+        $dismCmd = "dism /Image:${WindowsDrive}:\ /Cleanup-Image /RestoreHealth /Source:wim:${wimPath}:${WIMIndex} /LimitAccess"
         $dismResult = Invoke-Expression $dismCmd 2>&1 | Out-String
         $result.DISMOutput = $dismResult
         

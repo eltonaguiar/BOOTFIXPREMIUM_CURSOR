@@ -1,189 +1,108 @@
-# LAYER 1 - PROJECT ANALYSIS (NO CODE GENERATION)
-**Status**: ANALYSIS ONLY - NO MODIFICATIONS
+# LAYER 1 - PROJECT STRUCTURE ANALYSIS
 
 ## 1. FULL PROJECT FILE TREE
 
-### Entry Points (Execution Start)
-```
-RunMiracleBoot.cmd                    [CMD/Batch]     Windows CMD
-MiracleBoot.ps1                       [PowerShell]    Windows PowerShell 5.1+
-MiracleBoot-Admin-Launcher.ps1       [PowerShell]    Windows PowerShell 5.1+
-Helper\WinRepairCore.cmd              [CMD/Batch]     Windows CMD (fallback)
-```
+### Entry Points
+- `RunMiracleBoot.cmd` - Batch launcher (Windows CMD)
+- `MiracleBoot.ps1` - PowerShell entry orchestrator
 
-### Core Engine
-```
-Helper\WinRepairCore.ps1              [PowerShell]    Windows PowerShell 5.1+  [19,534 lines]
-```
+### Core Modules
+- `Helper\WinRepairCore.ps1` - Core engine (PowerShell 5.1+)
+- `Helper\WinRepairGUI.ps1` - GUI module (PowerShell 5.1+, WPF)
+- `Helper\WinRepairTUI.ps1` - Text UI module (PowerShell 5.1+)
+- `Helper\EmergencyRepair.ps1` - Emergency fallback (PowerShell 5.1+)
 
-### UI Layers
-```
-Helper\WinRepairGUI.ps1               [PowerShell]    Windows PowerShell 5.1+  [WPF/XAML embedded]
-Helper\WinRepairTUI.ps1               [PowerShell]    Windows PowerShell 5.1+  [Console/TUI]
-```
-
-### Helper Modules
-```
-Helper\ErrorLogging.ps1               [PowerShell]    Windows PowerShell 5.1+
-Helper\PreLaunchValidation.ps1       [PowerShell]    Windows PowerShell 5.1+
-Helper\ReadinessGate.ps1             [PowerShell]    Windows PowerShell 5.1+
-Helper\NetworkDiagnostics.ps1         [PowerShell]    Windows PowerShell 5.1+
-Helper\LogAnalysis.ps1                [PowerShell]    Windows PowerShell 5.1+
-Helper\KeyboardSymbols.ps1             [PowerShell]    Windows PowerShell 5.1+
-Helper\XamlDefense.ps1                [PowerShell]    Windows PowerShell 5.1+
-Helper\BootRepairWizard.ps1           [PowerShell]    Windows PowerShell 5.1+
-Helper\Check-Logs.ps1                 [PowerShell]    Windows PowerShell 5.1+
-Helper\MiracleBootPro.ps1             [PowerShell]    Windows PowerShell 5.1+
-```
-
-### Test Files (47 PowerShell scripts - NOT runtime)
-```
-Test\*.ps1                            [PowerShell]    Windows PowerShell 5.1+
-```
+### Supporting Modules
+- `Helper\PreLaunchValidation.ps1` - Syntax validation
+- `Helper\ErrorLogging.ps1` - Error handling
+- `Helper\NetworkDiagnostics.ps1` - Network utilities
+- `Helper\LogAnalysis.ps1` - Log analysis
+- `Helper\KeyboardSymbols.ps1` - UI helpers
+- `Helper\RepairReportGenerator.ps1` - Report generation
+- `Helper\AdvancedBootTroubleshooting.ps1` - Advanced diagnostics
+- `Helper\ReadinessGate.ps1` - Pre-launch validation
+- `Helper\GUIFailureDiagnostics.ps1` - GUI error diagnostics
 
 ## 2. EXECUTION ORDER
 
-### Primary Path (FullOS with PowerShell)
-```
-1. RunMiracleBoot.cmd
-   └─> Check PowerShell availability
-       └─> powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "& 'MiracleBoot.ps1'"
-           └─> MiracleBoot.ps1
-               ├─> Set-ExecutionPolicy Bypass (Process scope)
-               ├─> Check STA mode (required for WPF)
-               ├─> Load ErrorLogging.ps1 (dot-source)
-               ├─> Load PreLaunchValidation.ps1 (dot-source)
-               ├─> Run Test-PreLaunchValidation (syntax check)
-               ├─> Get-EnvironmentType (FullOS/WinRE/WinPE)
-               ├─> Load WinRepairCore.ps1 (dot-source) [CRITICAL]
-               │
-               ├─> IF FullOS:
-               │   ├─> Check WPF availability (PresentationFramework)
-               │   ├─> Load ReadinessGate.ps1 (if exists)
-               │   ├─> Run Test-ReadinessGate
-               │   ├─> IF Ready:
-               │   │   ├─> Load WinRepairGUI.ps1 (dot-source)
-               │   │   │   ├─> Load ErrorLogging.ps1 (dot-source)
-               │   │   │   ├─> Load WinRepairCore.ps1 (dot-source, re-loaded)
-               │   │   │   ├─> Load LogAnalysis.ps1 (dot-source)
-               │   │   │   └─> Load NetworkDiagnostics.ps1 (conditional)
-               │   │   └─> Call Start-GUI
-               │   └─> IF Not Ready:
-               │       ├─> Load WinRepairTUI.ps1 (dot-source)
-               │       └─> Call Start-TUI
-               │
-               └─> IF WinRE/WinPE:
-                   ├─> Load WinRepairTUI.ps1 (dot-source)
-                   └─> Call Start-TUI
-```
+### Primary Flow (FullOS with WPF):
+1. `RunMiracleBoot.cmd` → launches `MiracleBoot.ps1`
+2. `MiracleBoot.ps1` → detects environment → loads `WinRepairCore.ps1`
+3. `MiracleBoot.ps1` → loads `WinRepairGUI.ps1` → calls `Start-GUI`
+4. `WinRepairGUI.ps1` → defines GUI → launches WPF window
 
-### Fallback Path (No PowerShell)
-```
-1. RunMiracleBoot.cmd
-   └─> PowerShell check fails
-       └─> call Helper\WinRepairCore.cmd
-           └─> CMD-based menu system
-```
+### Fallback Flow (WinRE/No WPF):
+1. `RunMiracleBoot.cmd` → launches `MiracleBoot.ps1`
+2. `MiracleBoot.ps1` → detects environment → loads `WinRepairCore.ps1`
+3. `MiracleBoot.ps1` → loads `WinRepairTUI.ps1` → calls `Start-TUI`
 
-### Admin Elevation Path
-```
-1. MiracleBoot-Admin-Launcher.ps1
-   └─> Check admin rights
-       ├─> IF Admin: & ".\MiracleBoot.ps1"
-       └─> IF Not Admin: Start-Process powershell.exe -Verb RunAs
-```
+### Emergency Flow (Syntax Errors):
+1. `RunMiracleBoot.cmd` → launches `MiracleBoot.ps1`
+2. `MiracleBoot.ps1` → fails to load GUI/TUI → loads `EmergencyRepair.ps1`
+3. `EmergencyRepair.ps1` → calls `Start-EmergencyRepair`
 
 ## 3. ENTRY POINTS
 
-| Entry Point | Type | Interpreter | Version | Purpose |
-|-------------|------|-------------|---------|---------|
-| `RunMiracleBoot.cmd` | Batch | Windows CMD | Any Windows | Primary launcher, checks PowerShell |
-| `MiracleBoot.ps1` | PowerShell | Windows PowerShell | 5.1+ | Main orchestrator |
-| `MiracleBoot-Admin-Launcher.ps1` | PowerShell | Windows PowerShell | 5.1+ | Auto-elevation wrapper |
-| `Helper\WinRepairCore.cmd` | Batch | Windows CMD | Any Windows | Fallback (no PowerShell) |
+### Main Entry Points:
+1. **`RunMiracleBoot.cmd`** (Batch script)
+   - Language: Windows CMD/Batch
+   - Interpreter: cmd.exe
+   - Purpose: Primary launcher, handles safety interlock
+
+2. **`MiracleBoot.ps1`** (PowerShell script)
+   - Language: PowerShell
+   - Interpreter: powershell.exe (5.1+) or pwsh.exe (7+)
+   - Purpose: Environment detection, module loading, experience selection
+
+### Secondary Entry Points:
+3. **`Helper\WinRepairGUI.ps1`** (PowerShell script)
+   - Language: PowerShell with WPF
+   - Interpreter: powershell.exe (5.1+) with PresentationFramework
+   - Purpose: GUI definition and launch
+
+4. **`Helper\WinRepairTUI.ps1`** (PowerShell script)
+   - Language: PowerShell
+   - Interpreter: powershell.exe (5.1+) or pwsh.exe (7+)
+   - Purpose: Text-based UI for WinRE/limited environments
+
+5. **`Helper\EmergencyRepair.ps1`** (PowerShell script)
+   - Language: PowerShell
+   - Interpreter: powershell.exe (5.1+) or pwsh.exe (7+)
+   - Purpose: Emergency boot repair when main modules fail
 
 ## 4. LANGUAGE + INTERPRETER VERSION PER FILE
 
-### PowerShell Files (Windows PowerShell 5.1+)
-**REQUIREMENT**: Windows PowerShell 5.1 or later (NOT PowerShell Core 6+)
-**REASON**: Uses .NET Framework assemblies (WPF, Windows Forms), not .NET Core
+### Batch Files:
+- `RunMiracleBoot.cmd` - Windows CMD (cmd.exe, all Windows versions)
+- `Helper\WinRepairCore.cmd` - Windows CMD (cmd.exe, all Windows versions)
 
-| File | Language | Interpreter | Version | Notes |
-|------|----------|-------------|---------|-------|
-| `MiracleBoot.ps1` | PowerShell | Windows PowerShell | 5.1+ | Main entry |
-| `Helper\WinRepairCore.ps1` | PowerShell | Windows PowerShell | 5.1+ | Core engine (19K+ lines) |
-| `Helper\WinRepairGUI.ps1` | PowerShell | Windows PowerShell | 5.1+ | WPF GUI (requires STA mode) |
-| `Helper\WinRepairTUI.ps1` | PowerShell | Windows PowerShell | 5.1+ | Console TUI |
-| `Helper\ErrorLogging.ps1` | PowerShell | Windows PowerShell | 5.1+ | Logging module |
-| `Helper\PreLaunchValidation.ps1` | PowerShell | Windows PowerShell | 5.1+ | Syntax validation |
-| `Helper\ReadinessGate.ps1` | PowerShell | Windows PowerShell | 5.1+ | Pre-launch checks |
-| `Helper\NetworkDiagnostics.ps1` | PowerShell | Windows PowerShell | 5.1+ | Network tools |
-| `Helper\LogAnalysis.ps1` | PowerShell | Windows PowerShell | 5.1+ | Log parsing |
-| `Helper\KeyboardSymbols.ps1` | PowerShell | Windows PowerShell | 5.1+ | Symbol helper |
-| All other `Helper\*.ps1` | PowerShell | Windows PowerShell | 5.1+ | Various utilities |
-
-### CMD/Batch Files
-| File | Language | Interpreter | Version | Notes |
-|------|----------|-------------|---------|-------|
-| `RunMiracleBoot.cmd` | Batch | Windows CMD | Any Windows | Primary launcher |
-| `Helper\WinRepairCore.cmd` | Batch | Windows CMD | Any Windows | Fallback menu |
+### PowerShell Files (All require PowerShell 5.1+ or PowerShell 7+):
+- `MiracleBoot.ps1` - PowerShell 5.1+ (Windows PowerShell) or 7+ (PowerShell Core)
+- `Helper\WinRepairCore.ps1` - PowerShell 5.1+ or 7+
+- `Helper\WinRepairGUI.ps1` - PowerShell 5.1+ (WPF requires .NET Framework, Windows only)
+- `Helper\WinRepairTUI.ps1` - PowerShell 5.1+ or 7+
+- `Helper\EmergencyRepair.ps1` - PowerShell 5.1+ or 7+
+- `Helper\PreLaunchValidation.ps1` - PowerShell 5.1+ or 7+
+- `Helper\ErrorLogging.ps1` - PowerShell 5.1+ or 7+
+- `Helper\NetworkDiagnostics.ps1` - PowerShell 5.1+ or 7+
+- `Helper\LogAnalysis.ps1` - PowerShell 5.1+ or 7+
+- `Helper\KeyboardSymbols.ps1` - PowerShell 5.1+ or 7+
+- `Helper\RepairReportGenerator.ps1` - PowerShell 5.1+ or 7+
+- `Helper\AdvancedBootTroubleshooting.ps1` - PowerShell 5.1+ or 7+
+- `Helper\ReadinessGate.ps1` - PowerShell 5.1+ or 7+
+- `Helper\GUIFailureDiagnostics.ps1` - PowerShell 5.1+ or 7+
 
 ## 5. CRITICAL DEPENDENCIES
 
-### Required Files (Must Exist)
-1. `MiracleBoot.ps1` - Main orchestrator
-2. `Helper\WinRepairCore.ps1` - Core engine (loaded by ALL paths)
-3. `Helper\ErrorLogging.ps1` - Loaded by main script
-4. `Helper\PreLaunchValidation.ps1` - Loaded by main script
+### WPF Requirements (GUI only):
+- .NET Framework 4.5+ (Windows PowerShell 5.1)
+- PresentationFramework assembly
+- Windows OS (not available on Linux/Mac)
 
-### Conditional Files
-1. `Helper\WinRepairGUI.ps1` - Only for FullOS with WPF
-2. `Helper\WinRepairTUI.ps1` - Fallback for WinRE/WinPE or failed GUI
-3. `Helper\ReadinessGate.ps1` - Only for FullOS GUI path
-4. `Helper\NetworkDiagnostics.ps1` - Only if network features used
-5. `Helper\LogAnalysis.ps1` - Only if log analysis used
+### Common Requirements:
+- Administrator privileges (for boot repair operations)
+- Access to System32, EFI partition, BCD store
 
-## 6. OS ASSUMPTIONS
+## 6. FILES THAT CANNOT BE CONFIDENTLY PARSED
 
-### Operating System
-- **Minimum**: Windows 10 (build 10240+) or Windows 11
-- **Environments**: FullOS, WinRE, WinPE
-- **Architecture**: x64 (primary), x86 (legacy)
-
-### Framework Dependencies
-- **.NET Framework**: 4.5+ (implicit)
-- **WPF**: PresentationFramework.dll (FullOS GUI only)
-- **Windows Forms**: System.Windows.Forms.dll (GUI helper)
-- **Visual Basic**: Microsoft.VisualBasic.dll (InputBox helper)
-
-### Drive Letter Assumptions
-- **FullOS**: Typically C:\Windows (but uses `$WindowsRoot` variable)
-- **WinRE**: X: (RAM disk), target OS on C: or D:
-- **WinPE**: X: (RAM disk), target OS variable
-- **NO HARDCODING**: Uses `Get-WindowsVolumes` function
-
-## 7. GUI FRAMEWORK ASSUMPTIONS
-
-### WPF Requirements
-- **Threading Model**: STA (Single Threaded Apartment) - CRITICAL
-- **XAML**: Embedded as string in WinRepairGUI.ps1 (not separate file)
-- **Window**: System.Windows.Window class
-- **Controls**: Standard WPF controls
-
-### Async Patterns (Non-Blocking)
-- **Runspaces**: `[runspacefactory]::CreateRunspace()`
-- **Jobs**: `Start-Job` for background operations
-- **Dispatcher**: `$W.Dispatcher.Invoke()` for thread-safe UI updates
-- **DoEvents**: `[System.Windows.Forms.Application]::DoEvents()`
-
-## 8. FILES THAT CANNOT BE CONFIDENTLY PARSED
-
-**STATUS**: All critical runtime files can be parsed.
-
-**Test files** (47 PowerShell scripts in `Test\` directory) are NOT part of runtime execution and are excluded from this analysis.
-
-**Backup files** (e.g., `*.backup_*`) are excluded from runtime analysis.
-
----
-
-**LAYER 1 COMPLETE - READY FOR LAYER 2 (PARSER-ONLY MODE)**
+**NONE** - All files are standard PowerShell or Batch scripts with clear syntax.

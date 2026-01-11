@@ -704,14 +704,48 @@ function Invoke-EfiPartitionHealthCheck {
 
 # Load centralized logging system
 try {
-    # Determine script root safely
+    # Determine script root safely (always use absolute path)
+    # $scriptRoot should point to the Helper directory (where WinRepairCore.ps1 is located)
     if ($PSScriptRoot) {
-        $scriptRoot = $PSScriptRoot
+        # $PSScriptRoot is already the Helper directory when this script is in Helper\
+        $scriptRoot = (Resolve-Path $PSScriptRoot -ErrorAction SilentlyContinue).Path
+        if (-not $scriptRoot) { 
+            $scriptRoot = $PSScriptRoot 
+        }
+        # Ensure it's absolute
+        if (-not [System.IO.Path]::IsPathRooted($scriptRoot)) {
+            $scriptRoot = Join-Path (Get-Location).Path $scriptRoot
+        }
     } elseif ($MyInvocation.MyCommand.Path) {
-        $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+        $parentPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+        $scriptRoot = (Resolve-Path $parentPath -ErrorAction SilentlyContinue).Path
+        if (-not $scriptRoot) { 
+            $scriptRoot = $parentPath
+            if (-not [System.IO.Path]::IsPathRooted($scriptRoot)) {
+                $scriptRoot = Join-Path (Get-Location).Path $scriptRoot
+            }
+        }
     } else {
         # Fallback: try to get from current location
-        $scriptRoot = if (Test-Path "Helper\ErrorLogging.ps1") { "Helper" } else { Get-Location }
+        $helperPath = if (Test-Path "Helper\ErrorLogging.ps1") { 
+            $resolved = (Resolve-Path "Helper" -ErrorAction SilentlyContinue).Path
+            if ($resolved) { $resolved } else { Join-Path (Get-Location).Path "Helper" }
+        } else { 
+            (Get-Location).Path 
+        }
+        $scriptRoot = $helperPath
+    }
+    
+    # Final validation: ensure $scriptRoot points to Helper directory and WinRepairCore.ps1 exists there
+    if (-not (Test-Path (Join-Path $scriptRoot "WinRepairCore.ps1"))) {
+        # Try parent directory (project root) and then Helper subdirectory
+        $parentRoot = Split-Path -Parent $scriptRoot
+        if ($parentRoot -and (Test-Path (Join-Path $parentRoot "Helper\WinRepairCore.ps1"))) {
+            $scriptRoot = Join-Path $parentRoot "Helper"
+        } elseif (Test-Path "Helper\WinRepairCore.ps1") {
+            $scriptRoot = (Resolve-Path "Helper" -ErrorAction SilentlyContinue).Path
+            if (-not $scriptRoot) { $scriptRoot = Join-Path (Get-Location).Path "Helper" }
+        }
     }
     
     if ($scriptRoot -and (Test-Path "$scriptRoot\ErrorLogging.ps1")) {
@@ -3098,7 +3132,11 @@ if ($btnPrecisionScan) {
 
         # Ensure core is loaded (idempotent)
         try {
-            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
+                $corePath = Join-Path (Get-Location).Path $corePath
+            }
+            . $corePath -ErrorAction Stop
         } catch {
             if ($fixerOutput) { $fixerOutput.Text = "Failed to load core engine: $_" }
             [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
@@ -3172,7 +3210,11 @@ if ($btnOneClickPrecisionFix) {
 
         # Ensure core is loaded (idempotent)
         try {
-            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
+                $corePath = Join-Path (Get-Location).Path $corePath
+            }
+            . $corePath -ErrorAction Stop
         } catch {
             if ($fixerOutput) { $fixerOutput.Text = "Failed to load core engine: $_" }
             [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
@@ -7824,7 +7866,11 @@ if ($btnFullBootDiagnosis) {
         
         # Ensure core is loaded (idempotent)
         try {
-            . "$scriptRoot\WinRepairCore.ps1" -ErrorAction Stop
+            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
+            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
+                $corePath = Join-Path (Get-Location).Path $corePath
+            }
+            . $corePath -ErrorAction Stop
         } catch {
             [System.Windows.MessageBox]::Show("Failed to load core engine: $_","Error","OK","Error") | Out-Null
             return
