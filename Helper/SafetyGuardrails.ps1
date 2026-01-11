@@ -285,7 +285,9 @@ function Get-RepairState {
     $output.AppendLine("  System Drive: $($envCheck.SystemDrive)") | Out-Null
     $output.AppendLine("  Safe for Repairs: $($envCheck.IsSafe)") | Out-Null
     $output.AppendLine("  Status: $($envCheck.SafetyMessage)") | Out-Null
-    if ($envCheck.Recommendations.Count -gt 0) {
+    if ($envCheck.Recommendations -and 
+        ($envCheck.Recommendations -is [Array] -or $envCheck.Recommendations -is [System.Collections.ICollection]) -and
+        $envCheck.Recommendations.Count -gt 0) {
         $output.AppendLine("  Recommendations:") | Out-Null
         foreach ($rec in $envCheck.Recommendations) {
             $output.AppendLine("    - $rec") | Out-Null
@@ -356,6 +358,7 @@ function Get-RepairState {
     
     # BCD Entry Path
     $output.AppendLine("BCD ENTRY PATH:") | Out-Null
+    $bcdPathMatch = $null  # Initialize variable
     try {
         # Use cmd /c to properly execute bcdedit
         $bcdEnum = cmd /c "bcdedit /enum {default}" 2>&1 | Out-String
