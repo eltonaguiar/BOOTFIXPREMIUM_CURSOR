@@ -3132,9 +3132,21 @@ if ($btnPrecisionScan) {
 
         # Ensure core is loaded (idempotent)
         try {
-            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
-            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
-                $corePath = Join-Path (Get-Location).Path $corePath
+            # Resolve script root to absolute path if needed
+            $resolvedScriptRoot = $scriptRoot
+            if (-not [System.IO.Path]::IsPathRooted($resolvedScriptRoot)) {
+                $resolvedScriptRoot = (Resolve-Path $resolvedScriptRoot -ErrorAction SilentlyContinue).Path
+                if (-not $resolvedScriptRoot) {
+                    $resolvedScriptRoot = Join-Path (Get-Location).Path $scriptRoot
+                }
+            }
+            $corePath = Join-Path $resolvedScriptRoot "WinRepairCore.ps1"
+            if (-not (Test-Path $corePath)) {
+                # Fallback: try parent directory
+                $parentRoot = Split-Path -Parent $resolvedScriptRoot
+                if ($parentRoot -and (Test-Path (Join-Path $parentRoot "Helper\WinRepairCore.ps1"))) {
+                    $corePath = Join-Path $parentRoot "Helper\WinRepairCore.ps1"
+                }
             }
             . $corePath -ErrorAction Stop
         } catch {
@@ -3210,9 +3222,21 @@ if ($btnOneClickPrecisionFix) {
 
         # Ensure core is loaded (idempotent)
         try {
-            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
-            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
-                $corePath = Join-Path (Get-Location).Path $corePath
+            # Resolve script root to absolute path if needed
+            $resolvedScriptRoot = $scriptRoot
+            if (-not [System.IO.Path]::IsPathRooted($resolvedScriptRoot)) {
+                $resolvedScriptRoot = (Resolve-Path $resolvedScriptRoot -ErrorAction SilentlyContinue).Path
+                if (-not $resolvedScriptRoot) {
+                    $resolvedScriptRoot = Join-Path (Get-Location).Path $scriptRoot
+                }
+            }
+            $corePath = Join-Path $resolvedScriptRoot "WinRepairCore.ps1"
+            if (-not (Test-Path $corePath)) {
+                # Fallback: try parent directory
+                $parentRoot = Split-Path -Parent $resolvedScriptRoot
+                if ($parentRoot -and (Test-Path (Join-Path $parentRoot "Helper\WinRepairCore.ps1"))) {
+                    $corePath = Join-Path $parentRoot "Helper\WinRepairCore.ps1"
+                }
             }
             . $corePath -ErrorAction Stop
         } catch {
@@ -7866,9 +7890,21 @@ if ($btnFullBootDiagnosis) {
         
         # Ensure core is loaded (idempotent)
         try {
-            $corePath = Join-Path $scriptRoot "WinRepairCore.ps1"
-            if (-not [System.IO.Path]::IsPathRooted($corePath)) {
-                $corePath = Join-Path (Get-Location).Path $corePath
+            # Resolve script root to absolute path if needed
+            $resolvedScriptRoot = $scriptRoot
+            if (-not [System.IO.Path]::IsPathRooted($resolvedScriptRoot)) {
+                $resolvedScriptRoot = (Resolve-Path $resolvedScriptRoot -ErrorAction SilentlyContinue).Path
+                if (-not $resolvedScriptRoot) {
+                    $resolvedScriptRoot = Join-Path (Get-Location).Path $scriptRoot
+                }
+            }
+            $corePath = Join-Path $resolvedScriptRoot "WinRepairCore.ps1"
+            if (-not (Test-Path $corePath)) {
+                # Fallback: try parent directory
+                $parentRoot = Split-Path -Parent $resolvedScriptRoot
+                if ($parentRoot -and (Test-Path (Join-Path $parentRoot "Helper\WinRepairCore.ps1"))) {
+                    $corePath = Join-Path $parentRoot "Helper\WinRepairCore.ps1"
+                }
             }
             . $corePath -ErrorAction Stop
         } catch {
