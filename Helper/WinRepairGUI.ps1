@@ -765,6 +765,149 @@ try {
 # Helper function to safely get controls with null checking
 # Note: This will be defined inside Start-GUI to access $W directly
 
+# Helper function to safely open files in Notepad (prevents multiple instances)
+function Start-SafeNotepad {
+    <#
+    .SYNOPSIS
+    Safely opens a file in Notepad, preventing duplicate instances of the same file.
+    
+    .PARAMETER FilePath
+    Path to the file to open in Notepad. If not provided, opens blank Notepad.
+    
+    .PARAMETER ForceNew
+    If set, always opens a new Notepad instance even if the file is already open.
+    #>
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$FilePath,
+        
+        [switch]$ForceNew
+    )
+    
+    # Track opened files in a module-level variable
+    if (-not $script:NotepadOpenedFiles) {
+        $script:NotepadOpenedFiles = @{}
+    }
+    
+    try {
+        # If no file path provided, just open blank Notepad (but check for existing blank instances)
+        if ([string]::IsNullOrWhiteSpace($FilePath)) {
+            if (-not $ForceNew) {
+                # Check if there's already a blank Notepad open
+                $blankNotepads = Get-Process -Name "notepad" -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.MainWindowTitle -eq "Untitled - Notepad" -or $_.MainWindowTitle -eq "" }
+                if ($blankNotepads) {
+                    # Bring existing Notepad to front
+                    try {
+                        Add-Type -TypeDefinition @"
+                            using System;
+                            using System.Runtime.InteropServices;
+                            public class Win32 {
+                                [DllImport("user32.dll")]
+                                public static extern bool SetForegroundWindow(IntPtr hWnd);
+                            }
+"@ -ErrorAction SilentlyContinue
+                        $blankNotepads[0] | ForEach-Object {
+                            [Win32]::SetForegroundWindow($_.MainWindowHandle)
+                        }
+                    } catch {
+                        # If SetForegroundWindow fails, just open new one
+                        Start-Process notepad.exe -ErrorAction SilentlyContinue
+                    }
+                    return
+                }
+            }
+            Start-Process notepad.exe -ErrorAction SilentlyContinue
+            return
+        }
+        
+        # Resolve full path
+        $resolvedPath = if (Test-Path $FilePath) {
+            (Resolve-Path $FilePath -ErrorAction SilentlyContinue).Path
+        } else {
+            $FilePath
+        }
+        
+        if (-not $resolvedPath) {
+            $resolvedPath = $FilePath
+        }
+        
+        # Normalize path for comparison
+        $normalizedPath = $resolvedPath.ToLower().Replace('\', '/')
+        
+        # Check if this file is already open (unless ForceNew is specified)
+        if (-not $ForceNew -and $script:NotepadOpenedFiles.ContainsKey($normalizedPath)) {
+            $lastOpened = $script:NotepadOpenedFiles[$normalizedPath]
+            $timeSinceOpened = (Get-Date) - $lastOpened
+            
+            # If opened within last 5 seconds, don't open again (debounce)
+            if ($timeSinceOpened.TotalSeconds -lt 5) {
+                # Try to bring existing Notepad window to front
+                try {
+                    $notepadProcesses = Get-Process -Name "notepad" -ErrorAction SilentlyContinue
+                    foreach ($proc in $notepadProcesses) {
+                        try {
+                            $windowTitle = $proc.MainWindowTitle
+                            if ($windowTitle -and ($windowTitle -like "*$(Split-Path -Leaf $resolvedPath)*" -or $windowTitle -eq $resolvedPath)) {
+                                Add-Type -TypeDefinition @"
+                                    using System;
+                                    using System.Runtime.InteropServices;
+                                    public class Win32 {
+                                        [DllImport("user32.dll")]
+                                        public static extern bool SetForegroundWindow(IntPtr hWnd);
+                                        [DllImport("user32.dll")]
+                                        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+                                    }
+"@ -ErrorAction SilentlyContinue
+                                [Win32]::ShowWindow($proc.MainWindowHandle, 9) # SW_RESTORE
+                                [Win32]::SetForegroundWindow($proc.MainWindowHandle)
+                                return
+                            }
+                        } catch {
+                            # Continue to next process
+                        }
+                    }
+                } catch {
+                    # If we can't bring to front, just skip opening
+                    return
+                }
+            }
+        }
+        
+        # Open the file in Notepad
+        if (Test-Path $resolvedPath) {
+            Start-Process notepad.exe -ArgumentList "`"$resolvedPath`"" -ErrorAction SilentlyContinue
+            # Track that we opened this file
+            $script:NotepadOpenedFiles[$normalizedPath] = Get-Date
+        } else {
+            # File doesn't exist, but try to open it anyway (Notepad will show error)
+            Start-Process notepad.exe -ArgumentList "`"$resolvedPath`"" -ErrorAction SilentlyContinue
+            $script:NotepadOpenedFiles[$normalizedPath] = Get-Date
+        }
+        
+        # Clean up old entries (older than 1 hour) to prevent memory bloat
+        $cutoffTime = (Get-Date).AddHours(-1)
+        $keysToRemove = $script:NotepadOpenedFiles.Keys | Where-Object {
+            $script:NotepadOpenedFiles[$_] -lt $cutoffTime
+        }
+        foreach ($key in $keysToRemove) {
+            $script:NotepadOpenedFiles.Remove($key)
+        }
+        
+    } catch {
+        # Fallback: just try to open normally
+        try {
+            if ($FilePath) {
+                Start-Process notepad.exe -ArgumentList "`"$FilePath`"" -ErrorAction SilentlyContinue
+            } else {
+                Start-Process notepad.exe -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Write-Warning "Failed to open Notepad: $_"
+        }
+    }
+}
+
 # Helper function to launch emergency boot repair scripts
 function Start-EmergencyBootScript {
     param(
@@ -1753,7 +1896,7 @@ $btnNotepad = $W.FindName("BtnNotepad")
 if ($btnNotepad) {
     $btnNotepad.Add_Click({
         try {
-            Start-Process notepad.exe -ErrorAction SilentlyContinue
+            Start-SafeNotepad
         } catch {
             [System.Windows.MessageBox]::Show("Notepad not available in this environment.", "Warning", "OK", "Warning")
         }
@@ -2096,7 +2239,7 @@ if ($menuHelpEmergencyGuide) {
             } else { Get-Location }
             $guidePath = Join-Path $projectRoot "EMERGENCY_BOOT_REPAIR_GUIDE.md"
             if (Test-Path $guidePath) {
-                Start-Process notepad.exe -ArgumentList $guidePath -ErrorAction SilentlyContinue
+                Start-SafeNotepad -FilePath $guidePath
             } else {
                 [System.Windows.MessageBox]::Show("Emergency repair guide not found at: $guidePath", "File Not Found", "OK", "Warning") | Out-Null
             }
@@ -4628,7 +4771,7 @@ if ($btnOneClickRepair) {
                     # Save log and exit
                     try {
                         $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
-                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                        Start-SafeNotepad -FilePath $logFile
                     } catch {
                         # Ignore log save errors
                     }
@@ -4689,7 +4832,7 @@ if ($btnOneClickRepair) {
                     # Save log and exit
                     try {
                         $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
-                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                        Start-SafeNotepad -FilePath $logFile
                     } catch {
                         # Ignore log save errors
                     }
@@ -5180,7 +5323,7 @@ if ($btnOneClickRepair) {
                     # Save log and exit
                     try {
                         $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
-                        Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                        Start-SafeNotepad -FilePath $logFile
                     } catch { }
                     $btnOneClickRepair.IsEnabled = $true
                     return
@@ -6610,19 +6753,19 @@ exit
                                 "Question"
                             )
                             if ($openDiag -eq "Yes") {
-                                Start-Process notepad.exe -ArgumentList $diagFile -ErrorAction SilentlyContinue
+                                Start-SafeNotepad -FilePath $diagFile
                             }
                         }
                     }
                 } catch {
                     Write-Log "[WARNING] Could not generate comprehensive report: $_"
                     # Fall back to opening basic log file
-                    Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                    Start-SafeNotepad -FilePath $logFile
                 }
                 }
             } else {
                 # Fall back to opening basic log file if report generator not available
-                Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                Start-SafeNotepad -FilePath $logFile
                 Write-Log "[INFO] Log file opened in Notepad"
             }
             
@@ -8877,7 +9020,7 @@ if ($btnFullBootDiagnosis) {
             
             if ($result -eq "Yes") {
                 try {
-                    Start-Process notepad.exe -ArgumentList "`"$errorFilePath`""
+                    Start-SafeNotepad -FilePath $errorFilePath
                 } catch {
                     try {
                         Start-Process $errorFilePath

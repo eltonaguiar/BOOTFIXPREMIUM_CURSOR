@@ -1,6 +1,109 @@
 # RepairReportGenerator.ps1
 # Comprehensive report generation for one-click boot repair
 
+# Helper function to safely open files in Notepad (prevents multiple instances)
+function Start-SafeNotepad {
+    <#
+    .SYNOPSIS
+    Safely opens a file in Notepad, preventing duplicate instances of the same file.
+    
+    .PARAMETER FilePath
+    Path to the file to open in Notepad.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath
+    )
+    
+    # Track opened files in a module-level variable
+    if (-not $script:NotepadOpenedFiles) {
+        $script:NotepadOpenedFiles = @{}
+    }
+    
+    try {
+        # Resolve full path
+        $resolvedPath = if (Test-Path $FilePath) {
+            (Resolve-Path $FilePath -ErrorAction SilentlyContinue).Path
+        } else {
+            $FilePath
+        }
+        
+        if (-not $resolvedPath) {
+            $resolvedPath = $FilePath
+        }
+        
+        # Normalize path for comparison
+        $normalizedPath = $resolvedPath.ToLower().Replace('\', '/')
+        
+        # Check if this file is already open (debounce within 5 seconds)
+        if ($script:NotepadOpenedFiles.ContainsKey($normalizedPath)) {
+            $lastOpened = $script:NotepadOpenedFiles[$normalizedPath]
+            $timeSinceOpened = (Get-Date) - $lastOpened
+            
+            # If opened within last 5 seconds, don't open again
+            if ($timeSinceOpened.TotalSeconds -lt 5) {
+                # Try to bring existing Notepad window to front
+                try {
+                    $notepadProcesses = Get-Process -Name "notepad" -ErrorAction SilentlyContinue
+                    foreach ($proc in $notepadProcesses) {
+                        try {
+                            $windowTitle = $proc.MainWindowTitle
+                            if ($windowTitle -and ($windowTitle -like "*$(Split-Path -Leaf $resolvedPath)*" -or $windowTitle -eq $resolvedPath)) {
+                                Add-Type -TypeDefinition @"
+                                    using System;
+                                    using System.Runtime.InteropServices;
+                                    public class Win32 {
+                                        [DllImport("user32.dll")]
+                                        public static extern bool SetForegroundWindow(IntPtr hWnd);
+                                        [DllImport("user32.dll")]
+                                        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+                                    }
+"@ -ErrorAction SilentlyContinue
+                                [Win32]::ShowWindow($proc.MainWindowHandle, 9) # SW_RESTORE
+                                [Win32]::SetForegroundWindow($proc.MainWindowHandle)
+                                return
+                            }
+                        } catch {
+                            # Continue to next process
+                        }
+                    }
+                } catch {
+                    # If we can't bring to front, just skip opening
+                    return
+                }
+            }
+        }
+        
+        # Open the file in Notepad
+        if (Test-Path $resolvedPath) {
+            Start-Process notepad.exe -ArgumentList "`"$resolvedPath`"" -ErrorAction SilentlyContinue
+            # Track that we opened this file
+            $script:NotepadOpenedFiles[$normalizedPath] = Get-Date
+        } else {
+            # File doesn't exist, but try to open it anyway (Notepad will show error)
+            Start-Process notepad.exe -ArgumentList "`"$resolvedPath`"" -ErrorAction SilentlyContinue
+            $script:NotepadOpenedFiles[$normalizedPath] = Get-Date
+        }
+        
+        # Clean up old entries (older than 1 hour) to prevent memory bloat
+        $cutoffTime = (Get-Date).AddHours(-1)
+        $keysToRemove = $script:NotepadOpenedFiles.Keys | Where-Object {
+            $script:NotepadOpenedFiles[$_] -lt $cutoffTime
+        }
+        foreach ($key in $keysToRemove) {
+            $script:NotepadOpenedFiles.Remove($key)
+        }
+        
+    } catch {
+        # Fallback: just try to open normally
+        try {
+            Start-Process notepad.exe -ArgumentList "`"$FilePath`"" -ErrorAction SilentlyContinue
+        } catch {
+            Write-Warning "Failed to open Notepad: $_"
+        }
+    }
+}
+
 function New-RepairReport {
     <#
     .SYNOPSIS
@@ -261,7 +364,7 @@ function Export-RepairReport {
         Write-Host "Report saved to: $($Report.ReportPath)" -ForegroundColor Green
         
         if ($OpenInNotepad) {
-            Start-Process notepad.exe -ArgumentList $Report.ReportPath -ErrorAction SilentlyContinue
+            Start-SafeNotepad -FilePath $Report.ReportPath
         }
         
         return $Report.ReportPath
@@ -517,7 +620,7 @@ function Export-FailureReport {
         Write-Host "Failure report saved to: $failureReportPath" -ForegroundColor Yellow
         
         if ($OpenInNotepad) {
-            Start-Process notepad.exe -ArgumentList $failureReportPath -ErrorAction SilentlyContinue
+            Start-SafeNotepad -FilePath $failureReportPath
         }
         
         return $failureReportPath
