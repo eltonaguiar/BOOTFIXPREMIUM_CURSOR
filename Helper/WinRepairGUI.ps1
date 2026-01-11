@@ -5402,8 +5402,6 @@ exit
                         } else {
                             Write-Log "[SUCCESS] winload.efi verified in Windows directory: $winloadWindowsPath"
                         }
-                    } else {
-                        Write-Log "[OK] winload.efi already exists in Windows directory: $winloadWindowsPath"
                     }
                     
                     # Final verification before proceeding
