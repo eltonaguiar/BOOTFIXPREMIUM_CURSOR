@@ -97,6 +97,136 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 # HELPER FUNCTIONS FOR BOOT REPAIR
 # ==============================================================================
 
+# Test Mode Function: Simulate boot failures safely by renaming (not deleting) critical files
+function Invoke-TestModeBootFailure {
+    param(
+        [string]$Drive = "C",
+        [string]$EfiDrive = $null,
+        [scriptblock]$WriteLogFunction = { param($msg) Write-Host $msg }
+    )
+    
+    try {
+        & $WriteLogFunction "==============================================================="
+        & $WriteLogFunction "TEST MODE: Simulating Boot Failure"
+        & $WriteLogFunction "==============================================================="
+        & $WriteLogFunction "This will rename (not delete) critical boot files for testing."
+        & $WriteLogFunction ""
+        
+        $errors = @()
+        
+        # 1. Break winload.efi in System32
+        $winloadPath = "$Drive`:\Windows\System32\winload.efi"
+        if (Test-Path $winloadPath) {
+            & $WriteLogFunction "[TEST] Breaking winload.efi in System32..."
+            $ownershipResult = Set-FileOwnershipAndPermissions -FilePath $winloadPath -WriteLogFunction $WriteLogFunction
+            if ($ownershipResult.Success) {
+                try {
+                    Rename-Item -Path $winloadPath -NewName "winload.efi.testing" -Force -ErrorAction Stop
+                    & $WriteLogFunction "[OK] winload.efi renamed to winload.efi.testing"
+                } catch {
+                    $errors += "Failed to rename winload.efi: $_"
+                    & $WriteLogFunction "[ERROR] $($errors[-1])"
+                }
+            } else {
+                $errors += "Could not take ownership of winload.efi: $($ownershipResult.Message)"
+                & $WriteLogFunction "[ERROR] $($errors[-1])"
+            }
+        } else {
+            & $WriteLogFunction "[INFO] winload.efi not found at $winloadPath (may already be broken)"
+        }
+        
+        # 2. Break BCD in EFI partition
+        if ($EfiDrive) {
+            $bcdPath = "$EfiDrive`:\EFI\Microsoft\Boot\BCD"
+            if (Test-Path $bcdPath) {
+                & $WriteLogFunction "[TEST] Breaking BCD in EFI partition..."
+                try {
+                    Rename-Item -Path $bcdPath -NewName "BCD.testing" -Force -ErrorAction Stop
+                    & $WriteLogFunction "[OK] BCD renamed to BCD.testing"
+                } catch {
+                    $errors += "Failed to rename BCD: $_"
+                    & $WriteLogFunction "[ERROR] $($errors[-1])"
+                }
+            } else {
+                & $WriteLogFunction "[INFO] BCD not found at $bcdPath (may already be broken)"
+            }
+        } else {
+            & $WriteLogFunction "[WARNING] EFI partition not mounted - cannot break EFI BCD"
+        }
+        
+        # 3. Delete current boot entry (if accessible)
+        try {
+            & $WriteLogFunction "[TEST] Attempting to delete current boot entry..."
+            $deleteOutput = & bcdedit /delete "{current}" 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                & $WriteLogFunction "[OK] Current boot entry deleted"
+            } else {
+                & $WriteLogFunction "[INFO] Could not delete boot entry (may not be accessible): $deleteOutput"
+            }
+        } catch {
+            & $WriteLogFunction "[INFO] Boot entry deletion skipped: $_"
+        }
+        
+        & $WriteLogFunction ""
+        if ($errors.Count -eq 0) {
+            & $WriteLogFunction "[SUCCESS] Test mode boot failure simulation completed"
+            & $WriteLogFunction "You can now test the repair logic. Files are renamed (not deleted) for safety."
+            return @{ Success = $true; Message = "Boot failure simulated successfully" }
+        } else {
+            & $WriteLogFunction "[PARTIAL] Test mode completed with $($errors.Count) error(s)"
+            return @{ Success = $false; Message = "Some operations failed: $($errors -join '; ')" }
+        }
+    } catch {
+        & $WriteLogFunction "[ERROR] Test mode failed: $_"
+        return @{ Success = $false; Message = "Exception: $_" }
+    }
+}
+
+# Helper function to take ownership and grant permissions for TrustedInstaller-protected files
+function Set-FileOwnershipAndPermissions {
+    param(
+        [string]$FilePath,
+        [scriptblock]$WriteLogFunction = { param($msg) Write-Host $msg }
+    )
+    
+    try {
+        if (-not (Test-Path $FilePath)) {
+            & $WriteLogFunction "[WARNING] File does not exist: $FilePath"
+            return @{ Success = $false; Message = "File not found" }
+        }
+        
+        & $WriteLogFunction "[INFO] Taking ownership of $FilePath from TrustedInstaller..."
+        
+        # Take ownership for Administrators group
+        $takeownOutput = & takeown /f $FilePath /a 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            if ($takeownOutput -match "access is denied|Access is denied|elevated|administrator") {
+                & $WriteLogFunction "[ERROR] Access Denied: This operation requires Administrator privileges."
+                & $WriteLogFunction "[ERROR] Please ensure PowerShell is running 'As Administrator' or UAC is properly elevated."
+                return @{ Success = $false; Message = "Access Denied - Administrator privileges required" }
+            } else {
+                & $WriteLogFunction "[WARNING] takeown failed: $takeownOutput"
+                return @{ Success = $false; Message = "takeown failed: $takeownOutput" }
+            }
+        }
+        
+        & $WriteLogFunction "[INFO] Granting Full Control to Administrators group..."
+        
+        # Grant Full Control to Administrators
+        $icaclsOutput = & icacls $FilePath /grant Administrators:F 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            & $WriteLogFunction "[WARNING] icacls failed: $icaclsOutput"
+            return @{ Success = $false; Message = "icacls failed: $icaclsOutput" }
+        }
+        
+        & $WriteLogFunction "[SUCCESS] Ownership and permissions set successfully"
+        return @{ Success = $true; Message = "Ownership and permissions set" }
+    } catch {
+        & $WriteLogFunction "[ERROR] Failed to set ownership/permissions: $_"
+        return @{ Success = $false; Message = "Exception: $_" }
+    }
+}
+
 # Helper function to check if BCD exists and recreate if missing
 function Test-AndRecreateBCD {
     param(
@@ -108,6 +238,7 @@ function Test-AndRecreateBCD {
     
     try {
         # First, check if BCD file exists physically (faster than bcdedit)
+        # Use timeout wrapper to prevent Test-Path from hanging on locked volumes
         $bcdFilePaths = @(
             "$env:SystemRoot\Boot\BCD",  # Legacy BIOS
             "$env:SystemDrive\Boot\BCD",  # Legacy BIOS alternative
@@ -117,40 +248,56 @@ function Test-AndRecreateBCD {
         
         $bcdFileExists = $false
         foreach ($bcdPath in $bcdFilePaths) {
-            if (Test-Path $bcdPath -ErrorAction SilentlyContinue) {
+            # Use job-based timeout for Test-Path to prevent hanging
+            $testPathJob = Start-Job -ScriptBlock {
+                param($path)
+                Test-Path $path -ErrorAction SilentlyContinue
+            } -ArgumentList $bcdPath
+            
+            $testResult = Wait-Job -Job $testPathJob -Timeout 2 | Receive-Job
+            Stop-Job -Job $testPathJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $testPathJob -ErrorAction SilentlyContinue
+            
+            if ($testResult -eq $true) {
                 $bcdFileExists = $true
                 & $WriteLogFunction "[INFO] BCD file found at: $bcdPath"
                 break
             }
         }
         
-        # If BCD file doesn't exist physically, skip bcdedit check (it will hang)
+        # If BCD file doesn't exist physically, skip bcdedit check (it will hang) and go straight to recreation
         if (-not $bcdFileExists) {
-            & $WriteLogFunction "[WARNING] BCD file not found in standard locations"
-            & $WriteLogFunction "Skipping bcdedit check (would hang) and attempting recreation..."
-            # Skip to recreation logic
+            & $WriteLogFunction "[INFO] BCD file not found in standard locations - BCD is missing"
+            & $WriteLogFunction "Skipping bcdedit check (would hang) and proceeding directly to recreation..."
+            # Set bcdTest to indicate missing so recreation logic triggers
+            $bcdTest = "BCD_FILE_NOT_FOUND"
         } else {
             # BCD file exists, but check if it's accessible (with timeout to prevent hanging)
-            & $WriteLogFunction "Checking BCD accessibility (with $TimeoutSeconds second timeout)..."
+            # Use shorter timeout (5 seconds) to fail fast if BCD is locked
+            $quickTimeout = [Math]::Min(5, $TimeoutSeconds)
+            & $WriteLogFunction "Checking BCD accessibility (with $quickTimeout second timeout - fast fail)..."
             $bcdTest = $null
             $bcdJob = Start-Job -ScriptBlock {
-                bcdedit /enum {bootmgr} 2>&1 | Out-String
+                bcdedit /enum "{bootmgr}" 2>&1 | Out-String
             }
             
-            $bcdTest = Wait-Job -Job $bcdJob -Timeout $TimeoutSeconds | Receive-Job
+            # Use shorter timeout to fail fast
+            $bcdTest = Wait-Job -Job $bcdJob -Timeout $quickTimeout | Receive-Job
             Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
             Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
             
             if ($null -eq $bcdTest) {
-                & $WriteLogFunction "[WARNING] BCD check timed out after $TimeoutSeconds seconds - BCD may be locked or corrupted"
-                # Treat timeout as missing/corrupted
-                $bcdTest = "TIMEOUT - BCD check exceeded $TimeoutSeconds seconds"
+                & $WriteLogFunction "[WARNING] BCD check timed out after $quickTimeout seconds - BCD may be locked or corrupted"
+                # Treat timeout as missing/corrupted - don't wait longer
+                $bcdTest = "TIMEOUT - BCD check exceeded $quickTimeout seconds"
             }
         }
         
         # Check for common BCD missing/corrupted errors
+        # If BCD file doesn't exist OR bcdedit reports errors, attempt recreation
         if (-not $bcdFileExists -or 
-            ($bcdTest -and ($bcdTest -match "The boot configuration data store could not be opened" -or
+            ($bcdTest -and ($bcdTest -match "BCD_FILE_NOT_FOUND" -or
+            $bcdTest -match "The boot configuration data store could not be opened" -or
             $bcdTest -match "The system cannot find the file specified" -or
             $bcdTest -match "The system cannot find the path specified" -or
             $bcdTest -match "TIMEOUT" -or
@@ -198,7 +345,7 @@ function Test-AndRecreateBCD {
                     & $WriteLogFunction "Verifying BCD accessibility (with 10 second timeout)..."
                     $verifyBcd = $null
                     $verifyJob = Start-Job -ScriptBlock {
-                        bcdedit /enum {bootmgr} 2>&1 | Out-String
+                        bcdedit /enum "{bootmgr}" 2>&1 | Out-String
                     }
                     
                     $verifyBcd = Wait-Job -Job $verifyJob -Timeout 10 | Receive-Job
@@ -289,7 +436,7 @@ function Invoke-BcdbootRepairWithFallback {
                 }
                 
                 # Get the default boot entry GUID
-                $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                $bcdEnum = bcdedit /enum "{default}" 2>&1 | Out-String
                 if ($bcdEnum -match "could not be opened|The system cannot find") {
                     & $WriteLogFunction "[WARNING] BCD is not accessible, cannot fix drive IDs"
                     return
@@ -299,8 +446,8 @@ function Invoke-BcdbootRepairWithFallback {
                     $defaultGuid = $matches[1]
                     
                     # Set device and osdevice explicitly to C: partition
-                    $deviceCmd = "bcdedit /set {$defaultGuid} device partition=$Drive`:"
-                    $osdeviceCmd = "bcdedit /set {$defaultGuid} osdevice partition=$Drive`:"
+                    $deviceCmd = "bcdedit /set `"{$defaultGuid}`" device partition=$Drive`:"
+                    $osdeviceCmd = "bcdedit /set `"{$defaultGuid}`" osdevice partition=$Drive`:"
                     
                     & $WriteLogFunction "Running: $deviceCmd"
                     $deviceOutput = & bcdedit /set "{$defaultGuid}" device "partition=$Drive`:" 2>&1 | Out-String
@@ -419,7 +566,7 @@ exit
                         & $WriteLogFunction "[WARNING] BCD may not be accessible after Force Wipe"
                     }
                     
-                    $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                    $bcdEnum = bcdedit /enum "{default}" 2>&1 | Out-String
                     if ($bcdEnum -match "could not be opened|The system cannot find") {
                         & $WriteLogFunction "[WARNING] BCD is not accessible, cannot fix drive IDs"
                         return
@@ -2359,7 +2506,7 @@ function Get-BCDDefaultEntryId {
         # Check BCD accessibility with timeout (10 seconds)
         $bcdTest = $null
         $bcdJob = Start-Job -ScriptBlock {
-            bcdedit /enum {bootmgr} 2>&1 | Out-String
+            bcdedit /enum "{bootmgr}" 2>&1 | Out-String
         }
         
         $bcdTest = Wait-Job -Job $bcdJob -Timeout 10 | Receive-Job
@@ -2373,7 +2520,7 @@ function Get-BCDDefaultEntryId {
         # Get the default entry from Windows Boot Manager (with timeout)
         $bootMgrOutput = $null
         $bootMgrJob = Start-Job -ScriptBlock {
-            bcdedit /enum {bootmgr} 2>&1
+            bcdedit /enum "{bootmgr}" 2>&1
         }
         
         $bootMgrOutput = Wait-Job -Job $bootMgrJob -Timeout 10 | Receive-Job
@@ -4685,7 +4832,8 @@ if ($btnOneClickRepair) {
             try {
                 # First, check if BCD exists and recreate if missing (with short timeout to prevent hanging)
                 Write-Log "Checking if BCD file exists and is accessible..."
-                $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log} -TimeoutSeconds 10
+                # Use shorter timeout (5 seconds) to fail fast
+                $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log} -TimeoutSeconds 5
                 
                 # If BCD was recreated, wait a moment for it to be available
                 if ($bcdCheckResult.Success -and $bcdCheckResult.Message -match "recreated") {
@@ -4693,40 +4841,56 @@ if ($btnOneClickRepair) {
                     Start-Sleep -Seconds 2
                 }
                 
-                # Only run detailed BCD check if BCD exists and is accessible
-                # Skip if BCD is missing (would hang) or was just recreated
-                if ($bcdCheckResult.Success -and $bcdCheckResult.Message -notmatch "recreated") {
-                    # Add timeout to prevent hanging (30 seconds max)
-                    Write-Log "Running bcdedit /enum all (with 30 second timeout)..."
+                # Handle different BCD check results
+                if (-not $bcdCheckResult.Success) {
+                    # BCD check failed or BCD doesn't exist - need to recreate
+                    Write-Log "[INFO] BCD check failed or BCD is missing - will attempt recreation"
+                    $bcdCheck = "BCD_MISSING_OR_INACCESSIBLE"
+                } elseif ($bcdCheckResult.Message -match "recreated") {
+                    # BCD was just recreated - skip detailed check
+                    Write-Log "[INFO] BCD was just recreated - skipping detailed check"
+                    $bcdCheck = "SKIPPED - BCD was just recreated"
+                } elseif ($bcdCheckResult.Message -match "BCD is accessible") {
+                    # BCD exists and is accessible - run detailed check
+                    Write-Log "Running bcdedit /enum all (with 5 second timeout - fast fail)..."
                     $bcdCheck = $null
                     $bcdJob = Start-Job -ScriptBlock {
                         param($drive)
                         bcdedit /enum all 2>&1 | Out-String
                     } -ArgumentList $drive
                     
-                    $bcdCheck = Wait-Job -Job $bcdJob -Timeout 30 | Receive-Job
+                    $bcdCheck = Wait-Job -Job $bcdJob -Timeout 5 | Receive-Job
                     Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
                     Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
                     
                     if ($null -eq $bcdCheck) {
-                        Write-Log "[WARNING] BCD check timed out after 30 seconds - BCD may be locked or corrupted"
+                        Write-Log "[WARNING] BCD check timed out after 5 seconds - BCD may be locked or corrupted"
                         Write-Log "Skipping detailed BCD check and proceeding to boot file verification"
-                        $bcdCheck = "TIMEOUT - BCD check exceeded 30 seconds"
+                        $bcdCheck = "TIMEOUT - BCD check exceeded 5 seconds"
                     } else {
                         Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
                     }
                 } else {
-                    Write-Log "[INFO] Skipping detailed BCD check (BCD missing or was just recreated)"
-                    $bcdCheck = "SKIPPED - BCD missing or recreated"
+                    # Unknown state - treat as missing
+                    Write-Log "[WARNING] BCD state unclear - treating as missing"
+                    $bcdCheck = "BCD_STATE_UNKNOWN"
                 }
                 
-                if ($bcdCheck -match "The boot configuration data store could not be opened" -or
+                # Check if BCD needs to be rebuilt
+                if ($bcdCheck -match "BCD_MISSING_OR_INACCESSIBLE" -or
+                    $bcdCheck -match "BCD_STATE_UNKNOWN" -or
+                    $bcdCheck -match "The boot configuration data store could not be opened" -or
                     $bcdCheck -match "The system cannot find the file specified" -or
                     $bcdCheck -match "The system cannot find the path specified" -or
-                    $bcdCheck -match "SKIPPED" -or
                     $bcdCheck -match "TIMEOUT") {
-                    Write-Log "[ERROR] BCD is corrupted or missing"
-                    Write-Log "Action: Attempting to rebuild BCD using bcdboot..."
+                    
+                    # Determine if this is a missing BCD or corrupted BCD
+                    if ($bcdCheck -match "BCD_MISSING_OR_INACCESSIBLE" -or $bcdCheck -match "BCD_STATE_UNKNOWN") {
+                        Write-Log "[INFO] BCD file is missing - attempting to create new BCD using bcdboot..."
+                    } else {
+                        Write-Log "[ERROR] BCD is corrupted or inaccessible"
+                        Write-Log "Action: Attempting to rebuild BCD using bcdboot..."
+                    }
                     
                     # Attempt BCD rebuild using bcdboot (more reliable than bootrec for UEFI)
                     if ($txtOneClickStatus) {
@@ -5105,13 +5269,35 @@ exit
                             Write-Log "Copying from Boot folder to System32..."
                             if (-not $testMode) {
                                 try {
+                                    # If destination exists and is protected by TrustedInstaller, take ownership first
+                                    if (Test-Path $winloadWindowsPath) {
+                                        Write-Log "[INFO] Destination file exists - checking if ownership/permissions need adjustment..."
+                                        $ownershipResult = Set-FileOwnershipAndPermissions -FilePath $winloadWindowsPath -WriteLogFunction ${function:Write-Log}
+                                        if (-not $ownershipResult.Success) {
+                                            Write-Log "[WARNING] Could not set ownership/permissions: $($ownershipResult.Message)"
+                                            Write-Log "[WARNING] Attempting copy anyway (may fail if protected)..."
+                                        }
+                                    }
+                                    
                                     Copy-Item $winloadBootPath $winloadWindowsPath -Force -ErrorAction Stop
                                     if (Test-Path $winloadWindowsPath) {
                                         Write-Log "[SUCCESS] winload.efi copied from Boot folder to System32"
                                     }
                                 } catch {
                                     Write-Log "[WARNING] Failed to copy from Boot folder: $_"
-                                    Write-Log "The issue may be that the destination (EFI Partition) is write-protected or out of space."
+                                    Write-Log "The issue may be that the destination is protected by TrustedInstaller or write-protected."
+                                    Write-Log "Attempting to take ownership and retry..."
+                                    
+                                    # Retry with ownership/permissions
+                                    $ownershipResult = Set-FileOwnershipAndPermissions -FilePath $winloadWindowsPath -WriteLogFunction ${function:Write-Log}
+                                    if ($ownershipResult.Success) {
+                                        try {
+                                            Copy-Item $winloadBootPath $winloadWindowsPath -Force -ErrorAction Stop
+                                            Write-Log "[SUCCESS] winload.efi copied after taking ownership"
+                                        } catch {
+                                            Write-Log "[ERROR] Copy still failed after taking ownership: $_"
+                                        }
+                                    }
                                 }
                             } else {
                                 Write-CommandLog -Command "Copy-Item $winloadBootPath $winloadWindowsPath" -Description "Copy winload.efi from Boot folder to System32" -IsRepairCommand:$true
@@ -5236,9 +5422,26 @@ exit
                         Write-Log "Step 2: Verifying file attributes..."
                         if (-not $testMode) {
                             try {
-                                # Clear any problematic attributes
-                                attrib -s -h -r $winloadWindowsPath 2>&1 | Out-Null
-                                Write-Log "[OK] File attributes verified"
+                                # First ensure we have ownership/permissions
+                                $ownershipResult = Set-FileOwnershipAndPermissions -FilePath $winloadWindowsPath -WriteLogFunction ${function:Write-Log}
+                                if (-not $ownershipResult.Success) {
+                                    Write-Log "[WARNING] Could not set ownership/permissions: $($ownershipResult.Message)"
+                                }
+                                
+                                # Clear any problematic attributes using attrib
+                                $attribResult = & attrib -s -h -r $winloadWindowsPath 2>&1 | Out-String
+                                if ($LASTEXITCODE -ne 0) {
+                                    # Fallback: Use Set-ItemProperty if attrib fails
+                                    Write-Log "[INFO] attrib failed, trying Set-ItemProperty fallback..."
+                                    try {
+                                        Set-ItemProperty -Path $winloadWindowsPath -Name IsReadOnly -Value $false -ErrorAction Stop
+                                        Write-Log "[OK] File attributes verified (using Set-ItemProperty)"
+                                    } catch {
+                                        Write-Log "[WARNING] Could not modify file attributes: $_"
+                                    }
+                                } else {
+                                    Write-Log "[OK] File attributes verified"
+                                }
                             } catch {
                                 Write-Log "[WARNING] Could not modify file attributes: $_"
                             }
@@ -5251,10 +5454,27 @@ exit
                         try {
                             $efiBootPath = "$efiDrive`:\EFI\Microsoft\Boot"
                             if (Test-Path $efiBootPath) {
-                                # Clear attributes on all boot files
+                                # Clear attributes on all boot files using attrib
                                 $attribOutput = & attrib -r -s -h "$efiBootPath\*.*" 2>&1 | Out-String
-                                Write-Log "Attrib Output: $attribOutput"
-                                Write-Log "[OK] Read-only attributes cleared on EFI boot files"
+                                if ($LASTEXITCODE -ne 0) {
+                                    # Fallback: Use Set-ItemProperty if attrib fails
+                                    Write-Log "[INFO] attrib failed, trying Set-ItemProperty fallback for EFI files..."
+                                    try {
+                                        Get-ChildItem -Path $efiBootPath -File | ForEach-Object {
+                                            try {
+                                                Set-ItemProperty -Path $_.FullName -Name IsReadOnly -Value $false -ErrorAction Stop
+                                            } catch {
+                                                Write-Log "[WARNING] Could not clear read-only on $($_.Name): $_"
+                                            }
+                                        }
+                                        Write-Log "[OK] Read-only attributes cleared on EFI boot files (using Set-ItemProperty)"
+                                    } catch {
+                                        Write-Log "[WARNING] Set-ItemProperty fallback also failed: $_"
+                                    }
+                                } else {
+                                    Write-Log "Attrib Output: $attribOutput"
+                                    Write-Log "[OK] Read-only attributes cleared on EFI boot files"
+                                }
                             }
                         } catch {
                             Write-Log "[WARNING] Could not clear attributes: $_"
@@ -5520,11 +5740,11 @@ exit
                     }
                     
                     # Always run bcdedit accessibility check (captures hidden/permissioned stores)
-                    Write-Log "Checking BCD accessibility (with 15 second timeout)..."
+                    Write-Log "Checking BCD accessibility (with 5 second timeout - fast fail)..."
                     $bcdJob = Start-Job -ScriptBlock {
                         bcdedit /enum all 2>&1 | Out-String
                     }
-                    $bcdCheckOutput = Wait-Job -Job $bcdJob -Timeout 15 | Receive-Job
+                    $bcdCheckOutput = Wait-Job -Job $bcdJob -Timeout 5 | Receive-Job
                     Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
                     Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
                     
@@ -5550,6 +5770,47 @@ exit
                             Write-Log "[INFO] BCD not located via Test-Path, but bcdedit succeeded. Treating BCD as accessible (likely hidden/permissioned store)."
                         }
                         Write-Log "[✅ FIXED] BCD is accessible and appears healthy"
+                        
+                        # Enhanced verification: Check that BCD path entry points to correct winload.efi
+                        if ($efiDrive) {
+                            Write-Log "Verifying BCD path entry points to correct winload.efi..."
+                            try {
+                                $bcdStorePath = "$efiDrive`:\EFI\Microsoft\Boot\BCD"
+                                if (Test-Path $bcdStorePath) {
+                                    $bcdPathCheck = $null
+                                    $bcdPathJob = Start-Job -ScriptBlock {
+                                        param($storePath)
+                                        bcdedit /store $storePath /enum "{default}" 2>&1 | Out-String
+                                    } -ArgumentList $bcdStorePath
+                                    
+                                    $bcdPathCheck = Wait-Job -Job $bcdPathJob -Timeout 10 | Receive-Job
+                                    Stop-Job -Job $bcdPathJob -ErrorAction SilentlyContinue
+                                    Remove-Job -Job $bcdPathJob -ErrorAction SilentlyContinue
+                                    
+                                    if ($bcdPathCheck -and $bcdPathCheck -match 'path\s+(.+winload\.efi)') {
+                                        $bcdPath = $matches[1].Trim()
+                                        Write-Log "[OK] BCD path entry verified: $bcdPath"
+                                        
+                                        # Verify the path actually exists
+                                        $expectedPath = "$drive`:\Windows\System32\winload.efi"
+                                        if ($bcdPath -match '\\Windows\\system32\\winload\.efi' -or $bcdPath -eq '\Windows\system32\winload.efi') {
+                                            if (Test-Path $expectedPath) {
+                                                Write-Log "[OK] BCD path points to existing winload.efi"
+                                            } else {
+                                                Write-Log "[WARNING] BCD path entry exists but winload.efi not found at expected location"
+                                                $remainingIssues++
+                                                $verificationResults += "BCD: PATH MISMATCH (winload.efi missing)"
+                                            }
+                                        }
+                                    } else {
+                                        Write-Log "[INFO] Could not verify BCD path entry (may be normal for some configurations)"
+                                    }
+                                }
+                            } catch {
+                                Write-Log "[INFO] BCD path verification skipped: $_"
+                            }
+                        }
+                        
                         $verificationResults += "BCD: FIXED"
                     }
                     
@@ -5827,7 +6088,7 @@ exit
                             $bcdJob = Start-Job -ScriptBlock {
                                 bcdedit /enum all 2>&1 | Out-String
                             }
-                            $bcdCheckOutput = Wait-Job -Job $bcdJob -Timeout 15 | Receive-Job
+                            $bcdCheckOutput = Wait-Job -Job $bcdJob -Timeout 5 | Receive-Job
                             Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
                             Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
                             
