@@ -229,19 +229,35 @@ if not "!EFI_DRIVE!"=="" (
     echo.
     echo [Diagnosis 3] Checking BCD file...
     if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+        echo   [INFO] BCD file exists, checking integrity...
         bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
         if errorlevel 1 (
             echo   [CRITICAL] BCD file is corrupted or unreadable
+            REM Capture error message for specific error types
+            bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} 2>&1 | findstr /i "invalid\|could not\|specified entry" >nul
+            if not errorlevel 1 (
+                echo   [DETAIL] Error: "The specified entry type is invalid" or similar
+                echo   [INFO] This indicates BCD store structure corruption
+            )
             set /a ISSUES_FOUND+=1
             set /a CRITICAL_ISSUES+=1
         ) else (
             echo   [OK] BCD file is readable
+        )
+        
+        REM Also try enum all to check for other BCD errors
+        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum all >nul 2>&1
+        if errorlevel 1 (
+            echo   [WARNING] BCD /enum all failed - may have additional corruption
         )
     ) else (
         echo   [CRITICAL] BCD file missing from EFI partition
         set /a ISSUES_FOUND+=1
         set /a CRITICAL_ISSUES+=1
     )
+) else (
+    echo   [WARNING] Cannot check BCD - EFI partition not accessible
+    set /a ISSUES_FOUND+=1
 )
 
 REM ============================================================================
