@@ -14,8 +14,10 @@ if /I not "%SystemDrive%"=="X" (
     echo SAFETY WARNING: You are running from a live Windows OS drive %SystemDrive%
     echo Destructive boot repairs can brick the system if misused.
     echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
-    powershell.exe -NoProfile -Command "$confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.'; exit 1 }"
-    if errorlevel 1 exit /b 1
+    powershell.exe -NoProfile -Command "$confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.' -ForegroundColor Yellow; exit 1 }" >nul 2>&1
+    if errorlevel 1 (
+        exit /b 1
+    )
 )
 
 :ContinueScript
