@@ -111,6 +111,7 @@ function Test-AndRecreateBCD {
         $bcdFilePaths = @(
             "$env:SystemRoot\Boot\BCD",  # Legacy BIOS
             "$env:SystemDrive\Boot\BCD",  # Legacy BIOS alternative
+            "$Drive`:\Boot\BCD",          # Explicit drive check (WinPE/shifted roots)
             "$env:SystemRoot\EFI\Microsoft\Boot\BCD"  # UEFI (if mounted)
         )
         
@@ -184,7 +185,7 @@ function Test-AndRecreateBCD {
             }
             
             if ($EfiDrive) {
-                # Recreate BCD using bcdboot
+                # Recreate BCD using bcdboot (UEFI path)
                 & $WriteLogFunction "Running: bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI"
                 $bcdbootOutput = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI 2>&1 | Out-String
                 & $WriteLogFunction "bcdboot Output: $bcdbootOutput"
@@ -219,8 +220,27 @@ function Test-AndRecreateBCD {
                     return @{ Success = $false; Message = "bcdboot failed: $bcdbootOutput" }
                 }
             } else {
-                & $WriteLogFunction "[ERROR] Cannot recreate BCD: EFI partition not accessible"
-                return @{ Success = $false; Message = "EFI partition not accessible" }
+                & $WriteLogFunction "[WARNING] EFI partition not accessible. Attempting legacy BIOS BCD creation on $Drive`:\\Boot..."
+                try {
+                    $legacyPath = "$Drive`:\Boot"
+                    if (-not (Test-Path $legacyPath)) {
+                        New-Item -ItemType Directory -Path $legacyPath -Force | Out-Null
+                    }
+                    & $WriteLogFunction "Running: bcdboot $Drive`:\Windows /s $Drive`: /f BIOS"
+                    $biosBcdOutput = & bcdboot "$Drive`:\Windows" /s "$Drive`:" /f BIOS 2>&1 | Out-String
+                    & $WriteLogFunction "bcdboot (BIOS) Output: $biosBcdOutput"
+                    
+                    if ($LASTEXITCODE -eq 0 -or $biosBcdOutput -match "Boot files successfully created") {
+                        & $WriteLogFunction "[SUCCESS] Legacy BCD created at $legacyPath"
+                        return @{ Success = $true; Message = "BCD recreated in legacy mode (BIOS fallback)" }
+                    } else {
+                        & $WriteLogFunction "[ERROR] Legacy BCD creation failed"
+                        return @{ Success = $false; Message = "Legacy bcdboot failed: $biosBcdOutput" }
+                    }
+                } catch {
+                    & $WriteLogFunction "[ERROR] Cannot recreate BCD: EFI partition not accessible and legacy fallback failed: $_"
+                    return @{ Success = $false; Message = "EFI partition not accessible; legacy fallback failed" }
+                }
             }
         } else {
             # BCD is accessible
