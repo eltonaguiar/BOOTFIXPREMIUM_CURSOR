@@ -497,9 +497,43 @@ if ($canLaunchGUI) {
         Write-Host "Press any key to continue with TUI mode..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         
+    # Try to load TUI, fall back to emergency repair if syntax errors
+    $tuiLoaded = $false
+    try {
         . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
-        Start-TUI
-        exit
+        if (Get-Command Start-TUI -ErrorAction SilentlyContinue) {
+            $tuiLoaded = $true
+            Start-TUI
+            exit
+        }
+    } catch {
+        $tuiError = $_.Exception.Message
+        Write-Host ""
+        Write-Host "=" * 80 -ForegroundColor Red
+        Write-Host "TUI MODULE FAILED TO LOAD" -ForegroundColor Red
+        Write-Host "=" * 80 -ForegroundColor Red
+        Write-Host "Error: $tuiError" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Falling back to Emergency Repair routine..." -ForegroundColor Cyan
+        Write-Host ""
+    }
+    
+    # Fallback to emergency repair if TUI failed
+    if (-not $tuiLoaded) {
+        try {
+            . "$PSScriptRoot\Helper\EmergencyRepair.ps1"
+            if (Get-Command Start-EmergencyRepair -ErrorAction SilentlyContinue) {
+                Start-EmergencyRepair -Drive $env:SystemDrive.TrimEnd(':')
+            } else {
+                Write-Host "ERROR: Emergency repair function not found!" -ForegroundColor Red
+                Write-Host "Please check Helper\EmergencyRepair.ps1" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "CRITICAL: Emergency repair also failed: $_" -ForegroundColor Red
+            Write-Host "Manual intervention required." -ForegroundColor Yellow
+        }
+    }
+    exit
     }
     
     try {
@@ -713,8 +747,42 @@ if ($canLaunchGUI) {
         Write-Host "A diagnostic report has been opened in Notepad with full details." -ForegroundColor Cyan
         Write-Host "Press any key to continue with TUI mode..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
-        Start-TUI
+        
+        # Try to load TUI, fall back to emergency repair if syntax errors
+        $tuiLoaded = $false
+        try {
+            . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
+            if (Get-Command Start-TUI -ErrorAction SilentlyContinue) {
+                $tuiLoaded = $true
+                Start-TUI
+            }
+        } catch {
+            $tuiError = $_.Exception.Message
+            Write-Host ""
+            Write-Host "=" * 80 -ForegroundColor Red
+            Write-Host "TUI MODULE FAILED TO LOAD" -ForegroundColor Red
+            Write-Host "=" * 80 -ForegroundColor Red
+            Write-Host "Error: $tuiError" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Falling back to Emergency Repair routine..." -ForegroundColor Cyan
+            Write-Host ""
+        }
+        
+        # Fallback to emergency repair if TUI failed
+        if (-not $tuiLoaded) {
+            try {
+                . "$PSScriptRoot\Helper\EmergencyRepair.ps1"
+                if (Get-Command Start-EmergencyRepair -ErrorAction SilentlyContinue) {
+                    Start-EmergencyRepair -Drive $env:SystemDrive.TrimEnd(':')
+                } else {
+                    Write-Host "ERROR: Emergency repair function not found!" -ForegroundColor Red
+                    Write-Host "Please check Helper\EmergencyRepair.ps1" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "CRITICAL: Emergency repair also failed: $_" -ForegroundColor Red
+                Write-Host "Manual intervention required." -ForegroundColor Yellow
+            }
+        }
     }
 } else {
     # WinRE or WinPE - use MS-DOS Style mode
@@ -738,6 +806,39 @@ if ($canLaunchGUI) {
     } catch {}
     #endregion
     
-    . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
-    Start-TUI
+    # Try to load TUI, fall back to emergency repair if syntax errors
+    $tuiLoaded = $false
+    try {
+        . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
+        if (Get-Command Start-TUI -ErrorAction SilentlyContinue) {
+            $tuiLoaded = $true
+            Start-TUI
+        }
+    } catch {
+        $tuiError = $_.Exception.Message
+        Write-Host ""
+        Write-Host "=" * 80 -ForegroundColor Red
+        Write-Host "TUI MODULE FAILED TO LOAD" -ForegroundColor Red
+        Write-Host "=" * 80 -ForegroundColor Red
+        Write-Host "Error: $tuiError" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Falling back to Emergency Repair routine..." -ForegroundColor Cyan
+        Write-Host ""
+    }
+    
+    # Fallback to emergency repair if TUI failed
+    if (-not $tuiLoaded) {
+        try {
+            . "$PSScriptRoot\Helper\EmergencyRepair.ps1"
+            if (Get-Command Start-EmergencyRepair -ErrorAction SilentlyContinue) {
+                Start-EmergencyRepair -Drive $env:SystemDrive.TrimEnd(':')
+            } else {
+                Write-Host "ERROR: Emergency repair function not found!" -ForegroundColor Red
+                Write-Host "Please check Helper\EmergencyRepair.ps1" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "CRITICAL: Emergency repair also failed: $_" -ForegroundColor Red
+            Write-Host "Manual intervention required." -ForegroundColor Yellow
+        }
+    }
 }
