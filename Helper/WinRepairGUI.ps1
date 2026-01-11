@@ -6202,6 +6202,7 @@ exit
                     # Fall back to opening basic log file
                     Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
                 }
+                }
             } else {
                 # Fall back to opening basic log file if report generator not available
                 Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
@@ -6209,7 +6210,6 @@ exit
             }
             
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
-            
         } catch {
             $errorMessage = $_.Exception.Message
             $errorCategory = $_.CategoryInfo.Category
