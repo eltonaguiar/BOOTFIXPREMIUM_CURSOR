@@ -5415,7 +5415,7 @@ exit
                         throw "winload.efi verification failed"
                     }
                     Write-Log ""
-                        }  # End of if ($winloadMissing) block
+                    }  # End of if ($winloadMissing) block
                     
                     # Step 2: Verify file attributes (clear hidden/system if needed)
                     if (Test-Path $winloadWindowsPath) {
@@ -5522,7 +5522,7 @@ exit
                         Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                         Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI /v" -Description "bcdboot command (TEST MODE)" -IsRepairCommand:$true
                     }
-                }  # End of if (-not $useDefensiveLogic) block
+                    }  # End of if (-not $useDefensiveLogic) block
                 } else {
                     try {
                         # Fallback: EFI partition not mounted - try bootrec if available
