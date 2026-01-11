@@ -6,7 +6,47 @@ Three emergency boot repair scripts have been created to handle boot issues when
 
 ---
 
+## Quick Reference: Which Script to Use
+
+**If you see this error:**
+- `"The system cannot find the file specified"` from `bcdedit`
+- `"The boot configuration data store could not be opened"`
+
+**→ Use: `FIX_BCD_NOT_FOUND.cmd`** (Targeted fix for missing BCD)
+
+**If One-Click Repair failed:**
+- **→ Try: `EMERGENCY_BOOT3.cmd`** (Comprehensive repair with all strategies)
+
+**If you need quick fix:**
+- **→ Use: `EMERGENCY_BOOT1.cmd`** (Simple, fast)
+
+**If you have multiple Windows installations:**
+- **→ Use: `EMERGENCY_BOOT2.cmd`** (Auto-detects and lets you choose)
+
+---
+
 ## When to Use Each Script
+
+### FIX_BCD_NOT_FOUND.cmd - Targeted Fix (NEW)
+**Use when:**
+- You see the error: "The system cannot find the file specified" from `bcdedit`
+- One-Click Repair failed to fix BCD
+- BCD file is completely missing (not just corrupted)
+- You need a step-by-step, targeted repair
+
+**What it does:**
+- Step-by-step repair process with clear status messages
+- Verifies winload.efi exists (restores if needed)
+- Mounts EFI partition using multiple methods
+- Distinguishes between missing vs corrupted BCD
+- Creates new BCD using bcdboot
+- Formats EFI partition if needed (with warning)
+- Verifies BCD was created and is accessible
+- Provides detailed error messages at each step
+
+**Best for:** When One-Click Repair fails and you need a targeted fix
+
+---
 
 ### EMERGENCY_BOOT1.cmd - Simple Mode
 **Use when:**
@@ -101,17 +141,22 @@ Three emergency boot repair scripts have been created to handle boot issues when
 **Symptoms:**
 - "Boot Configuration Data file is missing"
 - "BCD is missing or contains errors"
+- "The system cannot find the file specified" (from bcdedit)
+- "The boot configuration data store could not be opened"
 - Boot menu doesn't appear
 
 **Solutions:**
-1. Rebuild BCD: `bootrec /rebuildbcd`
-2. Use bcdboot: `bcdboot C:\Windows /s S: /f UEFI`
-3. Format EFI partition and retry: `format S: /fs:FAT32 /q` then `bcdboot C:\Windows /s S: /f UEFI`
-4. Manual BCD creation using bcdedit
+1. **If BCD is completely missing:** Use `FIX_BCD_NOT_FOUND.cmd` (targeted fix)
+2. Rebuild BCD: `bootrec /rebuildbcd`
+3. Use bcdboot: `bcdboot C:\Windows /s S: /f UEFI`
+4. Format EFI partition and retry: `format S: /fs:FAT32 /q` then `bcdboot C:\Windows /s S: /f UEFI`
+5. Manual BCD creation using bcdedit
 
 **Which script handles this:**
-- All 3 scripts handle this
-- EMERGENCY_BOOT2.cmd and EMERGENCY_BOOT3.cmd provide detailed BCD diagnosis
+- **FIX_BCD_NOT_FOUND.cmd** - Best for "file not found" errors
+- **EMERGENCY_BOOT3.cmd** - Comprehensive repair with all strategies
+- **EMERGENCY_BOOT2.cmd** - Detailed BCD diagnosis
+- **EMERGENCY_BOOT1.cmd** - Basic BCD rebuild
 
 ---
 
@@ -332,16 +377,17 @@ Three emergency boot repair scripts have been created to handle boot issues when
 
 ## Script Comparison
 
-| Feature | EMERGENCY_BOOT1 | EMERGENCY_BOOT2 | EMERGENCY_BOOT3 |
-|---------|----------------|-----------------|-----------------|
-| Complexity | Simple | Advanced | Comprehensive |
-| Windows Detection | Manual input | Automatic scan | Automatic scan + details |
-| Diagnosis | Basic | Detailed | Comprehensive |
-| Repair Strategies | 1 (sequential) | 1 (per issue) | 5 (multiple fallbacks) |
-| install.wim Extraction | No | No | Yes |
-| Bootrec Commands | No | No | Yes (if available) |
-| EFI Format | No | Yes (if needed) | Yes (if needed) |
-| Best For | Quick fixes | Multiple installs | Complex issues |
+| Feature | FIX_BCD_NOT_FOUND | EMERGENCY_BOOT1 | EMERGENCY_BOOT2 | EMERGENCY_BOOT3 |
+|---------|-------------------|----------------|-----------------|-----------------|
+| Complexity | Targeted | Simple | Advanced | Comprehensive |
+| Windows Detection | Auto + manual | Manual input | Automatic scan | Automatic scan + details |
+| Diagnosis | Step-by-step | Basic | Detailed | Comprehensive |
+| Repair Strategies | 1 (targeted) | 1 (sequential) | 1 (per issue) | 5 (multiple fallbacks) |
+| install.wim Extraction | No | No | No | Yes |
+| Bootrec Commands | No | No | No | Yes (if available) |
+| EFI Format | Yes (if needed) | No | Yes (if needed) | Yes (if needed) |
+| BCD "File Not Found" | **Best** | Basic | Good | Good |
+| Best For | Missing BCD | Quick fixes | Multiple installs | Complex issues |
 
 ---
 
