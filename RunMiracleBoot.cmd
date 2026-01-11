@@ -10,7 +10,7 @@ echo(
 REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
 REM require explicit confirmation before allowing boot writes.
 if /I not "%SystemDrive%"=="X" (
-    echo SAFETY WARNING: You are running from a live Windows OS (%SystemDrive%).
+    echo SAFETY WARNING: You are running from a live Windows OS ^(%SystemDrive%^).
     echo Destructive boot repairs can brick the system if misused.
     echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
     set BRICKME_OK=
