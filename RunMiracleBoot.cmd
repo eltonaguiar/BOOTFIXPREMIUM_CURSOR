@@ -2,20 +2,19 @@
 REM Miracle Boot v7.2.0 Launcher
 REM Compatible with Windows Recovery Environment (WinRE) Shift+F10 command prompt
 
-echo.
+echo(
 echo ========================================
 echo   Miracle Boot v7.2.0 Launcher
 echo ========================================
-echo.
-
+echo(
 REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
 REM require explicit confirmation before allowing boot writes.
-if /I not "%SystemDrive%"=="X:" (
+if /I not "%SystemDrive%"=="X" (
     echo SAFETY WARNING: You are running from a live Windows OS (%SystemDrive%).
     echo Destructive boot repairs can brick the system if misused.
     echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
-    set "BRICKME_OK="
-    set /p BRICKME_OK="Type BRICKME to continue: "
+    set BRICKME_OK=
+    set /p BRICKME_OK=Type BRICKME to continue: 
     if /I not "%BRICKME_OK%"=="BRICKME" (
         echo Aborting by user choice. No changes made.
         exit /b 1
@@ -23,43 +22,44 @@ if /I not "%SystemDrive%"=="X:" (
 )
 
 REM Get the directory where this batch file is located
-set "SCRIPT_DIR=%~dp0"
+set SCRIPT_DIR=%~dp0
+set "SCRIPT_DIR=%SCRIPT_DIR%"
 
 REM Check if PowerShell is available
 powershell.exe -Command "exit 0" >nul 2>&1
 if errorlevel 1 (
     echo WARNING: PowerShell is not available in this environment.
-    echo.
+    echo(
     echo Falling back to CMD-based mode with limited functionality.
-    echo.
+    echo(
     echo Available options in CMD mode:
     echo   - Enable Network/Internet
     echo   - Check Internet Connectivity
     echo   - Open ChatGPT Help
     echo   - Check Windows Install Failure Reasons
-    echo.
+    echo(
     pause
-    echo.
+    echo(
     echo Launching CMD-based Miracle Boot...
-    echo.
+    echo(
     call "%SCRIPT_DIR%Helper\WinRepairCore.cmd"
     exit /b %errorlevel%
 )
 
 REM Launch the PowerShell script
 echo Launching Miracle Boot (PowerShell mode)...
-echo.
-powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '%SCRIPT_DIR%MiracleBoot.ps1'"
+echo(
+cd /d "%SCRIPT_DIR%"
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '.\MiracleBoot.ps1'"
 
 if errorlevel 1 (
-    echo.
+    echo(
     echo ERROR: Script execution failed.
-    echo.
+    echo(
     echo Troubleshooting:
     echo 1. Ensure all .ps1 files are in the same directory as this .cmd file
     echo 2. Check that you have administrator privileges
     echo 3. Try running PowerShell directly: powershell.exe -ExecutionPolicy Bypass -File MiracleBoot.ps1
-    echo.
+    echo(
     pause
 )
-

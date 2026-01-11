@@ -97,19 +97,103 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 # HELPER FUNCTIONS FOR BOOT REPAIR
 # ==============================================================================
 
+# Helper function to check if BCD exists and recreate if missing
+function Test-AndRecreateBCD {
+    param(
+        [string]$Drive = "C",
+        [string]$EfiDrive = $null,
+        [scriptblock]$WriteLogFunction = { param($msg) Write-Host $msg }
+    )
+    
+    try {
+        # First, try to check if BCD is accessible
+        $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
+        
+        # Check for common BCD missing/corrupted errors
+        if ($bcdTest -match "The boot configuration data store could not be opened" -or
+            $bcdTest -match "The system cannot find the file specified" -or
+            $bcdTest -match "The system cannot find the path specified" -or
+            $LASTEXITCODE -ne 0) {
+            
+            & $WriteLogFunction "[WARNING] BCD file is missing or corrupted"
+            & $WriteLogFunction "Attempting to recreate BCD using bcdboot..."
+            
+            # Determine EFI drive if not provided
+            if (-not $EfiDrive) {
+                # Try to find EFI partition
+                try {
+                    $efiMount = Mount-EFIPartition -WindowsDrive $Drive -PreferredLetter "S"
+                    if ($efiMount.Success) {
+                        $EfiDrive = $efiMount.DriveLetter
+                        & $WriteLogFunction "[OK] EFI partition mounted as $EfiDrive`:"
+                    } else {
+                        # Try mountvol as fallback
+                        $mountvolOutput = mountvol /S 2>&1 | Out-String
+                        if ($mountvolOutput -match "\\\\\?\\Volume\{[a-f0-9\-]+\}") {
+                            # Find which drive letter was assigned
+                            $volumes = Get-Volume | Where-Object { $_.DriveLetter -and $_.FileSystemType -eq "FAT32" }
+                            if ($volumes) {
+                                $EfiDrive = $volumes[0].DriveLetter
+                                & $WriteLogFunction "[OK] EFI partition found at $EfiDrive`:"
+                            }
+                        }
+                    }
+                } catch {
+                    & $WriteLogFunction "[WARNING] Could not auto-mount EFI partition: $_"
+                }
+            }
+            
+            if ($EfiDrive) {
+                # Recreate BCD using bcdboot
+                & $WriteLogFunction "Running: bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI"
+                $bcdbootOutput = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI 2>&1 | Out-String
+                & $WriteLogFunction "bcdboot Output: $bcdbootOutput"
+                
+                if ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created") {
+                    & $WriteLogFunction "[SUCCESS] BCD recreated successfully"
+                    Start-Sleep -Seconds 2  # Give system time to flush
+                    
+                    # Verify BCD is now accessible
+                    $verifyBcd = bcdedit /enum {bootmgr} 2>&1 | Out-String
+                    if ($verifyBcd -notmatch "could not be opened" -and $LASTEXITCODE -eq 0) {
+                        & $WriteLogFunction "[OK] BCD verification successful"
+                        return @{ Success = $true; Message = "BCD recreated successfully" }
+                    } else {
+                        & $WriteLogFunction "[WARNING] BCD recreated but verification failed"
+                        return @{ Success = $false; Message = "BCD recreated but not accessible" }
+                    }
+                } else {
+                    & $WriteLogFunction "[ERROR] bcdboot failed to recreate BCD"
+                    return @{ Success = $false; Message = "bcdboot failed: $bcdbootOutput" }
+                }
+            } else {
+                & $WriteLogFunction "[ERROR] Cannot recreate BCD: EFI partition not accessible"
+                return @{ Success = $false; Message = "EFI partition not accessible" }
+            }
+        } else {
+            # BCD is accessible
+            return @{ Success = $true; Message = "BCD is accessible" }
+        }
+    } catch {
+        & $WriteLogFunction "[ERROR] BCD check/recreate failed: $_"
+        return @{ Success = $false; Message = "BCD check failed: $_" }
+    }
+}
+
 # Helper function for bcdboot repair with fallback logic
 function Invoke-BcdbootRepairWithFallback {
     param(
         [string]$Drive,
         [string]$EfiDrive,
-        $VmdIssue
+        $VmdIssue,
+        [scriptblock]$WriteLogFunction
     )
     
     try {
         $bcdbootCmd = "bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI /v"
-        Write-Log "Step 3c: Running: $bcdbootCmd"
+        & $WriteLogFunction "Step 3c: Running: $bcdbootCmd"
         $bcdbootOutput = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI /v 2>&1 | Out-String
-        Write-Log "bcdboot Output: $bcdbootOutput"
+        & $WriteLogFunction "bcdboot Output: $bcdbootOutput"
         
         # Check for false positive - bcdboot may report success but not actually copy files
         $bcdbootSuccess = ($LASTEXITCODE -eq 0 -or $bcdbootOutput -match "Boot files successfully created")
@@ -119,14 +203,26 @@ function Invoke-BcdbootRepairWithFallback {
         $winloadActuallyCopied = Test-Path $winloadEfiPath
         
         if ($bcdbootSuccess -and $winloadActuallyCopied) {
-            Write-Log "[SUCCESS] Boot files repaired successfully using bcdboot"
-            Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
+            & $WriteLogFunction "[SUCCESS] Boot files repaired successfully using bcdboot"
+            & $WriteLogFunction "[SUCCESS] Verified: winload.efi is now present in EFI partition"
             
             # Step 3d: Fix BCD drive IDs explicitly (prevents "unknown" partition errors)
-            Write-Log "Step 3d: Fixing BCD drive identifiers..."
+            & $WriteLogFunction "Step 3d: Fixing BCD drive identifiers..."
             try {
+                # First, ensure BCD exists
+                $bcdCheck = Test-AndRecreateBCD -Drive $Drive -EfiDrive $EfiDrive -WriteLogFunction $WriteLogFunction
+                if (-not $bcdCheck.Success) {
+                    & $WriteLogFunction "[WARNING] BCD may not be accessible, skipping drive ID fix"
+                    return
+                }
+                
                 # Get the default boot entry GUID
                 $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                if ($bcdEnum -match "could not be opened|The system cannot find") {
+                    & $WriteLogFunction "[WARNING] BCD is not accessible, cannot fix drive IDs"
+                    return
+                }
+                
                 if ($bcdEnum -match '{([a-f0-9\-]{36})}') {
                     $defaultGuid = $matches[1]
                     
@@ -134,40 +230,40 @@ function Invoke-BcdbootRepairWithFallback {
                     $deviceCmd = "bcdedit /set {$defaultGuid} device partition=$Drive`:"
                     $osdeviceCmd = "bcdedit /set {$defaultGuid} osdevice partition=$Drive`:"
                     
-                    Write-Log "Running: $deviceCmd"
+                    & $WriteLogFunction "Running: $deviceCmd"
                     $deviceOutput = & bcdedit /set "{$defaultGuid}" device "partition=$Drive`:" 2>&1 | Out-String
-                    Write-Log "Device Output: $deviceOutput"
+                    & $WriteLogFunction "Device Output: $deviceOutput"
                     
-                    Write-Log "Running: $osdeviceCmd"
+                    & $WriteLogFunction "Running: $osdeviceCmd"
                     $osdeviceOutput = & bcdedit /set "{$defaultGuid}" osdevice "partition=$Drive`:" 2>&1 | Out-String
-                    Write-Log "OSDevice Output: $osdeviceOutput"
+                    & $WriteLogFunction "OSDevice Output: $osdeviceOutput"
                     
-                    Write-Log "[OK] BCD drive identifiers fixed"
+                    & $WriteLogFunction "[OK] BCD drive identifiers fixed"
                 } else {
-                    Write-Log "[INFO] Could not find default boot entry GUID, skipping drive ID fix"
+                    & $WriteLogFunction "[INFO] Could not find default boot entry GUID, skipping drive ID fix"
                 }
             } catch {
-                Write-Log "[WARNING] Could not fix BCD drive IDs: $_"
+                & $WriteLogFunction "[WARNING] Could not fix BCD drive IDs: $_"
             }
         } elseif ($bcdbootSuccess -and -not $winloadActuallyCopied) {
-            Write-Log "[WARNING] FALSE POSITIVE: bcdboot reported success but winload.efi was NOT copied!"
-            Write-Log "This indicates a write failure (possibly VMD, read-only EFI, or drive access issue)"
+            & $WriteLogFunction "[WARNING] FALSE POSITIVE: bcdboot reported success but winload.efi was NOT copied!"
+            & $WriteLogFunction "This indicates a write failure (possibly VMD, read-only EFI, or drive access issue)"
             
             # Check if VMD is the issue
             if ($VmdIssue -and $VmdIssue.VMDDetected -and -not $VmdIssue.DriverLoaded) {
-                Write-Log "[CRITICAL] Intel VMD driver not loaded - this is likely the cause!"
-                Write-Log "bcdboot cannot write to NVMe drive without VMD driver."
+                & $WriteLogFunction "[CRITICAL] Intel VMD driver not loaded - this is likely the cause!"
+                & $WriteLogFunction "bcdboot cannot write to NVMe drive without VMD driver."
             }
             
             # Proceed to Force Wipe mode
-            Write-Log "Proceeding to Force Wipe mode..."
-            Invoke-ForceWipeMode -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath -VmdIssue $VmdIssue
+            & $WriteLogFunction "Proceeding to Force Wipe mode..."
+            Invoke-ForceWipeMode -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath -VmdIssue $VmdIssue -WriteLogFunction $WriteLogFunction
         } else {
-            Write-Log "[WARNING] bcdboot reported issues. Check output above."
-            Invoke-EfiPartitionHealthCheck -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath
+            & $WriteLogFunction "[WARNING] bcdboot reported issues. Check output above."
+            Invoke-EfiPartitionHealthCheck -Drive $Drive -EfiDrive $EfiDrive -WinloadEfiPath $winloadEfiPath -WriteLogFunction $WriteLogFunction
         }
     } catch {
-        Write-Log "[ERROR] bcdboot failed: $_"
+        & $WriteLogFunction "[ERROR] bcdboot failed: $_"
     }
 }
 
@@ -176,36 +272,37 @@ function Invoke-ForceWipeMode {
         [string]$Drive,
         [string]$EfiDrive,
         [string]$WinloadEfiPath,
-        $VmdIssue
+        $VmdIssue,
+        [scriptblock]$WriteLogFunction
     )
     
     # Step 4: FORCE WIPE MODE - Aggressive EFI Partition Repair
-    Write-Log "==============================================================="
-    Write-Log "FORCE WIPE MODE - Aggressive EFI Partition Repair"
-    Write-Log "==============================================================="
-    Write-Log ""
+    & $WriteLogFunction "==============================================================="
+    & $WriteLogFunction "FORCE WIPE MODE - Aggressive EFI Partition Repair"
+    & $WriteLogFunction "==============================================================="
+    & $WriteLogFunction ""
     
     # Step 4a: Delete old BCD and winload.efi manually
-    Write-Log "Step 4a: Manually deleting old BCD and winload.efi from EFI partition..."
+    & $WriteLogFunction "Step 4a: Manually deleting old BCD and winload.efi from EFI partition..."
     try {
         $oldBcdPath = "$EfiDrive`:\EFI\Microsoft\Boot\BCD"
         $oldWinloadPath = "$EfiDrive`:\EFI\Microsoft\Boot\winload.efi"
         
         if (Test-Path $oldBcdPath) {
             Remove-Item $oldBcdPath -Force -ErrorAction SilentlyContinue
-            Write-Log "[OK] Deleted old BCD file"
+            & $WriteLogFunction "[OK] Deleted old BCD file"
         }
         if (Test-Path $oldWinloadPath) {
             Remove-Item $oldWinloadPath -Force -ErrorAction SilentlyContinue
-            Write-Log "[OK] Deleted old winload.efi file"
+            & $WriteLogFunction "[OK] Deleted old winload.efi file"
         }
     } catch {
-        Write-Log "[WARNING] Could not delete old files: $_"
+        & $WriteLogFunction "[WARNING] Could not delete old files: $_"
     }
     
     # Step 4b: Format EFI partition using diskpart (more reliable than format command)
-    Write-Log "Step 4b: Formatting EFI partition using diskpart..."
-    Write-Log "WARNING: This will completely wipe the EFI partition (safe if Windows partition is intact)"
+    & $WriteLogFunction "Step 4b: Formatting EFI partition using diskpart..."
+    & $WriteLogFunction "WARNING: This will completely wipe the EFI partition (safe if Windows partition is intact)"
     
     try {
         # Get partition number for diskpart
@@ -223,71 +320,82 @@ active
 exit
 "@
             
-            Write-Log "Running diskpart format..."
+            & $WriteLogFunction "Running diskpart format..."
             $formatOutput = $diskpartScript | diskpart 2>&1 | Out-String
-            Write-Log "Diskpart Output: $formatOutput"
+            & $WriteLogFunction "Diskpart Output: $formatOutput"
             
             Start-Sleep -Seconds 3
             
             # Step 4c: Retry bcdboot with /addlast flag
-            Write-Log "Step 4c: Retrying bcdboot with /addlast flag after format..."
+            & $WriteLogFunction "Step 4c: Retrying bcdboot with /addlast flag after format..."
             $bcdbootRetryCmd = "bcdboot $Drive`:\Windows /s $EfiDrive`: /f UEFI /v /addlast"
-            Write-Log "Running: $bcdbootRetryCmd"
+            & $WriteLogFunction "Running: $bcdbootRetryCmd"
             $bcdbootRetry = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI /v /addlast 2>&1 | Out-String
-            Write-Log "bcdboot Retry Output: $bcdbootRetry"
+            & $WriteLogFunction "bcdboot Retry Output: $bcdbootRetry"
             
             # Verify again
             Start-Sleep -Seconds 2
             if (Test-Path $WinloadEfiPath) {
-                Write-Log "[SUCCESS] winload.efi copied to EFI partition after Force Wipe"
+                & $WriteLogFunction "[SUCCESS] winload.efi copied to EFI partition after Force Wipe"
                 
                 # Fix BCD drive IDs after Force Wipe
-                Write-Log "Fixing BCD drive identifiers after Force Wipe..."
+                & $WriteLogFunction "Fixing BCD drive identifiers after Force Wipe..."
                 try {
+                    # Ensure BCD exists after force wipe
+                    $bcdCheck = Test-AndRecreateBCD -Drive $Drive -EfiDrive $EfiDrive -WriteLogFunction $WriteLogFunction
+                    if (-not $bcdCheck.Success) {
+                        & $WriteLogFunction "[WARNING] BCD may not be accessible after Force Wipe"
+                    }
+                    
                     $bcdEnum = bcdedit /enum {default} 2>&1 | Out-String
+                    if ($bcdEnum -match "could not be opened|The system cannot find") {
+                        & $WriteLogFunction "[WARNING] BCD is not accessible, cannot fix drive IDs"
+                        return
+                    }
+                    
                     if ($bcdEnum -match '{([a-f0-9\-]{36})}') {
                         $defaultGuid = $matches[1]
                         & bcdedit /set "{$defaultGuid}" device "partition=$Drive`:" 2>&1 | Out-Null
                         & bcdedit /set "{$defaultGuid}" osdevice "partition=$Drive`:" 2>&1 | Out-Null
-                        Write-Log "[OK] BCD drive identifiers fixed after Force Wipe"
+                        & $WriteLogFunction "[OK] BCD drive identifiers fixed after Force Wipe"
                     }
                 } catch {
-                    Write-Log "[WARNING] Could not fix BCD drive IDs: $_"
+                    & $WriteLogFunction "[WARNING] Could not fix BCD drive IDs: $_"
                 }
             } else {
-                Write-Log "[ERROR] winload.efi STILL missing after Force Wipe!"
-                Write-Log ""
-                Write-Log "CRITICAL: This indicates a deeper issue:"
-                Write-Log "  1. Source template missing: C:\Windows\System32\Boot\winload.efi"
-                Write-Log "  2. Intel VMD driver not loaded (check BIOS)"
-                Write-Log "  3. Multiple boot drives causing conflicts"
-                Write-Log "  4. Hardware failure or drive corruption"
-                Write-Log ""
-                Write-Log "MANUAL LAST RESORT COMMANDS:"
-                Write-Log "  # 1. Mount EFI"
-                Write-Log "  mountvol S: /S"
-                Write-Log ""
-                Write-Log "  # 2. Clear old BCD and Winload info"
-                Write-Log "  del S:\EFI\Microsoft\Boot\BCD /f"
-                Write-Log "  del S:\EFI\Microsoft\Boot\winload.efi /f"
-                Write-Log ""
-                Write-Log "  # 3. Force rebuild from local Windows source"
-                Write-Log "  bcdboot C:\Windows /s S: /f UEFI /addlast"
-                Write-Log ""
+                & $WriteLogFunction "[ERROR] winload.efi STILL missing after Force Wipe!"
+                & $WriteLogFunction ""
+                & $WriteLogFunction "CRITICAL: This indicates a deeper issue:"
+                & $WriteLogFunction "  1. Source template missing: C:\Windows\System32\Boot\winload.efi"
+                & $WriteLogFunction "  2. Intel VMD driver not loaded (check BIOS)"
+                & $WriteLogFunction "  3. Multiple boot drives causing conflicts"
+                & $WriteLogFunction "  4. Hardware failure or drive corruption"
+                & $WriteLogFunction ""
+                & $WriteLogFunction "MANUAL LAST RESORT COMMANDS:"
+                & $WriteLogFunction "  # 1. Mount EFI"
+                & $WriteLogFunction "  mountvol S: /S"
+                & $WriteLogFunction ""
+                & $WriteLogFunction "  # 2. Clear old BCD and Winload info"
+                & $WriteLogFunction "  del S:\EFI\Microsoft\Boot\BCD /f"
+                & $WriteLogFunction "  del S:\EFI\Microsoft\Boot\winload.efi /f"
+                & $WriteLogFunction ""
+                & $WriteLogFunction "  # 3. Force rebuild from local Windows source"
+                & $WriteLogFunction "  bcdboot C:\Windows /s S: /f UEFI /addlast"
+                & $WriteLogFunction ""
                 
                 # Check for VMD issue
                 if ($VmdIssue -and $VmdIssue.VMDDetected -and -not $VmdIssue.DriverLoaded) {
-                    Write-Log "[CRITICAL] Intel VMD driver issue confirmed!"
-                    Write-Log "  - VMD is enabled in BIOS but driver not loaded in WinPE"
-                    Write-Log "  - bcdboot cannot write to NVMe drive"
-                    Write-Log "  - SOLUTION: Load VMD driver or disable VMD in BIOS"
+                    & $WriteLogFunction "[CRITICAL] Intel VMD driver issue confirmed!"
+                    & $WriteLogFunction "  - VMD is enabled in BIOS but driver not loaded in WinPE"
+                    & $WriteLogFunction "  - bcdboot cannot write to NVMe drive"
+                    & $WriteLogFunction "  - SOLUTION: Load VMD driver or disable VMD in BIOS"
                 }
             }
         } else {
-            Write-Log "[ERROR] Could not get partition info for diskpart"
+            & $WriteLogFunction "[ERROR] Could not get partition info for diskpart"
         }
     } catch {
-        Write-Log "[ERROR] Force Wipe mode failed: $_"
+        & $WriteLogFunction "[ERROR] Force Wipe mode failed: $_"
     }
 }
 
@@ -295,11 +403,12 @@ function Invoke-EfiPartitionHealthCheck {
     param(
         [string]$Drive,
         [string]$EfiDrive,
-        [string]$WinloadEfiPath
+        [string]$WinloadEfiPath,
+        [scriptblock]$WriteLogFunction
     )
     
     # Step 4: Force Clean EFI Partition (if bcdboot failed)
-    Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
+    & $WriteLogFunction "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
     try {
         $efiVolume = Get-Volume -DriveLetter $EfiDrive -ErrorAction SilentlyContinue
         $efiPartition = Get-Partition -DriveLetter $EfiDrive -ErrorAction SilentlyContinue
@@ -340,35 +449,35 @@ function Invoke-EfiPartitionHealthCheck {
         }
         
         if ($needsFormat) {
-            Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
-            Write-Log "Step 4: Formatting EFI partition $EfiDrive`: as FAT32 (quick format)..."
-            Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
+            & $WriteLogFunction "[WARNING] EFI partition needs formatting: $formatReason"
+            & $WriteLogFunction "Step 4: Formatting EFI partition $EfiDrive`: as FAT32 (quick format)..."
+            & $WriteLogFunction "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
             
             $formatOutput = & format "$EfiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
-            Write-Log "Format Output: $formatOutput"
+            & $WriteLogFunction "Format Output: $formatOutput"
             
             Start-Sleep -Seconds 2
             
             # Retry bcdboot after format
-            Write-Log "Retrying bcdboot after EFI partition format..."
+            & $WriteLogFunction "Retrying bcdboot after EFI partition format..."
             $bcdbootRetry = & bcdboot "$Drive`:\Windows" /s "$EfiDrive`:" /f UEFI 2>&1 | Out-String
-            Write-Log "bcdboot Retry Output: $bcdbootRetry"
+            & $WriteLogFunction "bcdboot Retry Output: $bcdbootRetry"
             
             # Verify winload.efi was copied
             if (Test-Path $WinloadEfiPath) {
-                Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+                & $WriteLogFunction "[SUCCESS] winload.efi copied to EFI partition after format"
             } else {
-                Write-Log "[ERROR] winload.efi still missing after format and retry."
-                Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
-                Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
+                & $WriteLogFunction "[ERROR] winload.efi still missing after format and retry."
+                & $WriteLogFunction "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
+                & $WriteLogFunction "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
             }
         } else {
-            Write-Log "[WARNING] EFI partition appears healthy, but bcdboot failed."
-            Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
-            Write-Log "Step 5: Manual extraction from Windows installation media may be required."
+            & $WriteLogFunction "[WARNING] EFI partition appears healthy, but bcdboot failed."
+            & $WriteLogFunction "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
+            & $WriteLogFunction "Step 5: Manual extraction from Windows installation media may be required."
         }
     } catch {
-        Write-Log "[ERROR] EFI partition check/format failed: $_"
+        & $WriteLogFunction "[ERROR] EFI partition check/format failed: $_"
     }
 }
 
@@ -455,6 +564,12 @@ function Start-GUI {
         <Button Content="Notepad" Name="BtnNotepad" Width="80" Height="25" Margin="2" ToolTip="Open Notepad"/>
         <Button Content="Registry" Name="BtnRegistry" Width="80" Height="25" Margin="2" ToolTip="Open Registry Editor"/>
         <Button Content="PowerShell" Name="BtnPowerShell" Width="90" Height="25" Margin="2" ToolTip="Open PowerShell"/>
+        <Button Name="BtnCommandPrompt" Width="90" Height="25" Margin="2" ToolTip="Open Command Prompt (CMD) as Administrator">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="CMD" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBlock Text="⚡" FontSize="14" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Button>
         <Button Content="System Restore" Name="BtnRestore" Width="110" Height="25" Margin="2" ToolTip="Open System Restore Points"/>
         <Button Content="Disk Management" Name="BtnDiskManagement" Width="130" Height="25" Margin="2" ToolTip="Open Disk Management"/>
         <Button Content="Restart Explorer" Name="BtnRestartExplorer" Width="130" Height="25" Margin="2" ToolTip="Restart Windows Explorer if it crashed"/>
@@ -1269,6 +1384,25 @@ if ($btnPowerShell) {
     })
 } else {
     Write-Warning "BtnPowerShell control not found in XAML"
+}
+
+$btnCommandPrompt = $W.FindName("BtnCommandPrompt")
+if ($btnCommandPrompt) {
+    $btnCommandPrompt.Add_Click({
+        try {
+            # Launch CMD as Administrator
+            Start-Process cmd.exe -Verb RunAs -ArgumentList "/k", "title MiracleBoot - Command Prompt" -ErrorAction SilentlyContinue
+        } catch {
+            # If RunAs fails, try without elevation
+            try {
+                Start-Process cmd.exe -ArgumentList "/k", "title MiracleBoot - Command Prompt" -ErrorAction SilentlyContinue
+            } catch {
+                [System.Windows.MessageBox]::Show("Command Prompt not available.", "Error", "OK", "Error")
+            }
+        }
+    })
+} else {
+    Write-Warning "BtnCommandPrompt control not found in XAML"
 }
 
 $btnDiskManagement = $W.FindName("BtnDiskManagement")
@@ -2124,6 +2258,20 @@ function New-ProgressCallback {
 # Helper function to get default boot entry GUID
 function Get-BCDDefaultEntryId {
     try {
+        # First check if BCD exists
+        $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
+        if ($bcdTest -match "could not be opened|The system cannot find|The system cannot find the path") {
+            # BCD is missing - try to recreate it
+            Write-Warning "BCD file is missing, attempting to recreate..."
+            $bcdCheck = Test-AndRecreateBCD -WriteLogFunction { param($msg) Write-Warning $msg }
+            if (-not $bcdCheck.Success) {
+                return $null
+            }
+            # Retry after recreation
+            Start-Sleep -Seconds 1
+            $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
+        }
+        
         # Get the default entry from Windows Boot Manager
         $bootMgrOutput = bcdedit /enum {bootmgr} 2>&1
         if ($bootMgrOutput -match 'default\s+(\{[0-9A-F-]+\})') {
@@ -2236,10 +2384,62 @@ privileges because they modify critical boot settings that affect system startup
             
             # Try to get raw BCD output with error handling
             try {
+                # First check if BCD exists and recreate if missing
+                $bcdCheckResult = Test-AndRecreateBCD -WriteLogFunction { param($msg) Write-Host $msg }
+                if (-not $bcdCheckResult.Success) {
+                    $result = [System.Windows.MessageBox]::Show(
+                        "BCD file is missing or corrupted.`n`n" +
+                        "Attempted to recreate but failed: $($bcdCheckResult.Message)`n`n" +
+                        "Would you like to try manual recovery?",
+                        "BCD Missing",
+                        "YesNo",
+                        "Warning"
+                    )
+                    if ($result -eq "No") {
+                        return
+                    }
+                }
+                
                 $rawBcd = bcdedit /enum 2>&1
                 # Check for access denied in output
-                if ($rawBcd -match "access is denied|Access is denied|could not be opened") {
+                if ($rawBcd -match "access is denied|Access is denied") {
                     throw "Access Denied: The boot configuration data store could not be opened.`n`nThis operation requires administrator privileges."
+                }
+                # Check for missing BCD file
+                if ($rawBcd -match "could not be opened|The system cannot find|The system cannot find the path") {
+                    $result = [System.Windows.MessageBox]::Show(
+                        "BCD file is missing or corrupted.`n`n" +
+                        "Would you like to recreate it using bcdboot?`n`n" +
+                        "This requires the Windows installation drive and EFI partition to be accessible.",
+                        "BCD Missing",
+                        "YesNo",
+                        "Warning"
+                    )
+                    if ($result -eq "Yes") {
+                        # Try to recreate BCD
+                        $bcdCheckResult = Test-AndRecreateBCD -WriteLogFunction { param($msg) Write-Host $msg }
+                        if ($bcdCheckResult.Success) {
+                            [System.Windows.MessageBox]::Show(
+                                "BCD recreated successfully.`n`n" +
+                                "Please click 'Load/Refresh BCD' again to view entries.",
+                                "BCD Recreated",
+                                "OK",
+                                "Information"
+                            )
+                            return
+                        } else {
+                            [System.Windows.MessageBox]::Show(
+                                "Failed to recreate BCD: $($bcdCheckResult.Message)`n`n" +
+                                "Please ensure you are running from WinRE/WinPE or have access to the EFI partition.",
+                                "BCD Recreation Failed",
+                                "OK",
+                                "Error"
+                            )
+                            return
+                        }
+                    } else {
+                        return
+                    }
                 }
                 $bcdBox = Get-Control "BCDBox"
                 if ($bcdBox) {
@@ -3416,13 +3616,23 @@ if ($btnOneClickRepair) {
         # Set flag to prevent concurrent repairs
         $script:repairInProgress = $true
         
+        # Initialize variables that helper functions need
+        $txtOneClickStatus = $null
+        $fixerOutput = $null
+        $chkTestMode = $null
+        $testMode = $false
+        $logFile = $null
+        $logContent = $null
+        $targetDrive = $null
+        $drive = $null
+        $repairReport = $null
+        
         try {
             $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
             $fixerOutput = Get-Control -Name "FixerOutput"
             $chkTestMode = Get-Control -Name "ChkTestMode"
             
             # Check test mode
-            $testMode = $false
             if ($chkTestMode) {
                 $testMode = $chkTestMode.IsChecked
             }
@@ -3449,6 +3659,7 @@ if ($btnOneClickRepair) {
                 $repairReport = $null
             }
             
+            # Define Write-Log function (must be accessible to helper functions)
             function Write-Log {
                 param([string]$Message)
                 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -4357,59 +4568,123 @@ if ($btnOneClickRepair) {
             
             # Diagnostic commands are read-only, so run them even in test mode
             try {
-                $bcdCheck = bcdedit /enum all 2>&1 | Out-String
-                Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                # First, check if BCD exists and recreate if missing
+                Write-Log "Checking if BCD file exists and is accessible..."
+                $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log}
                 
-                if ($bcdCheck -match "The boot configuration data store could not be opened") {
+                if (-not $bcdCheckResult.Success) {
+                    Write-Log "[WARNING] BCD check/recreate returned: $($bcdCheckResult.Message)"
+                    Write-Log "Proceeding with BCD integrity check anyway..."
+                }
+                
+                # Add timeout to prevent hanging (30 seconds max)
+                Write-Log "Running bcdedit /enum all (with 30 second timeout)..."
+                $bcdCheck = $null
+                $bcdJob = Start-Job -ScriptBlock {
+                    param($drive)
+                    bcdedit /enum all 2>&1 | Out-String
+                } -ArgumentList $drive
+                
+                $bcdCheck = Wait-Job -Job $bcdJob -Timeout 30 | Receive-Job
+                Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                
+                if ($null -eq $bcdCheck) {
+                    Write-Log "[WARNING] BCD check timed out after 30 seconds - BCD may be locked or corrupted"
+                    Write-Log "Skipping detailed BCD check and proceeding to boot file verification"
+                    $bcdCheck = "TIMEOUT - BCD check exceeded 30 seconds"
+                } else {
+                    Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                }
+                
+                if ($bcdCheck -match "The boot configuration data store could not be opened" -or
+                    $bcdCheck -match "The system cannot find the file specified" -or
+                    $bcdCheck -match "The system cannot find the path specified") {
                     Write-Log "[ERROR] BCD is corrupted or missing"
-                    Write-Log "Action: Will attempt to rebuild BCD"
+                    Write-Log "Action: Attempting to rebuild BCD using bcdboot..."
                     
-                    # Attempt BCD rebuild
+                    # Attempt BCD rebuild using bcdboot (more reliable than bootrec for UEFI)
                     if ($txtOneClickStatus) {
                         $txtOneClickStatus.Text = "Step 3/5: Rebuilding BCD..."
                     }
                     Update-StatusBar -Message "One-Click Repair: Rebuilding BCD..." -ShowProgress
                     
-                    # Check if bootrec.exe is available (only in WinRE/WinPE)
-                    $bootrecPath = $null
-                    $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
-                    if ($bootrecCmd) {
-                        $bootrecPath = $bootrecCmd.Source
-                    } else {
-                        # Try common WinRE paths
-                        $possiblePaths = @(
-                            "$env:SystemRoot\System32\bootrec.exe",
-                            "X:\Windows\System32\bootrec.exe",
-                            "C:\Windows\System32\Recovery\bootrec.exe"
-                        )
-                        foreach ($path in $possiblePaths) {
-                            if (Test-Path $path) {
-                                $bootrecPath = $path
-                                break
-                            }
-                        }
-                    }
-                    
-                    if ($bootrecPath) {
-                        $command = "$bootrecPath /rebuildbcd"
-                        Write-CommandLog -Command $command -Description "Rebuild Boot Configuration Data" -IsRepairCommand:$true
-                        
-                        if (-not $testMode) {
-                            try {
-                                $bcdRebuild = & $bootrecPath /rebuildbcd 2>&1 | Out-String
-                                Write-Log "BCD Rebuild Output: $bcdRebuild"
-                            } catch {
-                                Write-Log "[WARNING] BCD rebuild failed: $_"
-                                Write-Log "Note: bootrec.exe may not be available in this environment."
-                                Write-Log "Consider using bcdboot.exe or running from WinRE instead."
+                    # Try to mount EFI partition and use bcdboot
+                    $efiDrive = $null
+                    try {
+                        $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                        if ($efiMount.Success) {
+                            $efiDrive = $efiMount.DriveLetter
+                            Write-Log "[OK] EFI partition mounted as $efiDrive`:"
+                            
+                            $command = "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI"
+                            Write-CommandLog -Command $command -Description "Rebuild Boot Configuration Data using bcdboot" -IsRepairCommand:$true
+                            
+                            if (-not $testMode) {
+                                try {
+                                    $bcdRebuild = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                                    Write-Log "BCD Rebuild Output: $bcdRebuild"
+                                    
+                                    if ($LASTEXITCODE -eq 0 -or $bcdRebuild -match "Boot files successfully created") {
+                                        Write-Log "[SUCCESS] BCD rebuilt successfully using bcdboot"
+                                    } else {
+                                        Write-Log "[WARNING] bcdboot reported issues: $bcdRebuild"
+                                    }
+                                } catch {
+                                    Write-Log "[WARNING] BCD rebuild failed: $_"
+                                }
+                            } else {
+                                Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                             }
                         } else {
-                            Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                            Write-Log "[WARNING] Could not mount EFI partition: $($efiMount.Message)"
                         }
-                    } else {
-                        Write-Log "[INFO] bootrec.exe not available in this environment."
-                        Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
-                        Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
+                    } catch {
+                        Write-Log "[WARNING] EFI partition mount failed: $_"
+                    }
+                    
+                    # Fallback: Check if bootrec.exe is available (only in WinRE/WinPE)
+                    if (-not $efiDrive) {
+                        $bootrecPath = $null
+                        $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                        if ($bootrecCmd) {
+                            $bootrecPath = $bootrecCmd.Source
+                        } else {
+                            # Try common WinRE paths
+                            $possiblePaths = @(
+                                "$env:SystemRoot\System32\bootrec.exe",
+                                "X:\Windows\System32\bootrec.exe",
+                                "C:\Windows\System32\Recovery\bootrec.exe"
+                            )
+                            foreach ($path in $possiblePaths) {
+                                if (Test-Path $path) {
+                                    $bootrecPath = $path
+                                    break
+                                }
+                            }
+                        }
+                        
+                        if ($bootrecPath) {
+                            $command = "$bootrecPath /rebuildbcd"
+                            Write-CommandLog -Command $command -Description "Rebuild Boot Configuration Data using bootrec" -IsRepairCommand:$true
+                            
+                            if (-not $testMode) {
+                                try {
+                                    $bcdRebuild = & $bootrecPath /rebuildbcd 2>&1 | Out-String
+                                    Write-Log "BCD Rebuild Output: $bcdRebuild"
+                                } catch {
+                                    Write-Log "[WARNING] BCD rebuild failed: $_"
+                                    Write-Log "Note: bootrec.exe may not be available in this environment."
+                                    Write-Log "Consider using bcdboot.exe or running from WinRE instead."
+                                }
+                            } else {
+                                Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                            }
+                        } else {
+                            Write-Log "[INFO] bootrec.exe not available in this environment."
+                            Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
+                            Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
+                        }
                     }
                 } else {
                     Write-Log "[OK] BCD is accessible and appears healthy"
@@ -4897,14 +5172,14 @@ exit
                     Write-CommandLog -Command $bcdbootCmd -Description "Repair boot files using bcdboot (copies winload.efi and other boot files to EFI partition) - VERBOSE MODE" -IsRepairCommand:$true
                     
                     if (-not $testMode) {
-                        Invoke-BcdbootRepairWithFallback -Drive $drive -EfiDrive $efiDrive -VmdIssue $vmdIssue
+                        Invoke-BcdbootRepairWithFallback -Drive $drive -EfiDrive $efiDrive -VmdIssue $vmdIssue -WriteLogFunction ${function:Write-Log}
                     } else {
                         Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                         Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI /v" -Description "bcdboot command (TEST MODE)" -IsRepairCommand:$true
                     }
                 }  # End of if (-not $useDefensiveLogic) block
-                } else {
-                    try {
+            } else {
+                try {
                     # Fallback: EFI partition not mounted - try bootrec if available
                     $bootrecPath = $null
                     $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
@@ -5050,14 +5325,23 @@ exit
                 # Re-check BCD
                 Write-Log "Re-checking BCD..."
                 try {
-                    $bcdCheck = bcdedit /enum all 2>&1 | Out-String
-                    if ($bcdCheck -match "The boot configuration data store could not be opened") {
-                        Write-Log "[❌ STILL CORRUPTED] BCD is still inaccessible"
+                    # First check if BCD exists
+                    $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log}
+                    if (-not $bcdCheckResult.Success) {
+                        Write-Log "[❌ STILL MISSING] BCD is still missing or inaccessible: $($bcdCheckResult.Message)"
                         $remainingIssues++
-                        $verificationResults += "BCD: STILL CORRUPTED"
+                        $verificationResults += "BCD: STILL MISSING"
                     } else {
-                        Write-Log "[✅ FIXED] BCD is now accessible"
-                        $verificationResults += "BCD: FIXED"
+                        $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                        if ($bcdCheck -match "The boot configuration data store could not be opened" -or
+                            $bcdCheck -match "The system cannot find") {
+                            Write-Log "[❌ STILL CORRUPTED] BCD is still inaccessible"
+                            $remainingIssues++
+                            $verificationResults += "BCD: STILL CORRUPTED"
+                        } else {
+                            Write-Log "[✅ FIXED] BCD is now accessible"
+                            $verificationResults += "BCD: FIXED"
+                        }
                     }
                 } catch {
                     Write-Log "[⚠️  UNCERTAIN] Could not verify BCD status: $_"
@@ -5290,9 +5574,15 @@ exit
                         
                         # Check BCD
                         try {
-                            $bcdCheck = bcdedit /enum all 2>&1 | Out-String
-                            if ($bcdCheck -match "could not be opened|corrupt|error") {
-                                Add-RepairIssue -Report $repairReport -Issue "BCD is still corrupted or inaccessible" -Category "BCD" -Fixed $false | Out-Null
+                            # First check if BCD exists
+                            $bcdCheckResult = Test-AndRecreateBCD -Drive $targetDrive -WriteLogFunction { param($msg) Write-Host $msg }
+                            if (-not $bcdCheckResult.Success) {
+                                Add-RepairIssue -Report $repairReport -Issue "BCD is missing or could not be recreated: $($bcdCheckResult.Message)" -Category "BCD" -Fixed $false | Out-Null
+                            } else {
+                                $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                                if ($bcdCheck -match "could not be opened|corrupt|error|The system cannot find") {
+                                    Add-RepairIssue -Report $repairReport -Issue "BCD is still corrupted or inaccessible" -Category "BCD" -Fixed $false | Out-Null
+                                }
                             }
                         } catch {
                             Add-RepairIssue -Report $repairReport -Issue "BCD verification failed: $_" -Category "BCD" -Fixed $false | Out-Null
