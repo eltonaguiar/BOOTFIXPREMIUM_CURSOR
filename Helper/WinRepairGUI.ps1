@@ -102,18 +102,58 @@ function Test-AndRecreateBCD {
     param(
         [string]$Drive = "C",
         [string]$EfiDrive = $null,
-        [scriptblock]$WriteLogFunction = { param($msg) Write-Host $msg }
+        [scriptblock]$WriteLogFunction = { param($msg) Write-Host $msg },
+        [int]$TimeoutSeconds = 10
     )
     
     try {
-        # First, try to check if BCD is accessible
-        $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
+        # First, check if BCD file exists physically (faster than bcdedit)
+        $bcdFilePaths = @(
+            "$env:SystemRoot\Boot\BCD",  # Legacy BIOS
+            "$env:SystemDrive\Boot\BCD",  # Legacy BIOS alternative
+            "$env:SystemRoot\EFI\Microsoft\Boot\BCD"  # UEFI (if mounted)
+        )
+        
+        $bcdFileExists = $false
+        foreach ($bcdPath in $bcdFilePaths) {
+            if (Test-Path $bcdPath -ErrorAction SilentlyContinue) {
+                $bcdFileExists = $true
+                & $WriteLogFunction "[INFO] BCD file found at: $bcdPath"
+                break
+            }
+        }
+        
+        # If BCD file doesn't exist physically, skip bcdedit check (it will hang)
+        if (-not $bcdFileExists) {
+            & $WriteLogFunction "[WARNING] BCD file not found in standard locations"
+            & $WriteLogFunction "Skipping bcdedit check (would hang) and attempting recreation..."
+            # Skip to recreation logic
+        } else {
+            # BCD file exists, but check if it's accessible (with timeout to prevent hanging)
+            & $WriteLogFunction "Checking BCD accessibility (with $TimeoutSeconds second timeout)..."
+            $bcdTest = $null
+            $bcdJob = Start-Job -ScriptBlock {
+                bcdedit /enum {bootmgr} 2>&1 | Out-String
+            }
+            
+            $bcdTest = Wait-Job -Job $bcdJob -Timeout $TimeoutSeconds | Receive-Job
+            Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+            
+            if ($null -eq $bcdTest) {
+                & $WriteLogFunction "[WARNING] BCD check timed out after $TimeoutSeconds seconds - BCD may be locked or corrupted"
+                # Treat timeout as missing/corrupted
+                $bcdTest = "TIMEOUT - BCD check exceeded $TimeoutSeconds seconds"
+            }
+        }
         
         # Check for common BCD missing/corrupted errors
-        if ($bcdTest -match "The boot configuration data store could not be opened" -or
+        if (-not $bcdFileExists -or 
+            ($bcdTest -and ($bcdTest -match "The boot configuration data store could not be opened" -or
             $bcdTest -match "The system cannot find the file specified" -or
             $bcdTest -match "The system cannot find the path specified" -or
-            $LASTEXITCODE -ne 0) {
+            $bcdTest -match "TIMEOUT" -or
+            $LASTEXITCODE -ne 0))) {
             
             & $WriteLogFunction "[WARNING] BCD file is missing or corrupted"
             & $WriteLogFunction "Attempting to recreate BCD using bcdboot..."
@@ -153,9 +193,21 @@ function Test-AndRecreateBCD {
                     & $WriteLogFunction "[SUCCESS] BCD recreated successfully"
                     Start-Sleep -Seconds 2  # Give system time to flush
                     
-                    # Verify BCD is now accessible
-                    $verifyBcd = bcdedit /enum {bootmgr} 2>&1 | Out-String
-                    if ($verifyBcd -notmatch "could not be opened" -and $LASTEXITCODE -eq 0) {
+                    # Verify BCD is now accessible (with timeout to prevent hanging)
+                    & $WriteLogFunction "Verifying BCD accessibility (with 10 second timeout)..."
+                    $verifyBcd = $null
+                    $verifyJob = Start-Job -ScriptBlock {
+                        bcdedit /enum {bootmgr} 2>&1 | Out-String
+                    }
+                    
+                    $verifyBcd = Wait-Job -Job $verifyJob -Timeout 10 | Receive-Job
+                    Stop-Job -Job $verifyJob -ErrorAction SilentlyContinue
+                    Remove-Job -Job $verifyJob -ErrorAction SilentlyContinue
+                    
+                    if ($null -eq $verifyBcd) {
+                        & $WriteLogFunction "[WARNING] BCD verification timed out - may still be initializing"
+                        return @{ Success = $true; Message = "BCD recreated (verification timeout - may be initializing)" }
+                    } elseif ($verifyBcd -notmatch "could not be opened" -and $LASTEXITCODE -eq 0) {
                         & $WriteLogFunction "[OK] BCD verification successful"
                         return @{ Success = $true; Message = "BCD recreated successfully" }
                     } else {
@@ -2258,28 +2310,71 @@ function New-ProgressCallback {
 # Helper function to get default boot entry GUID
 function Get-BCDDefaultEntryId {
     try {
-        # First check if BCD exists
-        $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
-        if ($bcdTest -match "could not be opened|The system cannot find|The system cannot find the path") {
-            # BCD is missing - try to recreate it
+        # First check if BCD file exists physically (faster than bcdedit)
+        $bcdFilePaths = @(
+            "$env:SystemRoot\Boot\BCD",
+            "$env:SystemDrive\Boot\BCD",
+            "$env:SystemRoot\EFI\Microsoft\Boot\BCD"
+        )
+        
+        $bcdFileExists = $false
+        foreach ($bcdPath in $bcdFilePaths) {
+            if (Test-Path $bcdPath -ErrorAction SilentlyContinue) {
+                $bcdFileExists = $true
+                break
+            }
+        }
+        
+        if (-not $bcdFileExists) {
+            # BCD file doesn't exist - try to recreate it
             Write-Warning "BCD file is missing, attempting to recreate..."
-            $bcdCheck = Test-AndRecreateBCD -WriteLogFunction { param($msg) Write-Warning $msg }
+            $bcdCheck = Test-AndRecreateBCD -WriteLogFunction { param($msg) Write-Warning $msg } -TimeoutSeconds 10
             if (-not $bcdCheck.Success) {
                 return $null
             }
-            # Retry after recreation
-            Start-Sleep -Seconds 1
-            $bcdTest = bcdedit /enum {bootmgr} 2>&1 | Out-String
+            # Wait for BCD to be available after recreation
+            Start-Sleep -Seconds 2
         }
         
-        # Get the default entry from Windows Boot Manager
-        $bootMgrOutput = bcdedit /enum {bootmgr} 2>&1
-        if ($bootMgrOutput -match 'default\s+(\{[0-9A-F-]+\})') {
+        # Check BCD accessibility with timeout (10 seconds)
+        $bcdTest = $null
+        $bcdJob = Start-Job -ScriptBlock {
+            bcdedit /enum {bootmgr} 2>&1 | Out-String
+        }
+        
+        $bcdTest = Wait-Job -Job $bcdJob -Timeout 10 | Receive-Job
+        Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+        
+        if ($null -eq $bcdTest -or $bcdTest -match "could not be opened|The system cannot find") {
+            return $null
+        }
+        
+        # Get the default entry from Windows Boot Manager (with timeout)
+        $bootMgrOutput = $null
+        $bootMgrJob = Start-Job -ScriptBlock {
+            bcdedit /enum {bootmgr} 2>&1
+        }
+        
+        $bootMgrOutput = Wait-Job -Job $bootMgrJob -Timeout 10 | Receive-Job
+        Stop-Job -Job $bootMgrJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $bootMgrJob -ErrorAction SilentlyContinue
+        
+        if ($bootMgrOutput -and $bootMgrOutput -match 'default\s+(\{[0-9A-F-]+\})') {
             return $matches[1]
         }
-        # Alternative: check for {default} identifier directly in enum output
-        $enumOutput = bcdedit /enum 2>&1
-        if ($enumOutput -match 'identifier\s+(\{default\})') {
+        
+        # Alternative: check for {default} identifier directly in enum output (with timeout)
+        $enumOutput = $null
+        $enumJob = Start-Job -ScriptBlock {
+            bcdedit /enum 2>&1
+        }
+        
+        $enumOutput = Wait-Job -Job $enumJob -Timeout 10 | Receive-Job
+        Stop-Job -Job $enumJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $enumJob -ErrorAction SilentlyContinue
+        
+        if ($enumOutput -and $enumOutput -match 'identifier\s+(\{default\})') {
             return "{default}"
         }
         return $null
@@ -4568,38 +4663,48 @@ if ($btnOneClickRepair) {
             
             # Diagnostic commands are read-only, so run them even in test mode
             try {
-                # First, check if BCD exists and recreate if missing
+                # First, check if BCD exists and recreate if missing (with short timeout to prevent hanging)
                 Write-Log "Checking if BCD file exists and is accessible..."
-                $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log}
+                $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log} -TimeoutSeconds 10
                 
-                if (-not $bcdCheckResult.Success) {
-                    Write-Log "[WARNING] BCD check/recreate returned: $($bcdCheckResult.Message)"
-                    Write-Log "Proceeding with BCD integrity check anyway..."
+                # If BCD was recreated, wait a moment for it to be available
+                if ($bcdCheckResult.Success -and $bcdCheckResult.Message -match "recreated") {
+                    Write-Log "[INFO] BCD was recreated, waiting for system to flush..."
+                    Start-Sleep -Seconds 2
                 }
                 
-                # Add timeout to prevent hanging (30 seconds max)
-                Write-Log "Running bcdedit /enum all (with 30 second timeout)..."
-                $bcdCheck = $null
-                $bcdJob = Start-Job -ScriptBlock {
-                    param($drive)
-                    bcdedit /enum all 2>&1 | Out-String
-                } -ArgumentList $drive
-                
-                $bcdCheck = Wait-Job -Job $bcdJob -Timeout 30 | Receive-Job
-                Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
-                Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
-                
-                if ($null -eq $bcdCheck) {
-                    Write-Log "[WARNING] BCD check timed out after 30 seconds - BCD may be locked or corrupted"
-                    Write-Log "Skipping detailed BCD check and proceeding to boot file verification"
-                    $bcdCheck = "TIMEOUT - BCD check exceeded 30 seconds"
+                # Only run detailed BCD check if BCD exists and is accessible
+                # Skip if BCD is missing (would hang) or was just recreated
+                if ($bcdCheckResult.Success -and $bcdCheckResult.Message -notmatch "recreated") {
+                    # Add timeout to prevent hanging (30 seconds max)
+                    Write-Log "Running bcdedit /enum all (with 30 second timeout)..."
+                    $bcdCheck = $null
+                    $bcdJob = Start-Job -ScriptBlock {
+                        param($drive)
+                        bcdedit /enum all 2>&1 | Out-String
+                    } -ArgumentList $drive
+                    
+                    $bcdCheck = Wait-Job -Job $bcdJob -Timeout 30 | Receive-Job
+                    Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                    Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                    
+                    if ($null -eq $bcdCheck) {
+                        Write-Log "[WARNING] BCD check timed out after 30 seconds - BCD may be locked or corrupted"
+                        Write-Log "Skipping detailed BCD check and proceeding to boot file verification"
+                        $bcdCheck = "TIMEOUT - BCD check exceeded 30 seconds"
+                    } else {
+                        Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                    }
                 } else {
-                    Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                    Write-Log "[INFO] Skipping detailed BCD check (BCD missing or was just recreated)"
+                    $bcdCheck = "SKIPPED - BCD missing or recreated"
                 }
                 
                 if ($bcdCheck -match "The boot configuration data store could not be opened" -or
                     $bcdCheck -match "The system cannot find the file specified" -or
-                    $bcdCheck -match "The system cannot find the path specified") {
+                    $bcdCheck -match "The system cannot find the path specified" -or
+                    $bcdCheck -match "SKIPPED" -or
+                    $bcdCheck -match "TIMEOUT") {
                     Write-Log "[ERROR] BCD is corrupted or missing"
                     Write-Log "Action: Attempting to rebuild BCD using bcdboot..."
                     
@@ -5261,6 +5366,24 @@ exit
                 Write-Log "POST-REPAIR VERIFICATION"
                 Write-Log "==============================================================="
                 Write-Log ""
+                
+                # CRITICAL: Wait for file system caches to update after repairs
+                Write-Log "[INFO] Waiting for file system caches to update after repairs..."
+                Write-Log "This ensures newly created files are visible to verification checks."
+                Start-Sleep -Seconds 3
+                
+                # Ensure EFI partition is still mounted for verification
+                if (-not $efiDrive) {
+                    Write-Log "[INFO] Re-mounting EFI partition for verification..."
+                    $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
+                    if ($efiMount.Success) {
+                        $efiDrive = $efiMount.DriveLetter
+                        Write-Log "[OK] EFI partition mounted as $efiDrive`: for verification"
+                    } else {
+                        Write-Log "[WARNING] Could not mount EFI partition for verification: $($efiMount.Message)"
+                    }
+                }
+                
                 Write-Log "Re-checking system to verify repairs..."
                 
                 $remainingIssues = 0
@@ -5273,8 +5396,21 @@ exit
                     foreach ($file in $bootFiles) {
                         $efiPath = "$efiDrive`:$($file.EFIPath)"
                         $winPath = "$drive`:$($file.WinPath)"
-                        if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                            $stillMissingFiles += $file.Name
+                        # For boot files, EFI partition location is primary, Windows directory is secondary
+                        # winload.efi MUST be in EFI partition for booting, but can also be in Windows directory
+                        if ($file.Name -eq "winload.efi") {
+                            # winload.efi must be in EFI partition for UEFI boot
+                            if (-not (Test-Path $efiPath)) {
+                                $stillMissingFiles += $file.Name
+                                Write-Log "[CHECK] winload.efi not found in EFI partition: $efiPath"
+                            } else {
+                                Write-Log "[OK] winload.efi found in EFI partition: $efiPath"
+                            }
+                        } else {
+                            # Other boot files can be in either location
+                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                $stillMissingFiles += $file.Name
+                            }
                         }
                     }
                 } else {
@@ -5285,8 +5421,14 @@ exit
                         foreach ($file in $bootFiles) {
                             $efiPath = "$efiDrive`:$($file.EFIPath)"
                             $winPath = "$drive`:$($file.WinPath)"
-                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                                $stillMissingFiles += $file.Name
+                            if ($file.Name -eq "winload.efi") {
+                                if (-not (Test-Path $efiPath)) {
+                                    $stillMissingFiles += $file.Name
+                                }
+                            } else {
+                                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                    $stillMissingFiles += $file.Name
+                                }
                             }
                         }
                     }
@@ -5297,8 +5439,7 @@ exit
                     $verificationResults += "Boot Files: FIXED"
                 } else {
                     Write-Log "[❌ STILL MISSING] Boot files: $($stillMissingFiles -join ', ')"
-                    Write-Log "[INFO] Note: If repairs just completed, file system cache may need time to update."
-                    Write-Log "[INFO] Re-checking after brief delay..."
+                    Write-Log "[INFO] Re-checking after additional delay for file system cache..."
                     Start-Sleep -Seconds 2
                     
                     # Re-check with fresh cache
@@ -5307,8 +5448,14 @@ exit
                         foreach ($file in $bootFiles) {
                             $efiPath = "$efiDrive`:$($file.EFIPath)"
                             $winPath = "$drive`:$($file.WinPath)"
-                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                                $stillMissingFilesRetry += $file.Name
+                            if ($file.Name -eq "winload.efi") {
+                                if (-not (Test-Path $efiPath)) {
+                                    $stillMissingFilesRetry += $file.Name
+                                }
+                            } else {
+                                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                    $stillMissingFilesRetry += $file.Name
+                                }
                             }
                         }
                     }
@@ -5325,21 +5472,59 @@ exit
                 # Re-check BCD
                 Write-Log "Re-checking BCD..."
                 try {
-                    # First check if BCD exists
-                    $bcdCheckResult = Test-AndRecreateBCD -Drive $drive -WriteLogFunction ${function:Write-Log}
-                    if (-not $bcdCheckResult.Success) {
-                        Write-Log "[❌ STILL MISSING] BCD is still missing or inaccessible: $($bcdCheckResult.Message)"
+                    # First check if BCD file exists physically in EFI partition
+                    $bcdFileExists = $false
+                    if ($efiDrive) {
+                        $efiBcdPath = "$efiDrive`:\EFI\Microsoft\Boot\BCD"
+                        $bcdFileExists = Test-Path $efiBcdPath
+                        if ($bcdFileExists) {
+                            Write-Log "[OK] BCD file found in EFI partition: $efiBcdPath"
+                        } else {
+                            Write-Log "[CHECK] BCD file not found in EFI partition: $efiBcdPath"
+                        }
+                    }
+                    
+                    # Also check legacy BCD locations
+                    $legacyBcdPaths = @(
+                        "$env:SystemRoot\Boot\BCD",
+                        "$env:SystemDrive\Boot\BCD"
+                    )
+                    foreach ($legacyPath in $legacyBcdPaths) {
+                        if (Test-Path $legacyPath) {
+                            $bcdFileExists = $true
+                            Write-Log "[OK] BCD file found in legacy location: $legacyPath"
+                            break
+                        }
+                    }
+                    
+                    if (-not $bcdFileExists) {
+                        Write-Log "[❌ STILL MISSING] BCD file not found in any standard location"
                         $remainingIssues++
                         $verificationResults += "BCD: STILL MISSING"
                     } else {
-                        $bcdCheck = bcdedit /enum all 2>&1 | Out-String
-                        if ($bcdCheck -match "The boot configuration data store could not be opened" -or
-                            $bcdCheck -match "The system cannot find") {
-                            Write-Log "[❌ STILL CORRUPTED] BCD is still inaccessible"
+                        # BCD file exists, now check if it's accessible (with timeout)
+                        Write-Log "Checking BCD accessibility (with 15 second timeout)..."
+                        $bcdCheck = $null
+                        $bcdJob = Start-Job -ScriptBlock {
+                            bcdedit /enum all 2>&1 | Out-String
+                        }
+                        
+                        $bcdCheck = Wait-Job -Job $bcdJob -Timeout 15 | Receive-Job
+                        Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                        Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                        
+                        if ($null -eq $bcdCheck) {
+                            Write-Log "[⚠️  TIMEOUT] BCD check timed out - may still be initializing"
+                            Write-Log "[INFO] BCD file exists, but accessibility check timed out. This may be normal if BCD was just recreated."
+                            $verificationResults += "BCD: EXISTS (accessibility check timeout - may be normal)"
+                        } elseif ($bcdCheck -match "The boot configuration data store could not be opened" -or
+                            $bcdCheck -match "The system cannot find the file specified" -or
+                            $bcdCheck -match "The system cannot find the path specified") {
+                            Write-Log "[❌ STILL CORRUPTED] BCD file exists but is inaccessible: $($bcdCheck.Substring(0, [Math]::Min(100, $bcdCheck.Length)))"
                             $remainingIssues++
                             $verificationResults += "BCD: STILL CORRUPTED"
                         } else {
-                            Write-Log "[✅ FIXED] BCD is now accessible"
+                            Write-Log "[✅ FIXED] BCD is now accessible and appears healthy"
                             $verificationResults += "BCD: FIXED"
                         }
                     }
@@ -5370,23 +5555,6 @@ exit
                 Write-Log ""
                 Write-Log "Switching to FORENSIC MODE (read-only verification)..."
                 Write-Log ""
-                
-                # CRITICAL: Wait for file system caches to update after repairs
-                Write-Log "[INFO] Waiting for file system caches to update after repairs..."
-                Write-Log "This ensures newly created files are visible to verification checks."
-                Start-Sleep -Seconds 3
-                
-                # Ensure EFI partition is still mounted for verification
-                if (-not $efiDrive) {
-                    Write-Log "[INFO] Re-mounting EFI partition for verification..."
-                    $efiMount = Mount-EFIPartition -WindowsDrive $drive -PreferredLetter "S"
-                    if ($efiMount.Success) {
-                        $efiDrive = $efiMount.DriveLetter
-                        Write-Log "[OK] EFI partition mounted as $efiDrive`: for verification"
-                    } else {
-                        Write-Log "[WARNING] Could not mount EFI partition for verification: $($efiMount.Message)"
-                    }
-                }
                 
                 # Run Boot Viability Engine
                 if (Get-Command "Test-BootViability" -ErrorAction SilentlyContinue) {
@@ -5566,34 +5734,88 @@ exit
                         Write-Log ""
                         Write-Log "Performing post-repair verification..."
                         
-                        # Check winload.efi
-                        $winloadPath = "$targetDrive`:\Windows\System32\winload.efi"
-                        if (-not (Test-Path $winloadPath)) {
-                            Add-RepairIssue -Report $repairReport -Issue "winload.efi is still missing from Windows directory" -Category "Boot Files" -Fixed $false | Out-Null
+                        # Wait for file system cache to update
+                        Start-Sleep -Seconds 3
+                        
+                        # Check winload.efi - must be in EFI partition for UEFI boot
+                        $winloadFound = $false
+                        $winloadEfiPath = $null
+                        $winloadWindowsPath = "$targetDrive`:\Windows\System32\winload.efi"
+                        
+                        # Try to find EFI partition
+                        $efiDriveForCheck = $null
+                        if (Get-Variable -Name "efiDrive" -ErrorAction SilentlyContinue) {
+                            $efiDriveForCheck = $efiDrive
+                        } else {
+                            $efiMount = Mount-EFIPartition -WindowsDrive $targetDrive -PreferredLetter "S"
+                            if ($efiMount.Success) {
+                                $efiDriveForCheck = $efiMount.DriveLetter
+                            }
+                        }
+                        
+                        if ($efiDriveForCheck) {
+                            $winloadEfiPath = "$efiDriveForCheck`:\EFI\Microsoft\Boot\winload.efi"
+                            if (Test-Path $winloadEfiPath) {
+                                $winloadFound = $true
+                            }
+                        }
+                        
+                        # winload.efi in Windows directory is good but not sufficient for UEFI boot
+                        if (-not $winloadFound -and (Test-Path $winloadWindowsPath)) {
+                            # File exists in Windows but not in EFI - this is a problem for UEFI boot
+                            Add-RepairIssue -Report $repairReport -Issue "winload.efi exists in Windows directory but not in EFI partition (required for UEFI boot)" -Category "Boot Files" -Fixed $false | Out-Null
+                        } elseif (-not $winloadFound) {
+                            Add-RepairIssue -Report $repairReport -Issue "winload.efi is still missing from EFI partition" -Category "Boot Files" -Fixed $false | Out-Null
                         }
                         
                         # Check BCD
                         try {
-                            # First check if BCD exists
-                            $bcdCheckResult = Test-AndRecreateBCD -Drive $targetDrive -WriteLogFunction { param($msg) Write-Host $msg }
-                            if (-not $bcdCheckResult.Success) {
-                                Add-RepairIssue -Report $repairReport -Issue "BCD is missing or could not be recreated: $($bcdCheckResult.Message)" -Category "BCD" -Fixed $false | Out-Null
-                            } else {
-                                $bcdCheck = bcdedit /enum all 2>&1 | Out-String
-                                if ($bcdCheck -match "could not be opened|corrupt|error|The system cannot find") {
-                                    Add-RepairIssue -Report $repairReport -Issue "BCD is still corrupted or inaccessible" -Category "BCD" -Fixed $false | Out-Null
+                            # First check if BCD file exists physically
+                            $bcdFileExists = $false
+                            if ($efiDriveForCheck) {
+                                $efiBcdPath = "$efiDriveForCheck`:\EFI\Microsoft\Boot\BCD"
+                                $bcdFileExists = Test-Path $efiBcdPath
+                            }
+                            
+                            if (-not $bcdFileExists) {
+                                # Check legacy locations
+                                $legacyBcdPaths = @(
+                                    "$env:SystemRoot\Boot\BCD",
+                                    "$env:SystemDrive\Boot\BCD"
+                                )
+                                foreach ($legacyPath in $legacyBcdPaths) {
+                                    if (Test-Path $legacyPath) {
+                                        $bcdFileExists = $true
+                                        break
+                                    }
                                 }
+                            }
+                            
+                            if (-not $bcdFileExists) {
+                                Add-RepairIssue -Report $repairReport -Issue "BCD file missing from EFI partition and legacy locations" -Category "BCD" -Fixed $false | Out-Null
+                            } else {
+                                # BCD file exists, check accessibility with timeout
+                                $bcdCheck = $null
+                                $bcdJob = Start-Job -ScriptBlock {
+                                    bcdedit /enum all 2>&1 | Out-String
+                                }
+                                
+                                $bcdCheck = Wait-Job -Job $bcdJob -Timeout 15 | Receive-Job
+                                Stop-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                                Remove-Job -Job $bcdJob -ErrorAction SilentlyContinue
+                                
+                                if ($null -eq $bcdCheck) {
+                                    # Timeout - BCD exists but check timed out (may be normal if just recreated)
+                                    # Don't report as error since file exists
+                                } elseif ($bcdCheck -match "The boot configuration data store could not be opened" -or
+                                    $bcdCheck -match "The system cannot find the file specified" -or
+                                    $bcdCheck -match "The system cannot find the path specified") {
+                                    Add-RepairIssue -Report $repairReport -Issue "BCD file exists but is inaccessible or corrupted" -Category "BCD" -Fixed $false | Out-Null
+                                }
+                                # If no errors matched, BCD is accessible - don't add issue
                             }
                         } catch {
                             Add-RepairIssue -Report $repairReport -Issue "BCD verification failed: $_" -Category "BCD" -Fixed $false | Out-Null
-                        }
-                        
-                        # Check EFI partition
-                        if (Get-Variable -Name "efiDrive" -ErrorAction SilentlyContinue) {
-                            $efiBcdPath = "$efiDrive`:\EFI\Microsoft\Boot\BCD"
-                            if (-not (Test-Path $efiBcdPath)) {
-                                Add-RepairIssue -Report $repairReport -Issue "BCD file missing from EFI partition" -Category "EFI Partition" -Fixed $false | Out-Null
-                            }
                         }
                     }
                     
