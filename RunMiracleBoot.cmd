@@ -45,11 +45,28 @@ if errorlevel 1 (
     exit /b %errorlevel%
 )
 
+REM Check if user wants emergency repair mode
+if /i "%1"=="--emergency" (
+    echo(
+    echo ================================================================================
+    echo EMERGENCY REPAIR MODE
+    echo ================================================================================
+    echo(
+    echo Launching emergency repair routine (bypasses main scripts)...
+    echo This mode works even if WinRepairTUI.ps1 or WinRepairGUI.ps1 have syntax errors.
+    echo(
+    cd /d "%SCRIPT_DIR%"
+    powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot Emergency Repair'; . '.\Helper\EmergencyRepair.ps1'; Start-EmergencyRepair -Drive '%SystemDrive:~0,1%'"
+    goto :end
+)
+
 REM Launch the PowerShell script
 echo Launching Miracle Boot (PowerShell mode)...
 echo(
 cd /d "%SCRIPT_DIR%"
 powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '.\MiracleBoot.ps1'"
+
+:end
 
 if errorlevel 1 (
     echo(
