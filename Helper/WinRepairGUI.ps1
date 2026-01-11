@@ -765,6 +765,86 @@ try {
 # Helper function to safely get controls with null checking
 # Note: This will be defined inside Start-GUI to access $W directly
 
+# Helper function to launch emergency boot repair scripts
+function Start-EmergencyBootScript {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet("EMERGENCY_BOOT1", "EMERGENCY_BOOT2", "EMERGENCY_BOOT3", "FIX_BCD_NOT_FOUND")]
+        [string]$ScriptName
+    )
+    
+    try {
+        # Determine script root (project root, not Helper directory)
+        $projectRoot = if ($PSScriptRoot) {
+            $parent = Split-Path -Parent $PSScriptRoot
+            if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) {
+                $parent
+            } else {
+                $PSScriptRoot
+            }
+        } elseif ($MyInvocation.MyCommand.Path) {
+            $guiPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+            $parent = Split-Path -Parent $guiPath
+            if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) {
+                $parent
+            } else {
+                $guiPath
+            }
+        } else {
+            # Fallback: try current location
+            if (Test-Path "EMERGENCY_BOOT1.cmd") {
+                Get-Location
+            } elseif (Test-Path "..\EMERGENCY_BOOT1.cmd") {
+                Join-Path (Get-Location) ".."
+            } else {
+                Get-Location
+            }
+        }
+        
+        $scriptPath = Join-Path $projectRoot "$ScriptName.cmd"
+        
+        if (-not (Test-Path $scriptPath)) {
+            [System.Windows.MessageBox]::Show(
+                "Emergency script not found: $scriptPath`n`nPlease ensure the script exists in the MiracleBoot directory.",
+                "Script Not Found",
+                "OK",
+                "Error"
+            ) | Out-Null
+            return
+        }
+        
+        # Confirm launch
+        $result = [System.Windows.MessageBox]::Show(
+            "This will launch $ScriptName.cmd in a new Command Prompt window.`n`n" +
+            "The script will run in Administrator mode and attempt to repair boot issues.`n`n" +
+            "Continue?",
+            "Launch Emergency Boot Script",
+            "YesNo",
+            "Question"
+        )
+        
+        if ($result -eq "Yes") {
+            Update-StatusBar -Message "Launching $ScriptName.cmd..." -ShowProgress
+            
+            # Launch in new elevated CMD window
+            $cmdArgs = "/k `"cd /d `"$projectRoot`" && $ScriptName.cmd`""
+            Start-Process cmd.exe -Verb RunAs -ArgumentList $cmdArgs -ErrorAction Stop
+            
+            Update-StatusBar -Message "$ScriptName.cmd launched" -HideProgress
+        }
+    } catch {
+        $errorMsg = $_.Exception.Message
+        Update-StatusBar -Message "Failed to launch emergency script: $errorMsg" -HideProgress
+        [System.Windows.MessageBox]::Show(
+            "Failed to launch $ScriptName.cmd: $errorMsg`n`n" +
+            "Please ensure you have administrator privileges and the script exists.",
+            "Launch Failed",
+            "OK",
+            "Error"
+        ) | Out-Null
+    }
+}
+
 # Helper function to safely get count from any object (prevents Count property errors)
 function Get-SafeCount {
     <#
@@ -813,12 +893,48 @@ function Start-GUI {
 <Grid>
     <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
         <RowDefinition Height="*"/>
         <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     
+    <!-- Menu Bar -->
+    <Menu Grid.Row="0" Background="#F5F5F5" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1">
+        <MenuItem Header="_File">
+            <MenuItem Header="Emergency Boot Repair" Name="MenuEmergencyBoot">
+                <MenuItem Header="Emergency Boot 1 (Simple)" Name="MenuEmergencyBoot1" ToolTip="Ultra-simple boot repair with minimal logic"/>
+                <MenuItem Header="Emergency Boot 2 (Advanced)" Name="MenuEmergencyBoot2" ToolTip="Advanced boot repair with Windows detection"/>
+                <MenuItem Header="Emergency Boot 3 (Comprehensive)" Name="MenuEmergencyBoot3" ToolTip="Comprehensive boot repair with all strategies"/>
+                <Separator/>
+                <MenuItem Header="Fix BCD Not Found" Name="MenuFixBCDFound" ToolTip="Targeted fix for missing BCD file"/>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="E_xit" Name="MenuExit" ToolTip="Close Miracle Boot"/>
+        </MenuItem>
+        <MenuItem Header="_Tools">
+            <MenuItem Header="Boot Repair" Name="MenuToolsBootRepair">
+                <MenuItem Header="One-Click Repair" Name="MenuToolsOneClick" ToolTip="Automated boot repair"/>
+                <Separator/>
+                <MenuItem Header="Emergency Boot 1" Name="MenuToolsEmergency1"/>
+                <MenuItem Header="Emergency Boot 2" Name="MenuToolsEmergency2"/>
+                <MenuItem Header="Emergency Boot 3" Name="MenuToolsEmergency3"/>
+                <MenuItem Header="Fix BCD Not Found" Name="MenuToolsFixBCD"/>
+            </MenuItem>
+            <MenuItem Header="BCD Editor" Name="MenuToolsBCDEitor" ToolTip="Edit Boot Configuration Data"/>
+            <MenuItem Header="System File Repair" Name="MenuToolsSystemFile" ToolTip="SFC and DISM repair tools"/>
+            <Separator/>
+            <MenuItem Header="Open Command Prompt" Name="MenuToolsCMD" ToolTip="Open CMD as Administrator"/>
+            <MenuItem Header="Open PowerShell" Name="MenuToolsPowerShell" ToolTip="Open PowerShell as Administrator"/>
+        </MenuItem>
+        <MenuItem Header="_Help">
+            <MenuItem Header="Emergency Repair Guide" Name="MenuHelpEmergencyGuide" ToolTip="View emergency boot repair guide"/>
+            <Separator/>
+            <MenuItem Header="About Miracle Boot" Name="MenuHelpAbout" ToolTip="About Miracle Boot"/>
+        </MenuItem>
+    </Menu>
+    
     <!-- Utility Toolbar -->
-    <StackPanel Grid.Row="0" Orientation="Horizontal" Background="#E5E5E5" Margin="10,5">
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Background="#E5E5E5" Margin="10,5">
         <TextBlock Text="Utilities:" VerticalAlignment="Center" Margin="5,0,10,0" FontWeight="Bold"/>
         <Button Content="Notepad" Name="BtnNotepad" Width="80" Height="25" Margin="2" ToolTip="Open Notepad"/>
         <Button Content="Registry" Name="BtnRegistry" Width="80" Height="25" Margin="2" ToolTip="Open Registry Editor"/>
@@ -1004,6 +1120,19 @@ function Start-GUI {
                         <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#333333" FontSize="12" Margin="0,0,0,10"/>
                         <Button Content="REPAIR MY PC" Name="BtnOneClickRepair" Height="50" Background="#4CAF50" Foreground="White" FontSize="16" FontWeight="Bold" Cursor="Hand" Margin="0,5"/>
                         <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#555555" FontSize="11" Margin="0,5,0,0" FontStyle="Italic"/>
+                        
+                        <!-- Emergency Boot Repair Options (shown when repair fails or has issues) -->
+                        <Border Name="BorderEmergencyOptions" Margin="0,10,0,0" Padding="10" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="⚠️ REPAIR STILL BROKEN? Try Emergency Boot Repair Scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
+                                    <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
+                                    <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                                </StackPanel>
+                                <Button Content="Fix BCD Not Found" Name="BtnFixBCDFound" Width="430" Height="30" Margin="5,5,5,0" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </Border>
                 
@@ -1012,7 +1141,21 @@ function Start-GUI {
                     <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="#666666" FontSize="11" Margin="5,0,5,5" TextWrapping="Wrap" LineHeight="16"/>
                 </StackPanel>
                 
-                <GroupBox Grid.Row="2" Header="Boot Repair Operations" Margin="5,0,5,10">
+                <!-- Emergency Boot Repair Section -->
+                <GroupBox Grid.Row="2" Header="Emergency Boot Repair Scripts" Margin="5,0,5,10" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="2">
+                    <StackPanel Margin="10">
+                        <TextBlock Text="If One-Click Repair failed, try these emergency scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,10">
+                            <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
+                            <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
+                            <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                        </StackPanel>
+                        <Button Content="Fix BCD Not Found" Name="BtnFixBCDFoundTab" Width="500" Height="35" Margin="5,0,5,10" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
+                        <TextBlock Text="These scripts run in separate Command Prompt windows and provide step-by-step repair processes." TextWrapping="Wrap" Foreground="#666666" FontSize="11" Margin="5,0,5,0" FontStyle="Italic"/>
+                    </StackPanel>
+                </GroupBox>
+                
+                <GroupBox Grid.Row="3" Header="Boot Repair Operations" Margin="5,0,5,10">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
 <StackPanel Margin="10">
                             <Button Content="1. Rebuild BCD from Windows Installation" Height="40" Name="BtnRebuildBCD" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,5"/>
@@ -1041,7 +1184,7 @@ function Start-GUI {
                     </ScrollViewer>
                 </GroupBox>
                 
-                <GroupBox Grid.Row="3" Header="Command Output" Margin="5,10,5,5">
+                <GroupBox Grid.Row="4" Header="Command Output" Margin="5,10,5,5">
                     <ScrollViewer Height="150" VerticalScrollBarVisibility="Auto">
                         <TextBox Name="FixerOutput" AcceptsReturn="True" FontFamily="Consolas" Background="#222" Foreground="#00FF00" IsReadOnly="True" TextWrapping="Wrap"/>
                     </ScrollViewer>
@@ -1874,6 +2017,135 @@ if ($btnChatGPT) {
         [System.Windows.MessageBox]::Show("Error opening ChatGPT help: $_", "Error", "OK", "Error")
     }
     })
+}
+
+# Emergency Boot Repair Script Handlers
+# Menu items
+$menuEmergencyBoot1 = Get-Control -Name "MenuEmergencyBoot1"
+if ($menuEmergencyBoot1) {
+    $menuEmergencyBoot1.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$menuEmergencyBoot2 = Get-Control -Name "MenuEmergencyBoot2"
+if ($menuEmergencyBoot2) {
+    $menuEmergencyBoot2.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$menuEmergencyBoot3 = Get-Control -Name "MenuEmergencyBoot3"
+if ($menuEmergencyBoot3) {
+    $menuEmergencyBoot3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$menuFixBCDFound = Get-Control -Name "MenuFixBCDFound"
+if ($menuFixBCDFound) {
+    $menuFixBCDFound.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+$menuToolsEmergency1 = Get-Control -Name "MenuToolsEmergency1"
+if ($menuToolsEmergency1) {
+    $menuToolsEmergency1.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$menuToolsEmergency2 = Get-Control -Name "MenuToolsEmergency2"
+if ($menuToolsEmergency2) {
+    $menuToolsEmergency2.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$menuToolsEmergency3 = Get-Control -Name "MenuToolsEmergency3"
+if ($menuToolsEmergency3) {
+    $menuToolsEmergency3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$menuToolsFixBCD = Get-Control -Name "MenuToolsFixBCD"
+if ($menuToolsFixBCD) {
+    $menuToolsFixBCD.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+$menuToolsOneClick = Get-Control -Name "MenuToolsOneClick"
+if ($menuToolsOneClick) {
+    $menuToolsOneClick.Add_Click({
+        $btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
+        if ($btnOneClickRepair) {
+            # Switch to Boot Fixer tab
+            $grid = $W.Content
+            $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+            if ($tabControl) {
+                $bootFixerTab = $tabControl.Items | Where-Object { $_.Header -eq "Boot Fixer" }
+                if ($bootFixerTab) {
+                    $tabControl.SelectedItem = $bootFixerTab
+                }
+            }
+            # Trigger the button click
+            $btnOneClickRepair.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+        }
+    })
+}
+
+$menuExit = Get-Control -Name "MenuExit"
+if ($menuExit) {
+    $menuExit.Add_Click({ $W.Close() })
+}
+
+$menuHelpEmergencyGuide = Get-Control -Name "MenuHelpEmergencyGuide"
+if ($menuHelpEmergencyGuide) {
+    $menuHelpEmergencyGuide.Add_Click({
+        try {
+            $projectRoot = if ($PSScriptRoot) {
+                $parent = Split-Path -Parent $PSScriptRoot
+                if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+            } else { Get-Location }
+            $guidePath = Join-Path $projectRoot "EMERGENCY_BOOT_REPAIR_GUIDE.md"
+            if (Test-Path $guidePath) {
+                Start-Process notepad.exe -ArgumentList $guidePath -ErrorAction SilentlyContinue
+            } else {
+                [System.Windows.MessageBox]::Show("Emergency repair guide not found at: $guidePath", "File Not Found", "OK", "Warning") | Out-Null
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Could not open emergency repair guide: $_", "Error", "OK", "Error") | Out-Null
+        }
+    })
+}
+
+# Emergency Boot Repair Buttons (shown when repair fails)
+$btnEmergencyBoot1 = Get-Control -Name "BtnEmergencyBoot1"
+if ($btnEmergencyBoot1) {
+    $btnEmergencyBoot1.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$btnEmergencyBoot2 = Get-Control -Name "BtnEmergencyBoot2"
+if ($btnEmergencyBoot2) {
+    $btnEmergencyBoot2.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$btnEmergencyBoot3 = Get-Control -Name "BtnEmergencyBoot3"
+if ($btnEmergencyBoot3) {
+    $btnEmergencyBoot3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$btnFixBCDFound = Get-Control -Name "BtnFixBCDFound"
+if ($btnFixBCDFound) {
+    $btnFixBCDFound.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+# Emergency Boot Repair Buttons on Boot Fixer Tab
+$btnEmergencyBoot1Tab = Get-Control -Name "BtnEmergencyBoot1Tab"
+if ($btnEmergencyBoot1Tab) {
+    $btnEmergencyBoot1Tab.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$btnEmergencyBoot2Tab = Get-Control -Name "BtnEmergencyBoot2Tab"
+if ($btnEmergencyBoot2Tab) {
+    $btnEmergencyBoot2Tab.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$btnEmergencyBoot3Tab = Get-Control -Name "BtnEmergencyBoot3Tab"
+if ($btnEmergencyBoot3Tab) {
+    $btnEmergencyBoot3Tab.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$btnFixBCDFoundTab = Get-Control -Name "BtnFixBCDFoundTab"
+if ($btnFixBCDFoundTab) {
+    $btnFixBCDFoundTab.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
 }
 
 $btnSwitchToTUI = Get-Control -Name "BtnSwitchToTUI"
@@ -6206,6 +6478,13 @@ exit
                         Write-Log ""
                         Write-Log "[WARNING] Some issues could not be fixed automatically."
                         
+                        # Show emergency boot repair options
+                        $borderEmergency = Get-Control "BorderEmergencyOptions"
+                        if ($borderEmergency) {
+                            $borderEmergency.Visibility = "Visible"
+                            Write-Log "[INFO] Emergency boot repair options are now available"
+                        }
+                        
                         # Run advanced diagnostics
                         Write-Log "[INFO] Running advanced boot diagnostics..."
                         try {
@@ -6223,6 +6502,7 @@ exit
                             "Some issues could not be fixed automatically.`n`n" +
                             "Remaining issues: $($repairReport.IssuesRemaining.Count)`n`n" +
                             "Advanced diagnostics have been run to identify root causes.`n`n" +
+                            "Emergency boot repair scripts are now available in the GUI.`n`n" +
                             "Would you like to attempt additional repair steps?`n`n" +
                             "Yes = Try additional fixes`n" +
                             "No = View failure report with manual commands",
@@ -6349,6 +6629,13 @@ exit
                 $script:repairInProgress = $false
                 $btnOneClickRepair.IsEnabled = $true
                 return
+            }
+            
+            # Show emergency boot repair options when repair fails
+            $borderEmergency = Get-Control "BorderEmergencyOptions"
+            if ($borderEmergency) {
+                $borderEmergency.Visibility = "Visible"
+                Write-Log "[INFO] Emergency boot repair options are now available"
             }
             
             # Run advanced diagnostics when repair fails
