@@ -2264,6 +2264,31 @@ if ($menuHelpEmergencyGuide) {
     })
 }
 
+$menuHelpSupport = Get-Control -Name "MenuHelpSupport"
+if ($menuHelpSupport) {
+    $menuHelpSupport.Add_Click({
+        [System.Windows.MessageBox]::Show(
+            "Miracle Boot - Support & Contact`n`n" +
+            "For support issues, bug reports, or feedback:`n`n" +
+            "Email: zerounderscore@gmail.com`n`n" +
+            "Note: This is a one-person development project.`n" +
+            "There may be delays in responses, but all feedback`n" +
+            "is greatly appreciated!`n`n" +
+            "Thank you for using Miracle Boot!",
+            "Support & Contact",
+            "OK",
+            "Information"
+        ) | Out-Null
+        
+        # Optionally copy email to clipboard
+        try {
+            Set-Clipboard -Value "zerounderscore@gmail.com" -ErrorAction SilentlyContinue
+        } catch {
+            # Clipboard operation failed, ignore
+        }
+    })
+}
+
 # Emergency Boot Repair Buttons (shown when repair fails)
 $btnEmergencyBoot1 = Get-Control -Name "BtnEmergencyBoot1"
 if ($btnEmergencyBoot1) {
@@ -2379,7 +2404,8 @@ if ($menuHelpAbout) {
             "- BCD Editor`n" +
             "- System File Repair`n" +
             "- Boot Diagnostics`n`n" +
-            "For support, see EMERGENCY_BOOT_REPAIR_GUIDE.md",
+            "For support, see Help > Support & Contact`n" +
+            "For usage guide, see Help > Emergency Repair Guide",
             "About Miracle Boot",
             "OK",
             "Information"
