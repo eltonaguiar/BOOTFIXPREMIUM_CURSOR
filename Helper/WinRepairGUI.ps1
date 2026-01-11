@@ -3893,152 +3893,152 @@ if ($btnOneClickRepair) {
             $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
             $fixerOutput = Get-Control -Name "FixerOutput"
             $chkTestMode = Get-Control -Name "ChkTestMode"
-        
-        # Check test mode
-        if ($chkTestMode) {
-            $testMode = $chkTestMode.IsChecked
-        }
-        
-        # Create log file
-        $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-        $logContent = New-Object System.Text.StringBuilder
-        
-        # Determine target drive (will be updated after user selection)
-        $targetDrive = $env:SystemDrive.TrimEnd(':')
-        $drive = $targetDrive  # Initialize $drive early for use in diagnostic mode
-        
-        # Load report generator module
-        $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
-        if (Test-Path $reportGeneratorPath) {
-            try {
-                . $reportGeneratorPath
-                $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-            } catch {
-                Write-Warning "Could not load report generator: $_"
-                $repairReport = $null
-            }
-        } else {
-            $repairReport = $null
-        }
-        
-            # Define Write-Log function (must be accessible to helper functions)
-        function Write-Log {
-            param([string]$Message)
-            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-            $logEntry = "[$timestamp] $Message"
-            $logContent.AppendLine($logEntry) | Out-Null
-            if ($fixerOutput) {
-                $fixerOutput.Text += "$logEntry`n"
-                $fixerOutput.ScrollToEnd()
-            }
-        }
-        
-        function Write-CommandLog {
-            param(
-                [string]$Command, 
-                [string]$Description, 
-                [switch]$IsRepairCommand,
-                [string]$Output = "",
-                [int]$ExitCode = 0,
-                [string]$ErrorMessage = ""
-            )
             
-            $success = ($ExitCode -eq 0 -and -not $ErrorMessage)
+            # Check test mode
+            if ($chkTestMode) {
+                $testMode = $chkTestMode.IsChecked
+            }
             
-            # Track in report generator if available
-            if ($repairReport) {
+            # Create log file
+            $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+            $logContent = New-Object System.Text.StringBuilder
+            
+            # Determine target drive (will be updated after user selection)
+            $targetDrive = $env:SystemDrive.TrimEnd(':')
+            $drive = $targetDrive  # Initialize $drive early for use in diagnostic mode
+            
+            # Load report generator module
+            $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
+            if (Test-Path $reportGeneratorPath) {
                 try {
-                    Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                    . $reportGeneratorPath
+                    $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
                 } catch {
-                    # Silently fail if report tracking fails
-                }
-            }
-            
-            if ($IsRepairCommand) {
-                # Repair commands (write operations) - skip in test mode
-                if ($testMode) {
-                    Write-Log "[TEST MODE] Would execute repair: $Command"
-                    Write-Log "  Description: $Description"
-                    Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
-                } else {
-                    Write-Log "[EXECUTING REPAIR] Command: $Command"
-                    Write-Log "  Description: $Description"
-                    if ($Output) {
-                        Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
-                    }
-                    if (-not $success) {
-                        Write-Log "  [FAILED] Exit Code: $ExitCode"
-                        if ($Error) {
-                            Write-Log "  Error: $Error"
-                        }
-                    }
+                    Write-Warning "Could not load report generator: $_"
+                    $repairReport = $null
                 }
             } else {
-                # Diagnostic commands (read-only) - always run
-                Write-Log "[DIAGNOSTIC] Running: $Command"
-                Write-Log "  Description: $Description (read-only check)"
-                if ($Output -and $Output.Length -gt 0) {
-                    Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
-                }
+                $repairReport = $null
             }
-        }
-        
-        function Invoke-TrackedCommand {
-            <#
-            .SYNOPSIS
-            Executes a command and automatically tracks it in the repair report.
-            #>
-            param(
-                [Parameter(Mandatory=$true)]
-                [string]$Command,
-                [string]$Description = "",
-                [switch]$IsRepairCommand,
-                [scriptblock]$ScriptBlock
-            )
             
-            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
-            
-            if ($IsRepairCommand -and $testMode) {
-                Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
-                return @{
-                    Success = $true
-                    Output = ""
-                    ExitCode = 0
-                    ErrorMessage = ""
+            # Define Write-Log function (must be accessible to helper functions)
+            function Write-Log {
+                param([string]$Message)
+                $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                $logEntry = "[$timestamp] $Message"
+                $logContent.AppendLine($logEntry) | Out-Null
+                if ($fixerOutput) {
+                    $fixerOutput.Text += "$logEntry`n"
+                    $fixerOutput.ScrollToEnd()
                 }
             }
             
-            $output = ""
-            $errorMsg = ""
-            $exitCode = 0
-            $success = $false
-            
-            try {
-                if ($ScriptBlock) {
-                    $output = & $ScriptBlock 2>&1 | Out-String
-                    $exitCode = $LASTEXITCODE
-                    $success = ($exitCode -eq 0)
+            function Write-CommandLog {
+                param(
+                    [string]$Command, 
+                    [string]$Description, 
+                    [switch]$IsRepairCommand,
+                    [string]$Output = "",
+                    [int]$ExitCode = 0,
+                    [string]$ErrorMessage = ""
+                )
+                
+                $success = ($ExitCode -eq 0 -and -not $ErrorMessage)
+                
+                # Track in report generator if available
+                if ($repairReport) {
+                    try {
+                        Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                    } catch {
+                        # Silently fail if report tracking fails
+                    }
+                }
+                
+                if ($IsRepairCommand) {
+                    # Repair commands (write operations) - skip in test mode
+                    if ($testMode) {
+                        Write-Log "[TEST MODE] Would execute repair: $Command"
+                        Write-Log "  Description: $Description"
+                        Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
+                    } else {
+                        Write-Log "[EXECUTING REPAIR] Command: $Command"
+                        Write-Log "  Description: $Description"
+                        if ($Output) {
+                            Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                        }
+                        if (-not $success) {
+                            Write-Log "  [FAILED] Exit Code: $ExitCode"
+                            if ($Error) {
+                                Write-Log "  Error: $Error"
+                            }
+                        }
+                    }
                 } else {
-                    # Execute as string command
-                    $output = Invoke-Expression $Command 2>&1 | Out-String
-                    $exitCode = $LASTEXITCODE
-                    $success = ($exitCode -eq 0)
+                    # Diagnostic commands (read-only) - always run
+                    Write-Log "[DIAGNOSTIC] Running: $Command"
+                    Write-Log "  Description: $Description (read-only check)"
+                    if ($Output -and $Output.Length -gt 0) {
+                        Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                    }
                 }
-            } catch {
-                $errorMsg = $_.Exception.Message
-                $output = $_.Exception.ToString()
+            }
+            
+            function Invoke-TrackedCommand {
+                <#
+                .SYNOPSIS
+                Executes a command and automatically tracks it in the repair report.
+                #>
+                param(
+                    [Parameter(Mandatory=$true)]
+                    [string]$Command,
+                    [string]$Description = "",
+                    [switch]$IsRepairCommand,
+                    [scriptblock]$ScriptBlock
+                )
+                
+                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
+                
+                if ($IsRepairCommand -and $testMode) {
+                    Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
+                    return @{
+                        Success = $true
+                        Output = ""
+                        ExitCode = 0
+                        ErrorMessage = ""
+                    }
+                }
+                
+                $output = ""
+                $errorMsg = ""
+                $exitCode = 0
                 $success = $false
-            }
-            
-            # Update command log with results
-            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -ErrorMessage $errorMsg
-            
-            return @{
-                Success = $success
-                Output = $output
-                ExitCode = $exitCode
-                ErrorMessage = $errorMsg
-            }
+                
+                try {
+                    if ($ScriptBlock) {
+                        $output = & $ScriptBlock 2>&1 | Out-String
+                        $exitCode = $LASTEXITCODE
+                        $success = ($exitCode -eq 0)
+                    } else {
+                        # Execute as string command
+                        $output = Invoke-Expression $Command 2>&1 | Out-String
+                        $exitCode = $LASTEXITCODE
+                        $success = ($exitCode -eq 0)
+                    }
+                } catch {
+                    $errorMsg = $_.Exception.Message
+                    $output = $_.Exception.ToString()
+                    $success = $false
+                }
+                
+                # Update command log with results
+                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -ErrorMessage $errorMsg
+                
+                return @{
+                    Success = $success
+                    Output = $output
+                    ExitCode = $exitCode
+                    ErrorMessage = $errorMsg
+                }
             }
         } catch {
             Write-Warning "Failed to initialize One-Click Repair controls: $_"
