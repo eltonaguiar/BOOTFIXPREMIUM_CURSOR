@@ -3893,152 +3893,152 @@ if ($btnOneClickRepair) {
             $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
             $fixerOutput = Get-Control -Name "FixerOutput"
             $chkTestMode = Get-Control -Name "ChkTestMode"
-            
-            # Check test mode
-            if ($chkTestMode) {
-                $testMode = $chkTestMode.IsChecked
-            }
-            
-            # Create log file
-            $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-            $logContent = New-Object System.Text.StringBuilder
-            
-            # Determine target drive (will be updated after user selection)
-            $targetDrive = $env:SystemDrive.TrimEnd(':')
-            $drive = $targetDrive  # Initialize $drive early for use in diagnostic mode
-            
-            # Load report generator module
-            $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
-            if (Test-Path $reportGeneratorPath) {
-                try {
-                    . $reportGeneratorPath
-                    $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-                } catch {
-                    Write-Warning "Could not load report generator: $_"
-                    $repairReport = $null
-                }
-            } else {
+        
+        # Check test mode
+        if ($chkTestMode) {
+            $testMode = $chkTestMode.IsChecked
+        }
+        
+        # Create log file
+        $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+        $logContent = New-Object System.Text.StringBuilder
+        
+        # Determine target drive (will be updated after user selection)
+        $targetDrive = $env:SystemDrive.TrimEnd(':')
+        $drive = $targetDrive  # Initialize $drive early for use in diagnostic mode
+        
+        # Load report generator module
+        $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
+        if (Test-Path $reportGeneratorPath) {
+            try {
+                . $reportGeneratorPath
+                $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            } catch {
+                Write-Warning "Could not load report generator: $_"
                 $repairReport = $null
             }
-            
+        } else {
+            $repairReport = $null
+        }
+        
             # Define Write-Log function (must be accessible to helper functions)
-            function Write-Log {
-                param([string]$Message)
-                $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-                $logEntry = "[$timestamp] $Message"
-                $logContent.AppendLine($logEntry) | Out-Null
-                if ($fixerOutput) {
-                    $fixerOutput.Text += "$logEntry`n"
-                    $fixerOutput.ScrollToEnd()
+        function Write-Log {
+            param([string]$Message)
+            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            $logEntry = "[$timestamp] $Message"
+            $logContent.AppendLine($logEntry) | Out-Null
+            if ($fixerOutput) {
+                $fixerOutput.Text += "$logEntry`n"
+                $fixerOutput.ScrollToEnd()
+            }
+        }
+        
+        function Write-CommandLog {
+            param(
+                [string]$Command, 
+                [string]$Description, 
+                [switch]$IsRepairCommand,
+                [string]$Output = "",
+                [int]$ExitCode = 0,
+                [string]$ErrorMessage = ""
+            )
+            
+            $success = ($ExitCode -eq 0 -and -not $ErrorMessage)
+            
+            # Track in report generator if available
+            if ($repairReport) {
+                try {
+                    Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                } catch {
+                    # Silently fail if report tracking fails
                 }
             }
             
-            function Write-CommandLog {
-                param(
-                    [string]$Command, 
-                    [string]$Description, 
-                    [switch]$IsRepairCommand,
-                    [string]$Output = "",
-                    [int]$ExitCode = 0,
-                    [string]$ErrorMessage = ""
-                )
-                
-                $success = ($ExitCode -eq 0 -and -not $ErrorMessage)
-                
-                # Track in report generator if available
-                if ($repairReport) {
-                    try {
-                        Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
-                    } catch {
-                        # Silently fail if report tracking fails
-                    }
-                }
-                
-                if ($IsRepairCommand) {
-                    # Repair commands (write operations) - skip in test mode
-                    if ($testMode) {
-                        Write-Log "[TEST MODE] Would execute repair: $Command"
-                        Write-Log "  Description: $Description"
-                        Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
-                    } else {
-                        Write-Log "[EXECUTING REPAIR] Command: $Command"
-                        Write-Log "  Description: $Description"
-                        if ($Output) {
-                            Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
-                        }
-                        if (-not $success) {
-                            Write-Log "  [FAILED] Exit Code: $ExitCode"
-                            if ($Error) {
-                                Write-Log "  Error: $Error"
-                            }
-                        }
-                    }
+            if ($IsRepairCommand) {
+                # Repair commands (write operations) - skip in test mode
+                if ($testMode) {
+                    Write-Log "[TEST MODE] Would execute repair: $Command"
+                    Write-Log "  Description: $Description"
+                    Write-Log "  Status: SKIPPED (Test Mode Active - this would modify system)"
                 } else {
-                    # Diagnostic commands (read-only) - always run
-                    Write-Log "[DIAGNOSTIC] Running: $Command"
-                    Write-Log "  Description: $Description (read-only check)"
-                    if ($Output -and $Output.Length -gt 0) {
+                    Write-Log "[EXECUTING REPAIR] Command: $Command"
+                    Write-Log "  Description: $Description"
+                    if ($Output) {
                         Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
                     }
+                    if (-not $success) {
+                        Write-Log "  [FAILED] Exit Code: $ExitCode"
+                        if ($Error) {
+                            Write-Log "  Error: $Error"
+                        }
+                    }
+                }
+            } else {
+                # Diagnostic commands (read-only) - always run
+                Write-Log "[DIAGNOSTIC] Running: $Command"
+                Write-Log "  Description: $Description (read-only check)"
+                if ($Output -and $Output.Length -gt 0) {
+                    Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                }
+            }
+        }
+        
+        function Invoke-TrackedCommand {
+            <#
+            .SYNOPSIS
+            Executes a command and automatically tracks it in the repair report.
+            #>
+            param(
+                [Parameter(Mandatory=$true)]
+                [string]$Command,
+                [string]$Description = "",
+                [switch]$IsRepairCommand,
+                [scriptblock]$ScriptBlock
+            )
+            
+            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
+            
+            if ($IsRepairCommand -and $testMode) {
+                Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
+                return @{
+                    Success = $true
+                    Output = ""
+                    ExitCode = 0
+                    ErrorMessage = ""
                 }
             }
             
-            function Invoke-TrackedCommand {
-                <#
-                .SYNOPSIS
-                Executes a command and automatically tracks it in the repair report.
-                #>
-                param(
-                    [Parameter(Mandatory=$true)]
-                    [string]$Command,
-                    [string]$Description = "",
-                    [switch]$IsRepairCommand,
-                    [scriptblock]$ScriptBlock
-                )
-                
-                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
-                
-                if ($IsRepairCommand -and $testMode) {
-                    Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
-                    return @{
-                        Success = $true
-                        Output = ""
-                        ExitCode = 0
-                        ErrorMessage = ""
-                    }
+            $output = ""
+            $errorMsg = ""
+            $exitCode = 0
+            $success = $false
+            
+            try {
+                if ($ScriptBlock) {
+                    $output = & $ScriptBlock 2>&1 | Out-String
+                    $exitCode = $LASTEXITCODE
+                    $success = ($exitCode -eq 0)
+                } else {
+                    # Execute as string command
+                    $output = Invoke-Expression $Command 2>&1 | Out-String
+                    $exitCode = $LASTEXITCODE
+                    $success = ($exitCode -eq 0)
                 }
-                
-                $output = ""
-                $errorMsg = ""
-                $exitCode = 0
+            } catch {
+                $errorMsg = $_.Exception.Message
+                $output = $_.Exception.ToString()
                 $success = $false
-                
-                try {
-                    if ($ScriptBlock) {
-                        $output = & $ScriptBlock 2>&1 | Out-String
-                        $exitCode = $LASTEXITCODE
-                        $success = ($exitCode -eq 0)
-                    } else {
-                        # Execute as string command
-                        $output = Invoke-Expression $Command 2>&1 | Out-String
-                        $exitCode = $LASTEXITCODE
-                        $success = ($exitCode -eq 0)
-                    }
-                } catch {
-                    $errorMsg = $_.Exception.Message
-                    $output = $_.Exception.ToString()
-                    $success = $false
-                }
-                
-                # Update command log with results
-                Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -ErrorMessage $errorMsg
-                
-                return @{
-                    Success = $success
-                    Output = $output
-                    ExitCode = $exitCode
-                    ErrorMessage = $errorMsg
-                }
+            }
+            
+            # Update command log with results
+            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -ErrorMessage $errorMsg
+            
+            return @{
+                Success = $success
+                Output = $output
+                ExitCode = $exitCode
+                ErrorMessage = $errorMsg
+            }
             }
         } catch {
             Write-Warning "Failed to initialize One-Click Repair controls: $_"
@@ -4868,7 +4868,7 @@ if ($btnOneClickRepair) {
                         Write-Log "Skipping detailed BCD check and proceeding to boot file verification"
                         $bcdCheck = "TIMEOUT - BCD check exceeded 5 seconds"
                     } else {
-                        Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
+                Write-Log "BCD Check Output: $($bcdCheck.Substring(0, [Math]::Min(200, $bcdCheck.Length)))..."
                     }
                 } else {
                     # Unknown state - treat as missing
@@ -4934,45 +4934,45 @@ if ($btnOneClickRepair) {
                     
                     # Fallback: Check if bootrec.exe is available (only in WinRE/WinPE)
                     if (-not $efiDrive) {
-                        $bootrecPath = $null
-                        $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
-                        if ($bootrecCmd) {
-                            $bootrecPath = $bootrecCmd.Source
-                        } else {
-                            # Try common WinRE paths
-                            $possiblePaths = @(
-                                "$env:SystemRoot\System32\bootrec.exe",
-                                "X:\Windows\System32\bootrec.exe",
-                                "C:\Windows\System32\Recovery\bootrec.exe"
-                            )
-                            foreach ($path in $possiblePaths) {
-                                if (Test-Path $path) {
-                                    $bootrecPath = $path
-                                    break
-                                }
+                    $bootrecPath = $null
+                    $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                    if ($bootrecCmd) {
+                        $bootrecPath = $bootrecCmd.Source
+                    } else {
+                        # Try common WinRE paths
+                        $possiblePaths = @(
+                            "$env:SystemRoot\System32\bootrec.exe",
+                            "X:\Windows\System32\bootrec.exe",
+                            "C:\Windows\System32\Recovery\bootrec.exe"
+                        )
+                        foreach ($path in $possiblePaths) {
+                            if (Test-Path $path) {
+                                $bootrecPath = $path
+                                break
                             }
                         }
-                        
-                        if ($bootrecPath) {
-                            $command = "$bootrecPath /rebuildbcd"
+                    }
+                    
+                    if ($bootrecPath) {
+                        $command = "$bootrecPath /rebuildbcd"
                             Write-CommandLog -Command $command -Description "Rebuild Boot Configuration Data using bootrec" -IsRepairCommand:$true
-                            
-                            if (-not $testMode) {
-                                try {
-                                    $bcdRebuild = & $bootrecPath /rebuildbcd 2>&1 | Out-String
-                                    Write-Log "BCD Rebuild Output: $bcdRebuild"
-                                } catch {
-                                    Write-Log "[WARNING] BCD rebuild failed: $_"
-                                    Write-Log "Note: bootrec.exe may not be available in this environment."
-                                    Write-Log "Consider using bcdboot.exe or running from WinRE instead."
-                                }
-                            } else {
-                                Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        
+                        if (-not $testMode) {
+                            try {
+                                $bcdRebuild = & $bootrecPath /rebuildbcd 2>&1 | Out-String
+                                Write-Log "BCD Rebuild Output: $bcdRebuild"
+                            } catch {
+                                Write-Log "[WARNING] BCD rebuild failed: $_"
+                                Write-Log "Note: bootrec.exe may not be available in this environment."
+                                Write-Log "Consider using bcdboot.exe or running from WinRE instead."
                             }
                         } else {
-                            Write-Log "[INFO] bootrec.exe not available in this environment."
-                            Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
-                            Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
+                            Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        }
+                    } else {
+                        Write-Log "[INFO] bootrec.exe not available in this environment."
+                        Write-Log "This is normal in a regular Windows session. bootrec.exe is only available in WinRE/WinPE."
+                        Write-Log "Alternative command: bcdboot $drive`:\Windows /s <ESP_DRIVE>:"
                         }
                     }
                 } else {
@@ -5437,7 +5437,7 @@ exit
                                         Write-Log "[WARNING] Could not modify file attributes: $_"
                                     }
                                 } else {
-                                    Write-Log "[OK] File attributes verified"
+                                Write-Log "[OK] File attributes verified"
                                 }
                             } catch {
                                 Write-Log "[WARNING] Could not modify file attributes: $_"
@@ -5469,8 +5469,8 @@ exit
                                         Write-Log "[WARNING] Set-ItemProperty fallback also failed: $_"
                                     }
                                 } else {
-                                    Write-Log "Attrib Output: $attribOutput"
-                                    Write-Log "[OK] Read-only attributes cleared on EFI boot files"
+                                Write-Log "Attrib Output: $attribOutput"
+                                Write-Log "[OK] Read-only attributes cleared on EFI boot files"
                                 }
                             }
                         } catch {
@@ -5519,45 +5519,45 @@ exit
                         Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
                         Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI /v" -Description "bcdboot command (TEST MODE)" -IsRepairCommand:$true
                     }
-                    }  # End of if (-not $useDefensiveLogic) block
-                } else {
+                }  # End of if (-not $useDefensiveLogic) block
+            } else {
                     try {
-                        # Fallback: EFI partition not mounted - try bootrec if available
-                        $bootrecPath = $null
-                        $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
-                        if ($bootrecCmd) {
-                            $bootrecPath = $bootrecCmd.Source
-                        } else {
-                            $possiblePaths = @(
-                                "$env:SystemRoot\System32\bootrec.exe",
-                                "X:\Windows\System32\bootrec.exe",
-                                "C:\Windows\System32\Recovery\bootrec.exe"
-                            )
-                            foreach ($path in $possiblePaths) {
-                                if (Test-Path $path) {
-                                    $bootrecPath = $path
-                                    break
-                                }
+                    # Fallback: EFI partition not mounted - try bootrec if available
+                    $bootrecPath = $null
+                    $bootrecCmd = Get-Command "bootrec" -ErrorAction SilentlyContinue
+                    if ($bootrecCmd) {
+                        $bootrecPath = $bootrecCmd.Source
+                    } else {
+                        $possiblePaths = @(
+                            "$env:SystemRoot\System32\bootrec.exe",
+                            "X:\Windows\System32\bootrec.exe",
+                            "C:\Windows\System32\Recovery\bootrec.exe"
+                        )
+                        foreach ($path in $possiblePaths) {
+                            if (Test-Path $path) {
+                                $bootrecPath = $path
+                                break
                             }
                         }
+                    }
+                    
+                    if ($bootrecPath) {
+                        $command = "$bootrecPath /fixboot"
+                        Write-CommandLog -Command $command -Description "Fix boot sector (fallback method)" -IsRepairCommand:$true
                         
-                        if ($bootrecPath) {
-                            $command = "$bootrecPath /fixboot"
-                            Write-CommandLog -Command $command -Description "Fix boot sector (fallback method)" -IsRepairCommand:$true
-                            
-                            if (-not $testMode) {
-                                try {
-                                    $bootFix = & $bootrecPath /fixboot 2>&1 | Out-String
-                                    Write-Log "Boot File Repair Output: $bootFix"
-                                } catch {
-                                    Write-Log "[WARNING] Boot file repair failed: $_"
-                                }
-                            } else {
-                                Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        if (-not $testMode) {
+                            try {
+                                $bootFix = & $bootrecPath /fixboot 2>&1 | Out-String
+                                Write-Log "Boot File Repair Output: $bootFix"
+                            } catch {
+                                Write-Log "[WARNING] Boot file repair failed: $_"
                             }
                         } else {
-                            Write-Log "[INFO] bootrec.exe not available and EFI partition could not be mounted."
-                            Write-Log "Manual repair required:"
+                            Write-Log "  [SKIPPED] Repair command not executed (Test Mode Active)"
+                        }
+                    } else {
+                        Write-Log "[INFO] bootrec.exe not available and EFI partition could not be mounted."
+                        Write-Log "Manual repair required:"
                             Write-Log "  1. Mount EFI partition using diskpart"
                             Write-Log "  2. Run: bcdboot $drive`:\Windows /s <ESP_DRIVE>: /f UEFI"
                         }
@@ -5645,8 +5645,8 @@ exit
                             }
                         } else {
                             # Other boot files can be in either location
-                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                                $stillMissingFiles += $file.Name
+                        if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                            $stillMissingFiles += $file.Name
                             }
                         }
                     }
@@ -5663,8 +5663,8 @@ exit
                                     $stillMissingFiles += $file.Name
                                 }
                             } else {
-                                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                                    $stillMissingFiles += $file.Name
+                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                $stillMissingFiles += $file.Name
                                 }
                             }
                         }
@@ -5690,8 +5690,8 @@ exit
                                     $stillMissingFilesRetry += $file.Name
                                 }
                             } else {
-                                if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
-                                    $stillMissingFilesRetry += $file.Name
+                            if (-not (Test-Path $efiPath) -and -not (Test-Path $winPath)) {
+                                $stillMissingFilesRetry += $file.Name
                                 }
                             }
                         }
@@ -6092,7 +6092,7 @@ exit
                             if ($null -eq $bcdCheckOutput) {
                                 if (-not $bcdFileExists) {
                                     Add-RepairIssue -Report $repairReport -Issue "BCD file not observed and accessibility check timed out" -Category "BCD" -Fixed $false | Out-Null
-                                }
+                            }
                                 # If file exists but timed out, treat as initializing and do not add issue
                             } elseif ($bcdCheckOutput -match "The boot configuration data store could not be opened" -or
                                 $bcdCheckOutput -match "The system cannot find the file specified" -or
@@ -6204,7 +6204,7 @@ exit
             
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
             
-        } catch {  # End of try block started at line 3419
+        } catch {
             $errorMessage = $_.Exception.Message
             $errorCategory = $_.CategoryInfo.Category
             
