@@ -147,23 +147,75 @@ for %%d in (S T U V W Y Z) do (
     )
 )
 
-REM Try to mount
+REM Try to mount - use diskpart to find EFI partition first
 echo   [INFO] Attempting to mount EFI partition...
+echo   [INFO] Searching for EFI System Partition...
+
+REM Create diskpart script to list partitions and find EFI
 (
     echo select disk 0
     echo list partition
-    echo select partition 1
-    echo assign letter=S
     echo exit
-) > %TEMP%\mount_efi.txt
-diskpart /s %TEMP%\mount_efi.txt >nul 2>&1
+) > %TEMP%\list_partitions.txt
+diskpart /s %TEMP%\list_partitions.txt > %TEMP%\partitions.txt 2>&1
 
+REM Try common EFI partition locations (usually partition 1 or 2)
+for %%p in (1 2) do (
+    (
+        echo select disk 0
+        echo select partition %%p
+        echo assign letter=S
+        echo exit
+    ) > %TEMP%\mount_efi_%%p.txt
+    diskpart /s %TEMP%\mount_efi_%%p.txt >nul 2>&1
+    
+    if exist "S:\EFI\Microsoft\Boot\BCD" (
+        set "EFI_DRIVE=S"
+        set "EFI_MOUNTED=1"
+        echo   [OK] EFI partition mounted as S: (partition %%p)
+        goto :efi_check_done
+    )
+    
+    REM Try other drive letters if S: is in use
+    for %%d in (T U V W Y Z) do (
+        (
+            echo select disk 0
+            echo select partition %%p
+            echo assign letter=%%d
+            echo exit
+        ) > %TEMP%\mount_efi_%%p_%%d.txt
+        diskpart /s %TEMP%\mount_efi_%%p_%%d.txt >nul 2>&1
+        
+        if exist "%%d:\EFI\Microsoft\Boot\BCD" (
+            set "EFI_DRIVE=%%d"
+            set "EFI_MOUNTED=1"
+            echo   [OK] EFI partition mounted as %%d: (partition %%p)
+            goto :efi_check_done
+        )
+    )
+)
+
+REM If still not mounted, try mountvol
+echo   [INFO] Trying mountvol method...
+mountvol S: /S >nul 2>&1
 if exist "S:\EFI\Microsoft\Boot\BCD" (
     set "EFI_DRIVE=S"
     set "EFI_MOUNTED=1"
-    echo   [OK] EFI partition mounted as S:
-) else (
+    echo   [OK] EFI partition mounted as S: (via mountvol)
+    goto :efi_check_done
+)
+
+REM Final check - if still not mounted
+if "!EFI_MOUNTED!"=="0" (
     echo   [CRITICAL] Could not mount EFI partition
+    echo   [INFO] EFI partition exists but has no drive letter
+    echo   [INFO] You may need to mount it manually using diskpart:
+    echo   [INFO]   1. Run: diskpart
+    echo   [INFO]   2. Run: select disk 0
+    echo   [INFO]   3. Run: list partition
+    echo   [INFO]   4. Run: select partition 1 (or the EFI partition number)
+    echo   [INFO]   5. Run: assign letter=S
+    echo   [INFO]   6. Run: exit
     set /a ISSUES_FOUND+=1
     set /a CRITICAL_ISSUES+=1
 )
@@ -365,8 +417,28 @@ if "!EFI_DRIVE!"=="" (
 )
 
 if not "!EFI_DRIVE!"=="" (
+    REM First, check if BCD is corrupted (like "The specified entry type is invalid")
+    set "BCD_CORRUPTED=0"
+    if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
+        if errorlevel 1 (
+            set "BCD_CORRUPTED=1"
+            echo   [Strategy 3a] BCD is corrupted, backing up and deleting old BCD...
+            REM Backup old BCD before deletion
+            if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD.backup" (
+                del "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD.backup" >nul 2>&1
+            )
+            copy "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD.backup" >nul 2>&1
+            del "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" >nul 2>&1
+            echo   [OK] Old BCD backed up and deleted
+        )
+    ) else (
+        set "BCD_CORRUPTED=1"
+        echo   [Strategy 3a] BCD file missing
+    )
+    
     if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
-        echo   [Strategy 3b] Running bcdboot to copy boot files...
+        echo   [Strategy 3b] Running bcdboot to copy boot files and rebuild BCD...
         bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI
         if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
             echo   [SUCCESS] bcdboot copied winload.efi to EFI partition
@@ -388,25 +460,29 @@ if not "!EFI_DRIVE!"=="" (
                 )
             )
         )
-    )
-    
-    REM Fix BCD if corrupted
-    if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
-        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
-        if errorlevel 1 (
-            echo   [Strategy 3f] BCD is corrupted, rebuilding...
-            bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI
-            if not errorlevel 1 (
-                echo   [SUCCESS] BCD rebuilt
-                set /a FIXES_APPLIED+=1
-            )
-        )
-    ) else (
-        echo   [Strategy 3g] BCD missing, creating new one...
-        bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI
+        
+        REM Verify BCD was created/rebuilt and is readable
         if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
-            echo   [SUCCESS] BCD created
-            set /a FIXES_APPLIED+=1
+            echo   [Strategy 3f] Verifying new BCD integrity...
+            bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
+            if errorlevel 1 (
+                echo   [WARNING] New BCD still has issues, trying alternative repair...
+                REM Try bootrec if available
+                where bootrec.exe >nul 2>&1
+                if not errorlevel 1 (
+                    echo   [Strategy 3g] Running bootrec /rebuildbcd...
+                    bootrec /rebuildbcd
+                )
+            ) else (
+                if !BCD_CORRUPTED! EQU 1 (
+                    echo   [SUCCESS] BCD rebuilt and verified
+                    set /a FIXES_APPLIED+=1
+                ) else (
+                    echo   [OK] BCD is readable
+                )
+            )
+        ) else (
+            echo   [WARNING] BCD was not created by bcdboot
         )
     )
 )
