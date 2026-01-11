@@ -451,6 +451,19 @@ if not "!EFI_DRIVE!"=="" (
     ) else (
         set "BCD_CORRUPTED=1"
         echo   [Strategy 3a] BCD file missing
+        echo   [INFO] This is the "file not found" error - BCD needs to be created from scratch
+    )
+    
+    REM Also check if bcdedit reports "file not found" even if file exists
+    REM This can happen if BCD is on a different partition or path
+    if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+        REM File exists, but check if bcdedit can access it
+        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} 2>&1 | findstr /i "cannot find the file\|file specified" >nul
+        if not errorlevel 1 (
+            echo   [WARNING] BCD file exists but bcdedit reports "file not found"
+            echo   [INFO] This may indicate path/permission issues
+            set "BCD_CORRUPTED=1"
+        )
     )
     
     if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
