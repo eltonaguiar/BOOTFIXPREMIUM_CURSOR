@@ -1,4 +1,66 @@
-QUICK START — MIRACLE BOOT PRECISION MODE (WinPE/WinRE/Live Windows)
+QUICK START — MIRACLE BOOT
+====================================================================
+
+⚡ QUICK WAYS TO RUN MIRACLE BOOT
+=================================
+
+1. RUN THE GUI (Windows Desktop)
+----------------------------------
+If Windows is running, the easiest way:
+
+    Method A: Double-click
+    → Double-click "RunMiracleBoot.cmd"
+    → GUI will launch automatically
+
+    Method B: PowerShell
+    → Right-click "RunMiracleBoot.cmd" → "Run as Administrator"
+    → Or: powershell -ExecutionPolicy Bypass -File .\MiracleBoot.ps1
+
+    Method C: Direct GUI Launch
+    → powershell -ExecutionPolicy Bypass -File .\Helper\WinRepairGUI.ps1
+
+    The GUI provides:
+    - Visual interface with tabs and buttons
+    - One-Click Repair
+    - Emergency Boot Repair buttons
+    - BCD Editor
+    - Comprehensive diagnostics
+
+
+2. RUN EMERGENCY FIX (CMD VERSION)
+-----------------------------------
+For quick boot repair without GUI (works in WinRE/WinPE/CMD):
+
+    Emergency Boot 1 (Ultra-Simple):
+    → EMERGENCY_BOOT1.cmd
+
+    Emergency Boot 2 (Advanced):
+    → EMERGENCY_BOOT2.cmd
+
+    Emergency Boot 3 (Comprehensive):
+    → EMERGENCY_BOOT3.cmd
+
+    Emergency Boot 4 (Smart Minimal - Recommended):
+    → EMERGENCY_BOOT4.cmd
+
+    Fix BCD Not Found:
+    → FIX_BCD_NOT_FOUND.cmd
+
+    How to run:
+    1. Open Command Prompt (as Administrator)
+    2. Navigate to Miracle Boot folder
+    3. Run: EMERGENCY_BOOT4.cmd
+    4. Follow the on-screen prompts
+
+    These scripts:
+    - Run in separate Command Prompt windows
+    - Provide step-by-step repair processes
+    - Show detailed progress and results
+    - Work in WinRE, WinPE, and normal Windows
+
+
+====================================================================
+PRECISION MODE (WinPE/WinRE/Live Windows)
 ====================================================================
 
 What this is:

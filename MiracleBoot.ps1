@@ -680,16 +680,54 @@ if ($canLaunchGUI) {
         #endregion
         
         # Terminate any existing MiracleBoot GUI processes before launching
+        # CRITICAL: Multiple safety checks to prevent killing Cursor/IDE processes
         try {
-            $existingGUIs = Get-Process | Where-Object { 
-                $_.MainWindowTitle -like '*MiracleBoot*' -or 
-                ($_.ProcessName -eq 'powershell' -and $_.MainWindowTitle -like '*MiracleBoot*') -or
-                ($_.ProcessName -eq 'pwsh' -and $_.MainWindowTitle -like '*MiracleBoot*')
+            # Detect if running in IDE (Cursor, VS Code, etc.) - skip process termination if so
+            $isRunningInIDE = $false
+            try {
+                $parentProcess = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+                if ($parentProcess) {
+                    $parentProcInfo = Get-Process -Id $parentProcess -ErrorAction SilentlyContinue
+                    if ($parentProcInfo) {
+                        $parentName = $parentProcInfo.ProcessName.ToLower()
+                        if ($parentName -match 'cursor|code|vscode|devenv|rider|pycharm|idea') {
+                            $isRunningInIDE = $true
+                            Write-Host "Detected IDE environment ($($parentProcInfo.ProcessName)) - skipping process termination for safety" -ForegroundColor Cyan
+                        }
+                    }
+                }
+            } catch {
+                # If we can't detect, be safe and skip termination
+                $isRunningInIDE = $true
             }
-            if ($existingGUIs) {
-                Write-Host "Terminating $($existingGUIs.Count) existing MiracleBoot GUI process(es)..." -ForegroundColor Yellow
-                $existingGUIs | Stop-Process -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 1
+            
+            if (-not $isRunningInIDE) {
+                $currentPID = $PID
+                $currentProcess = Get-Process -Id $currentPID -ErrorAction SilentlyContinue
+                
+                # Get parent process IDs to exclude
+                $excludedPIDs = @($currentPID)
+                try {
+                    $parentPID = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+                    if ($parentPID) { $excludedPIDs += $parentPID }
+                } catch {}
+                
+                $existingGUIs = Get-Process | Where-Object { 
+                    # Exclude current process and parent process
+                    $_.Id -notin $excludedPIDs -and
+                    # ONLY target PowerShell/pwsh processes (not Cursor, VS Code, etc.)
+                    ($_.ProcessName -eq 'powershell' -or $_.ProcessName -eq 'pwsh') -and
+                    # Only target processes with actual GUI windows (MainWindowHandle exists)
+                    $_.MainWindowHandle -ne [IntPtr]::Zero -and
+                    # Match MiracleBoot in window title
+                    ($_.MainWindowTitle -like '*MiracleBoot*' -or $_.MainWindowTitle -like '*Miracle Boot*')
+                }
+                if ($existingGUIs -and ($existingGUIs | Measure-Object).Count -gt 0) {
+                    $guiCount = ($existingGUIs | Measure-Object).Count
+                    Write-Host "Terminating $guiCount existing MiracleBoot GUI process(es)..." -ForegroundColor Yellow
+                    $existingGUIs | Stop-Process -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 1
+                }
             }
         } catch {
             Write-Warning "Could not check for existing GUI processes: $_"

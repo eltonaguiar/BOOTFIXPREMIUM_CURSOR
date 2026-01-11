@@ -177,17 +177,38 @@ For detailed structure information, see `PROJECT_STRUCTURE.md`.
 
 ### Step 2: Choose Your Environment
 
-#### **If Windows is Running:**
+#### **⚡ Quick Way to Run the GUI (Windows Desktop):**
 ```cmd
+# Method 1: Double-click (Easiest)
 RunMiracleBoot.cmd
+
+# Method 2: PowerShell
+powershell -ExecutionPolicy Bypass -File .\MiracleBoot.ps1
+
+# Method 3: Direct GUI Launch
+powershell -ExecutionPolicy Bypass -File .\Helper\WinRepairGUI.ps1
 ```
 You'll see a modern GUI with tabs and buttons.
+
+#### **⚡ Quick Way to Run Emergency Fix (CMD Version):**
+For quick boot repair without GUI (works in WinRE/WinPE/CMD):
+```cmd
+# Recommended: Emergency Boot 4 (Smart Minimal)
+EMERGENCY_BOOT4.cmd
+
+# Other options:
+EMERGENCY_BOOT1.cmd    # Ultra-simple boot repair
+EMERGENCY_BOOT2.cmd    # Advanced boot repair
+EMERGENCY_BOOT3.cmd    # Comprehensive boot repair
+FIX_BCD_NOT_FOUND.cmd  # Targeted fix for missing BCD
+```
+These scripts run in separate Command Prompt windows and provide step-by-step repair processes.
 
 #### **If Windows Won't Boot:**
 1. Boot into WinRE (Advanced Startup Options) or WinPE (bootable USB)
 2. Open Command Prompt
 3. Navigate to Miracle Boot folder
-4. Run: `RunMiracleBoot.cmd`
+4. Run: `RunMiracleBoot.cmd` (for GUI/TUI) or `EMERGENCY_BOOT4.cmd` (for quick fix)
 5. You'll see a text-based menu - use number/letter keys to navigate
 
 ---

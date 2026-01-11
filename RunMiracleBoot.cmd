@@ -59,7 +59,8 @@ echo Launching Miracle Boot (PowerShell mode)...
 echo(
 cd /d "%SCRIPT_DIR%"
 REM Terminate any existing MiracleBoot GUI processes before launching
-powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Get-Process | Where-Object { $_.MainWindowTitle -like '*MiracleBoot*' -or ($_.ProcessName -eq 'powershell' -and $_.MainWindowTitle -like '*MiracleBoot*') } | Stop-Process -Force -ErrorAction SilentlyContinue"
+REM CRITICAL: Only target PowerShell/pwsh processes with GUI windows to prevent killing Cursor/IDE
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$currentPID = $PID; $parentPID = (Get-CimInstance Win32_Process -Filter \"ProcessId = $PID\").ParentProcessId; Get-Process | Where-Object { $_.Id -ne $currentPID -and $_.Id -ne $parentPID -and ($_.ProcessName -eq 'powershell' -or $_.ProcessName -eq 'pwsh') -and $_.MainWindowHandle -ne [IntPtr]::Zero -and ($_.MainWindowTitle -like '*MiracleBoot*' -or $_.MainWindowTitle -like '*Miracle Boot*') } | Stop-Process -Force -ErrorAction SilentlyContinue"
 powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '.\MiracleBoot.ps1'"
 
 :end

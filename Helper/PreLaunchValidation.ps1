@@ -48,26 +48,62 @@ function Test-PreLaunchValidation {
     # Terminate any existing GUI processes before validation
     Write-Host "`n[VALIDATION] Terminating any existing GUI processes..." -ForegroundColor Cyan
     try {
-        $guiProcesses = Get-Process | Where-Object {
-            ($_.MainWindowTitle -like "*MiracleBoot*" -or $_.MainWindowTitle -like "*Miracle Boot*") -and
-            $_.ProcessName -like "*powershell*"
-        }
-        if ($guiProcesses) {
-            foreach ($proc in $guiProcesses) {
-                Write-Host "  [INFO] Terminating GUI process: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
-                try {
-                    $proc.CloseMainWindow() | Out-Null
-                    Start-Sleep -Milliseconds 500
-                    if (-not $proc.HasExited) {
-                        $proc.Kill()
+        # CRITICAL: Multiple safety checks to prevent killing Cursor/IDE processes
+        # Detect if running in IDE - skip if so
+        $isRunningInIDE = $false
+        try {
+            $parentProcess = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+            if ($parentProcess) {
+                $parentProcInfo = Get-Process -Id $parentProcess -ErrorAction SilentlyContinue
+                if ($parentProcInfo) {
+                    $parentName = $parentProcInfo.ProcessName.ToLower()
+                    if ($parentName -match 'cursor|code|vscode|devenv|rider|pycharm|idea') {
+                        $isRunningInIDE = $true
+                        Write-Host "  [SKIP] Detected IDE environment ($($parentProcInfo.ProcessName)) - skipping process termination" -ForegroundColor Cyan
                     }
-                } catch {
-                    Write-Host "  [WARN] Could not terminate process $($proc.Id): $_" -ForegroundColor Yellow
                 }
             }
-            Start-Sleep -Milliseconds 1000
-        } else {
-            Write-Host "  [OK] No GUI processes found" -ForegroundColor Green
+        } catch {
+            # If we can't detect, be safe and skip termination
+            $isRunningInIDE = $true
+            Write-Host "  [SKIP] Cannot determine parent process - skipping termination for safety" -ForegroundColor Cyan
+        }
+        
+        if (-not $isRunningInIDE) {
+            $currentPID = $PID
+            $excludedPIDs = @($currentPID)
+            try {
+                $parentPID = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
+                if ($parentPID) { $excludedPIDs += $parentPID }
+            } catch {}
+            
+            $guiProcesses = Get-Process | Where-Object {
+                # Exclude current and parent processes
+                $_.Id -notin $excludedPIDs -and
+                # ONLY target PowerShell/pwsh processes (not IDE processes)
+                ($_.ProcessName -eq 'powershell' -or $_.ProcessName -eq 'pwsh') -and
+                # Only target processes with actual GUI windows (not console windows)
+                $_.MainWindowHandle -ne [IntPtr]::Zero -and
+                # Match MiracleBoot in window title
+                ($_.MainWindowTitle -like "*MiracleBoot*" -or $_.MainWindowTitle -like "*Miracle Boot*")
+            }
+            if ($guiProcesses) {
+                foreach ($proc in $guiProcesses) {
+                    Write-Host "  [INFO] Terminating GUI process: $($proc.ProcessName) (PID: $($proc.Id))" -ForegroundColor Yellow
+                    try {
+                        $proc.CloseMainWindow() | Out-Null
+                        Start-Sleep -Milliseconds 500
+                        if (-not $proc.HasExited) {
+                            $proc.Kill()
+                        }
+                    } catch {
+                        Write-Host "  [WARN] Could not terminate process $($proc.Id): $_" -ForegroundColor Yellow
+                    }
+                }
+                Start-Sleep -Milliseconds 1000
+            } else {
+                Write-Host "  [OK] No GUI processes found" -ForegroundColor Green
+            }
         }
     } catch {
         Write-Host "  [WARN] Error checking for GUI processes: $_" -ForegroundColor Yellow

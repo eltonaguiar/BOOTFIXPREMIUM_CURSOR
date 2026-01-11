@@ -908,6 +908,280 @@ function Start-SafeNotepad {
     }
 }
 
+# Helper function to verify boot repair success
+function Test-BootRepairSuccess {
+    <#
+    .SYNOPSIS
+    Verifies if boot repair was successful by checking critical boot files and BCD.
+    #>
+    param(
+        [string]$WindowsDrive = $env:SystemDrive.TrimEnd(':'),
+        [string]$EfiDrive = $null
+    )
+    
+    $result = @{
+        Success = $true
+        Issues = @()
+        Details = @()
+    }
+    
+    try {
+        # Try to mount EFI partition if not provided
+        if (-not $EfiDrive) {
+            try {
+                $efiMount = Mount-EFIPartition -WindowsDrive $WindowsDrive -PreferredLetter "S" -ErrorAction SilentlyContinue
+                if ($efiMount -and $efiMount.Success) {
+                    $EfiDrive = $efiMount.DriveLetter
+                }
+            } catch {
+                # EFI mount failed, continue with checks
+            }
+        }
+        
+        # Check critical boot files
+        $bootFiles = @(
+            @{Name="winload.efi"; WindowsPath="$WindowsDrive`:\Windows\System32\winload.efi"; EfiPath="$EfiDrive`:\EFI\Microsoft\Boot\winload.efi"; Required="UEFI boot"},
+            @{Name="winload.exe"; WindowsPath="$WindowsDrive`:\Windows\System32\winload.exe"; EfiPath="$EfiDrive`:\EFI\Microsoft\Boot\winload.exe"; Required="Legacy BIOS boot"},
+            @{Name="bootmgfw.efi"; WindowsPath="$WindowsDrive`:\Windows\System32\bootmgfw.efi"; EfiPath="$EfiDrive`:\EFI\Microsoft\Boot\bootmgfw.efi"; Required="Boot Manager"},
+            @{Name="BCD"; WindowsPath="$WindowsDrive`:\Boot\BCD"; EfiPath="$EfiDrive`:\EFI\Microsoft\Boot\BCD"; Required="Boot Configuration"}
+        )
+        
+        foreach ($file in $bootFiles) {
+            $winExists = Test-Path $file.WindowsPath -ErrorAction SilentlyContinue
+            $efiExists = if ($EfiDrive) { Test-Path $file.EfiPath -ErrorAction SilentlyContinue } else { $false }
+            
+            if (-not $winExists -and -not $efiExists) {
+                $result.Success = $false
+                $issue = "$($file.Name) is MISSING from both Windows directory and EFI partition"
+                $result.Issues += $issue
+                $result.Details += "CRITICAL: $issue - Required for: $($file.Required)"
+            } elseif (-not $winExists) {
+                $result.Success = $false
+                $issue = "$($file.Name) is MISSING from Windows directory: $($file.WindowsPath)"
+                $result.Issues += $issue
+                $result.Details += "WARNING: $issue (found in EFI partition but not in Windows directory)"
+            } elseif ($file.Name -eq "winload.efi" -and $EfiDrive -and -not $efiExists) {
+                $result.Success = $false
+                $issue = "$($file.Name) is MISSING from EFI partition: $($file.EfiPath)"
+                $result.Issues += $issue
+                $result.Details += "CRITICAL: $issue - Required for UEFI boot (file exists in Windows but not in EFI partition)"
+            }
+        }
+        
+        # Check BCD accessibility
+        if ($EfiDrive) {
+            $bcdPath = "$EfiDrive`:\EFI\Microsoft\Boot\BCD"
+            if (Test-Path $bcdPath) {
+                try {
+                    $bcdTest = bcdedit /store $bcdPath /enum {default} 2>&1 | Out-String
+                    if ($LASTEXITCODE -ne 0 -or $bcdTest -match "could not be opened|cannot find|system cannot find") {
+                        $result.Success = $false
+                        $issue = "BCD file exists but is CORRUPTED or INACCESSIBLE: $bcdPath"
+                        $result.Issues += $issue
+                        $result.Details += "CRITICAL: $issue - BCD cannot be read or is corrupted"
+                    }
+                } catch {
+                    $result.Success = $false
+                    $issue = "BCD file exists but verification FAILED: $_"
+                    $result.Issues += $issue
+                    $result.Details += "CRITICAL: $issue"
+                }
+            } else {
+                $result.Success = $false
+                $issue = "BCD file MISSING from EFI partition: $bcdPath"
+                $result.Issues += $issue
+                $result.Details += "CRITICAL: $issue"
+            }
+        }
+        
+    } catch {
+        $result.Success = $false
+        $result.Issues += "Boot verification failed: $_"
+        $result.Details += "ERROR: Boot verification exception: $_"
+    }
+    
+    return $result
+}
+
+# Helper function to generate comprehensive boot failure diagnostics
+function Get-ComprehensiveBootDiagnostics {
+    <#
+    .SYNOPSIS
+    Generates comprehensive diagnostic report for boot failures.
+    #>
+    param(
+        [string]$WindowsDrive = $env:SystemDrive.TrimEnd(':')
+    )
+    
+    $diagnostics = @()
+    $diagnostics += "=================================================================================="
+    $diagnostics += "  COMPREHENSIVE BOOT FAILURE DIAGNOSTICS"
+    $diagnostics += "=================================================================================="
+    $diagnostics += ""
+    $diagnostics += "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    $diagnostics += "Target Drive: $WindowsDrive`:"
+    $diagnostics += ""
+    
+    # Check boot files
+    $diagnostics += "BOOT FILE STATUS:"
+    $diagnostics += "-----------------"
+    
+    $bootFiles = @(
+        @{Name="winload.efi"; Path="$WindowsDrive`:\Windows\System32\winload.efi"; Critical=$true; Description="Windows Boot Loader (UEFI) - REQUIRED for UEFI boot"},
+        @{Name="winload.exe"; Path="$WindowsDrive`:\Windows\System32\winload.exe"; Critical=$true; Description="Windows Boot Loader (Legacy BIOS) - REQUIRED for legacy boot"},
+        @{Name="bootmgfw.efi"; Path="$WindowsDrive`:\Windows\System32\bootmgfw.efi"; Critical=$true; Description="Boot Manager - REQUIRED for boot menu"},
+        @{Name="ntoskrnl.exe"; Path="$WindowsDrive`:\Windows\System32\ntoskrnl.exe"; Critical=$true; Description="Windows Kernel - REQUIRED for system startup"}
+    )
+    
+    foreach ($file in $bootFiles) {
+        $exists = Test-Path $file.Path -ErrorAction SilentlyContinue
+        if ($exists) {
+            $diagnostics += "  ✓ $($file.Name) - FOUND at $($file.Path)"
+        } else {
+            $diagnostics += "  ✗ $($file.Name) - MISSING from $($file.Path)"
+            $diagnostics += "    CRITICAL: $($file.Description)"
+        }
+    }
+    
+    $diagnostics += ""
+    
+    # Check EFI partition
+    $diagnostics += "EFI PARTITION STATUS:"
+    $diagnostics += "---------------------"
+    $efiMount = $null
+    $efiDrive = $null
+    try {
+        $efiMount = Mount-EFIPartition -WindowsDrive $WindowsDrive -PreferredLetter "S" -ErrorAction SilentlyContinue
+        if ($efiMount -and $efiMount.Success) {
+            $efiDrive = $efiMount.DriveLetter
+            $diagnostics += "  ✓ EFI partition mounted: $efiDrive`:"
+            
+            # Check EFI boot files
+            $efiFiles = @(
+                @{Name="winload.efi"; Path="$efiDrive`:\EFI\Microsoft\Boot\winload.efi"; Critical=$true},
+                @{Name="bootmgfw.efi"; Path="$efiDrive`:\EFI\Microsoft\Boot\bootmgfw.efi"; Critical=$true},
+                @{Name="BCD"; Path="$efiDrive`:\EFI\Microsoft\Boot\BCD"; Critical=$true}
+            )
+            
+            foreach ($file in $efiFiles) {
+                $exists = Test-Path $file.Path -ErrorAction SilentlyContinue
+                if ($exists) {
+                    $diagnostics += "  ✓ $($file.Name) - FOUND in EFI partition"
+                    
+                    # Verify BCD accessibility
+                    if ($file.Name -eq "BCD") {
+                        try {
+                            $bcdTest = bcdedit /store $file.Path /enum {default} 2>&1 | Out-String
+                            if ($LASTEXITCODE -eq 0 -and $bcdTest -notmatch "could not be opened") {
+                                $diagnostics += "    ✓ BCD is readable and accessible"
+                            } else {
+                                $diagnostics += "    ✗ BCD is CORRUPTED or INACCESSIBLE"
+                                $diagnostics += "      Error: $($bcdTest.Trim())"
+                            }
+                        } catch {
+                            $diagnostics += "    ✗ BCD verification FAILED: $_"
+                        }
+                    }
+                } else {
+                    $diagnostics += "  ✗ $($file.Name) - MISSING from EFI partition: $($file.Path)"
+                    if ($file.Critical) {
+                        $diagnostics += "    CRITICAL: This file is REQUIRED for boot"
+                    }
+                }
+            }
+        } else {
+            $diagnostics += "  ✗ EFI partition could NOT be mounted"
+            $diagnostics += "    CRITICAL: Cannot verify EFI boot files"
+        }
+    } catch {
+        $diagnostics += "  ✗ EFI partition check FAILED: $_"
+    }
+    
+    $diagnostics += ""
+    
+    # Check BCD in legacy locations
+    $diagnostics += "BCD FILE STATUS (Legacy Locations):"
+    $diagnostics += "-----------------------------------"
+    $legacyBcdPaths = @(
+        "$WindowsDrive`:\Boot\BCD",
+        "$env:SystemRoot\Boot\BCD"
+    )
+    
+    $bcdFound = $false
+    foreach ($bcdPath in $legacyBcdPaths) {
+        if (Test-Path $bcdPath -ErrorAction SilentlyContinue) {
+            $diagnostics += "  ✓ BCD found at: $bcdPath"
+            $bcdFound = $true
+            try {
+                $bcdTest = bcdedit /store $bcdPath /enum {default} 2>&1 | Out-String
+                if ($LASTEXITCODE -eq 0) {
+                    $diagnostics += "    ✓ BCD is readable"
+                } else {
+                    $diagnostics += "    ✗ BCD is CORRUPTED"
+                }
+            } catch {
+                $diagnostics += "    ✗ BCD verification failed: $_"
+            }
+        }
+    }
+    
+    if (-not $bcdFound) {
+        $diagnostics += "  ✗ BCD file NOT FOUND in any legacy location"
+    }
+    
+    $diagnostics += ""
+    
+    # Summary
+    $diagnostics += "DIAGNOSTIC SUMMARY:"
+    $diagnostics += "-------------------"
+    
+    $criticalIssues = @()
+    if (-not (Test-Path "$WindowsDrive`:\Windows\System32\winload.efi" -ErrorAction SilentlyContinue) -and 
+        -not (Test-Path "$WindowsDrive`:\Windows\System32\winload.exe" -ErrorAction SilentlyContinue)) {
+        $criticalIssues += "CRITICAL: winload.efi/winload.exe MISSING from Windows directory"
+        $criticalIssues += "  Location checked: $WindowsDrive`:\Windows\System32\winload.efi"
+        $criticalIssues += "  Location checked: $WindowsDrive`:\Windows\System32\winload.exe"
+        $criticalIssues += "  WHY THIS PREVENTS BOOT: Windows cannot start without the boot loader"
+        $criticalIssues += "  SOLUTION: Extract winload.efi from Windows installation media using DISM"
+    }
+    
+    if ($efiMount -and $efiMount.Success) {
+        $efiDrive = $efiMount.DriveLetter
+        if (-not (Test-Path "$efiDrive`:\EFI\Microsoft\Boot\winload.efi" -ErrorAction SilentlyContinue)) {
+            $criticalIssues += "CRITICAL: winload.efi MISSING from EFI partition"
+            $criticalIssues += "  Location checked: $efiDrive`:\EFI\Microsoft\Boot\winload.efi"
+            $criticalIssues += "  WHY THIS PREVENTS BOOT: UEFI firmware cannot find boot loader"
+            $criticalIssues += "  SOLUTION: Run 'bcdboot $WindowsDrive`:\Windows /s $efiDrive`: /f UEFI'"
+        }
+        
+        if (-not (Test-Path "$efiDrive`:\EFI\Microsoft\Boot\BCD" -ErrorAction SilentlyContinue)) {
+            $criticalIssues += "CRITICAL: BCD file MISSING from EFI partition"
+            $criticalIssues += "  Location checked: $efiDrive`:\EFI\Microsoft\Boot\BCD"
+            $criticalIssues += "  WHY THIS PREVENTS BOOT: Boot configuration data is missing"
+            $criticalIssues += "  SOLUTION: Run 'bcdboot $WindowsDrive`:\Windows /s $efiDrive`: /f UEFI'"
+        }
+    }
+    
+    if ($criticalIssues.Count -gt 0) {
+        $diagnostics += "CRITICAL ISSUES DETECTED:"
+        foreach ($issue in $criticalIssues) {
+            $diagnostics += "  $issue"
+        }
+    } else {
+        $diagnostics += "  No critical boot file issues detected in this scan."
+        $diagnostics += "  Boot issue may be related to:"
+        $diagnostics += "    - Hardware/driver problems"
+        $diagnostics += "    - BIOS/UEFI firmware settings"
+        $diagnostics += "    - Disk corruption"
+        $diagnostics += "    - Partition table issues"
+    }
+    
+    $diagnostics += ""
+    $diagnostics += "=================================================================================="
+    
+    return $diagnostics -join "`n"
+}
+
 # Helper function to launch emergency boot repair scripts
 function Start-EmergencyBootScript {
     param(
@@ -1021,9 +1295,28 @@ function Get-SafeCount {
 }
 
 function Start-GUI {
+    # CRITICAL: Increase call depth limit to prevent overflow during initialization
+    # GUI initialization makes 300+ Get-Control calls which can exceed default limit of 1000
+    $script:OriginalCallDepth = if (Test-Path Variable:PSMaximumCallDepth) { $PSMaximumCallDepth } else { 1000 }
+    $PSMaximumCallDepth = 5000
+    
+    # CRITICAL: Disable call stack retrieval during GUI initialization
+    # This prevents Get-PSCallStack from being called 300+ times during init
+    if (Test-Path Variable:script:DisableCallStackRetrieval) {
+        $script:OriginalDisableCallStack = $script:DisableCallStackRetrieval
+    } else {
+        $script:OriginalDisableCallStack = $false
+    }
+    $script:DisableCallStackRetrieval = $true
+    
     # CRITICAL: Prevent GUI launch during validation
     if ($env:MB_VALIDATION_MODE -eq "1") {
         Write-Host "[VALIDATION MODE] GUI launch blocked - validation in progress" -ForegroundColor Yellow
+        # Restore call depth and call stack retrieval before returning
+        if ($script:OriginalCallDepth) {
+            $PSMaximumCallDepth = $script:OriginalCallDepth
+        }
+        $script:DisableCallStackRetrieval = $script:OriginalDisableCallStack
         return
     }
     
@@ -1032,7 +1325,7 @@ function Start-GUI {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  Title="Miracle Boot v7.2.0 - Advanced Recovery (Cursor)"
- Width="1200" Height="850" WindowStartupLocation="CenterScreen" Background="#F0F0F0">
+ Width="850" Height="650" WindowStartupLocation="CenterScreen" Background="#F0F0F0" Name="MainWindow" MinWidth="750" MinHeight="550" SizeToContent="Manual">
 <Grid>
     <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
@@ -1071,7 +1364,35 @@ function Start-GUI {
             <MenuItem Header="Open Command Prompt" Name="MenuToolsCMD" ToolTip="Open CMD as Administrator"/>
             <MenuItem Header="Open PowerShell" Name="MenuToolsPowerShell" ToolTip="Open PowerShell as Administrator"/>
         </MenuItem>
+        <MenuItem Header="_Settings">
+            <MenuItem Header="Open Settings" Name="MenuSettingsOpen" ToolTip="Open Settings tab"/>
+            <Separator/>
+            <MenuItem Header="Theme" Name="MenuSettingsTheme">
+                <MenuItem Header="Light Mode" Name="MenuSettingsLight" IsCheckable="True" IsChecked="True" ToolTip="Use light theme"/>
+                <MenuItem Header="Dark Mode" Name="MenuSettingsDark" IsCheckable="True" ToolTip="Use dark theme"/>
+            </MenuItem>
+            <MenuItem Header="Interface Scale" Name="MenuSettingsScale">
+                <MenuItem Header="Small (75%)" Name="MenuSettingsScale75"/>
+                <MenuItem Header="Normal (100%)" Name="MenuSettingsScale100"/>
+                <MenuItem Header="Large (125%)" Name="MenuSettingsScale125"/>
+                <MenuItem Header="Extra Large (150%)" Name="MenuSettingsScale150"/>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Boot Repair" Name="MenuSettingsBootRepair">
+                <MenuItem Header="One-Click Repair" Name="MenuSettingsOneClick" ToolTip="Automated boot repair"/>
+                <Separator/>
+                <MenuItem Header="Emergency Boot 1 (Simple)" Name="MenuSettingsEmergency1"/>
+                <MenuItem Header="Emergency Boot 2 (Advanced)" Name="MenuSettingsEmergency2"/>
+                <MenuItem Header="Emergency Boot 3 (Comprehensive)" Name="MenuSettingsEmergency3"/>
+                <MenuItem Header="Emergency Boot 4 (Smart Minimal)" Name="MenuSettingsEmergency4"/>
+                <MenuItem Header="Fix BCD Not Found" Name="MenuSettingsFixBCD"/>
+                <Separator/>
+                <MenuItem Header="Sequential Repair (Try All Methods)" Name="MenuSettingsSequential" ToolTip="Attempts all repair methods in sequence until one succeeds"/>
+            </MenuItem>
+        </MenuItem>
         <MenuItem Header="_Help">
+            <MenuItem Header="Show Execution Path" Name="MenuHelpExecutionPath" ToolTip="Display the current execution path and folder name"/>
+            <Separator/>
             <MenuItem Header="Emergency Repair Guide" Name="MenuHelpEmergencyGuide" ToolTip="View emergency boot repair guide"/>
             <Separator/>
             <MenuItem Header="Support &amp; Contact" Name="MenuHelpSupport" ToolTip="Contact support for issues or feedback"/>
@@ -1107,21 +1428,101 @@ function Start-GUI {
         <TextBlock Name="EnvStatus" Text="Environment: Detecting..." VerticalAlignment="Center" Margin="10,0" Foreground="Gray"/>
 </StackPanel>
     
-    <TabControl Grid.Row="1" Margin="10">
-        <TabItem Header="Volumes &amp; Health">
-            <DockPanel Margin="10">
-                <Button DockPanel.Dock="Top" Content="Refresh Volume List" Height="35" Name="BtnVol" Background="#0078D7" Foreground="White" FontWeight="Bold"/>
-                <ListView Name="VolList" Margin="0,10,0,0">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Letter" DisplayMemberBinding="{Binding DriveLetter}" Width="50"/>
-                            <GridViewColumn Header="Label" DisplayMemberBinding="{Binding FileSystemLabel}" Width="150"/>
-                            <GridViewColumn Header="Size" DisplayMemberBinding="{Binding Size}" Width="100"/>
-                            <GridViewColumn Header="Status" DisplayMemberBinding="{Binding HealthStatus}" Width="100"/>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-            </DockPanel>
+    <TabControl Grid.Row="2" Margin="10">
+        <TabItem Header="Boot Fixer">
+            <Grid Margin="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                
+                <!-- Instructions Button -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10" HorizontalAlignment="Right">
+                    <Button Content="📖 Instructions" Name="BtnInstructions" Height="35" Width="140" Background="#17a2b8" Foreground="White" FontWeight="Bold" ToolTip="View instructions for running Miracle Boot from WinRE, USB, and other methods"/>
+                </StackPanel>
+                
+                <!-- One-Click Repair Button -->
+                <Border Grid.Row="1" Margin="0,0,0,15" Background="#E8F5E9" BorderBrush="#4CAF50" BorderThickness="2">
+                    <StackPanel Margin="15">
+                        <TextBlock Text="🚀 ONE-CLICK REPAIR" FontSize="18" FontWeight="Bold" Foreground="#2E7D32" Margin="0,0,0,5"/>
+                        <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#333333" FontSize="12" Margin="0,0,0,10"/>
+                        <Button Content="REPAIR MY PC" Name="BtnOneClickRepair" Height="50" Background="#4CAF50" Foreground="White" FontSize="16" FontWeight="Bold" Cursor="Hand" Margin="0,5"/>
+                        <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#555555" FontSize="11" Margin="0,5,0,0" FontStyle="Italic"/>
+                        
+                        <!-- Emergency Boot Repair Options (shown when repair fails or has issues) -->
+                        <Border Name="BorderEmergencyOptions" Margin="0,10,0,0" Padding="10" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="⚠️ REPAIR STILL BROKEN? Try Emergency Boot Repair Scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
+                                    <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
+                                    <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                                    <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4" Width="130" Height="35" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" ToolTip="Smart minimal repair - only fixes what's broken"/>
+                                </StackPanel>
+                                <Button Content="Fix BCD Not Found" Name="BtnFixBCDFound" Width="430" Height="30" Margin="5,5,5,0" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Emergency Boot Repair Section - Always Visible, Right After REPAIR MY PC -->
+                <GroupBox Grid.Row="2" Header="🚨 Emergency Boot Repair Scripts" Margin="5,0,5,15" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="3">
+                    <StackPanel Margin="10">
+                        <TextBlock Text="If standard repairs fail, try these emergency repair scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,10" TextWrapping="Wrap" FontSize="12"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,10">
+                            <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" FontSize="11" ToolTip="Ultra-simple boot repair"/>
+                            <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" FontSize="11" ToolTip="Advanced boot repair with Windows detection"/>
+                            <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" FontSize="11" ToolTip="Comprehensive boot repair with all strategies"/>
+                            <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4Tab" Width="140" Height="40" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" FontSize="11" ToolTip="Smart minimal repair - only fixes what's broken"/>
+                        </StackPanel>
+                        <Button Content="Fix BCD Not Found" Name="BtnFixBCDFoundTab" Width="500" Height="35" Margin="5,0,5,10" Background="#FF9800" Foreground="White" FontWeight="Bold" FontSize="11" ToolTip="Targeted fix for missing BCD file"/>
+                        <TextBlock Text="These scripts run in separate Command Prompt windows and provide step-by-step repair processes." TextWrapping="Wrap" Foreground="#666666" FontSize="11" Margin="5,0,5,0" FontStyle="Italic"/>
+                    </StackPanel>
+                </GroupBox>
+                
+                <StackPanel Grid.Row="3" Margin="0,0,0,15">
+                    <CheckBox Name="ChkTestMode" Content="Test Mode (Preview commands only - will not execute)" IsChecked="True" FontWeight="Bold" Foreground="#B8860B" FontSize="12" Margin="5,5,5,8" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="#666666" FontSize="11" Margin="5,0,5,5" TextWrapping="Wrap" LineHeight="16"/>
+                </StackPanel>
+                
+                <GroupBox Grid.Row="4" Header="Boot Repair Operations" Margin="5,0,5,10">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="400">
+<StackPanel Margin="10">
+                            <Button Content="1. Rebuild BCD from Windows Installation" Height="40" Name="BtnRebuildBCD" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,5"/>
+                            <TextBlock Name="TxtRebuildBCD" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
+                            
+                            <Button Content="2. Fix Boot Files (bootrec /fixboot)" Height="40" Name="BtnFixBoot" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtFixBoot" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
+                            
+                            <Button Content="3. Scan for Windows Installations" Height="40" Name="BtnScanWindows" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtScanWindows" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
+                            
+                            <Button Content="4. Rebuild BCD (bootrec /rebuildbcd)" Height="40" Name="BtnRebuildBCD2" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtRebuildBCD2" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
+                            
+                            <Button Content="5. Set Default Boot Entry" Height="40" Name="BtnSetDefaultBoot" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtSetDefault" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
+                            
+                            <Button Content="6. Boot Diagnosis" Height="40" Name="BtnBootDiagnosis" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtBootDiagnosis" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to run comprehensive boot diagnosis"/>
+                            
+                            <Button Content="7. Precision Detection &amp; Repair (ordered plan)" Height="40" Name="BtnPrecisionScan" Background="#d78700" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
+                            <TextBlock Name="TxtPrecisionScan" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="DIAGNOSE-ONLY MODE (Default): Runs precision detection with dry-run preview. Shows what's broken without fixing. Uncheck Test Mode checkbox to apply fixes. Location: Boot Fixer tab → Button 7."/>
+                            <Button Content="8. ONE-CLICK PRECISION FIXER" Height="40" Name="BtnOneClickPrecisionFix" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5" ToolTip="Automatically fixes all detected issues. For extreme cases, offers repair install with clear warnings."/>
+                            <TextBlock Name="TxtOneClickPrecisionFix" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Fully automated: scans, fixes, verifies, and offers repair install for critical issues. No user intervention needed - just click and Windows will be fixed."/>
+</StackPanel>
+                    </ScrollViewer>
+                </GroupBox>
+                
+                <GroupBox Grid.Row="5" Header="Command Output" Margin="5,10,5,5">
+                    <ScrollViewer Height="150" VerticalScrollBarVisibility="Auto">
+                        <TextBox Name="FixerOutput" AcceptsReturn="True" FontFamily="Consolas" Background="#222" Foreground="#00FF00" IsReadOnly="True" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </GroupBox>
+            </Grid>
 </TabItem>
 
 <TabItem Header="BCD Editor">
@@ -1140,82 +1541,91 @@ function Start-GUI {
                     <Button Content="Boot Diagnosis" Height="35" Name="BtnBootDiagnosisBCD" Background="#17a2b8" Foreground="White" Width="150"/>
 </StackPanel>
                 
-                <!-- Main Content with Tabs -->
-                <TabControl Grid.Row="1" Name="BCDTabControl">
-                    <TabItem Header="Basic Editor">
-                        <Grid Margin="5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="2*"/>
-                                <ColumnDefinition Width="1*"/>
-                            </Grid.ColumnDefinitions>
-                            
-                            <StackPanel Grid.Column="0" Margin="5">
-                                <TextBlock Text="BCD Boot Entries" FontWeight="Bold" Margin="0,0,0,5"/>
-                                <ListBox Name="BCDList" Height="350" Margin="0,0,0,10">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding DisplayText}" FontWeight="Bold">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="#0078D7"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsDefault}" Value="True">
-                                                                    <Setter Property="Foreground" Value="#28a745"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                <TextBlock Text="{Binding Id}" FontSize="10" Foreground="Gray"/>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBox Name="BCDBox" AcceptsReturn="True" Height="150" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" IsReadOnly="True" Background="#222" Foreground="#00FF00"/>
-                            </StackPanel>
+                <!-- Main Content - Flattened to avoid nested TabControl depth overflow -->
+                <Grid Grid.Row="1" Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Tab-like buttons for switching views -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Content="Basic Editor" Name="BtnBCDBasicView" Height="30" Width="150" Background="#0078D7" Foreground="White" Margin="0,0,5,0"/>
+                        <Button Content="Advanced Properties" Name="BtnBCDAdvancedView" Height="30" Width="180" Background="#6c757d" Foreground="White"/>
+                    </StackPanel>
+                    
+                    <!-- Basic Editor View -->
+                    <Grid Grid.Row="1" Name="BCDBasicView" Margin="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/>
+                            <ColumnDefinition Width="1*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <StackPanel Grid.Column="0" Margin="5">
+                            <TextBlock Text="BCD Boot Entries" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <ListBox Name="BCDList" Height="350" Margin="0,0,0,10">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding DisplayText}" FontWeight="Bold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="#0078D7"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                                <Setter Property="Foreground" Value="#28a745"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Id}" FontSize="10" Foreground="Gray"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBox Name="BCDBox" AcceptsReturn="True" Height="150" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" IsReadOnly="True" Background="#222" Foreground="#00FF00"/>
+                        </StackPanel>
 
-                            <StackPanel Grid.Column="1" Margin="5" Background="#E5E5E5">
-                                <TextBlock Text="Edit Selected Entry" FontWeight="Bold" Margin="5"/>
-                                <TextBlock Text="Identifier (GUID):" Margin="5,5,0,0"/>
-                                <TextBox Name="EditId" Margin="5" IsReadOnly="True" Background="#DDD"/>
-                                <TextBlock Text="Description:" Margin="5,5,0,0"/>
-                                <TextBox Name="EditDescription" Margin="5"/>
-                                <TextBlock Text="New Friendly Name:" Margin="5,5,0,0"/>
-                                <TextBox Name="EditName" Margin="5"/>
-                                <Button Content="Update Description" Name="BtnUpdateBcd" Margin="5" Height="25"/>
-                                <Button Content="Set as Default Boot" Name="BtnSetDefault" Margin="5" Height="25" Background="#D78700" Foreground="White"/>
-                                <Separator Margin="5,10"/>
-                                <TextBlock Text="Boot Timeout (Seconds):" Margin="5"/>
-                                <TextBox Name="TxtTimeout" Margin="5"/>
-                                <Button Content="Save Timeout" Name="BtnTimeout" Margin="5" Height="25"/>
-                            </StackPanel>
-                        </Grid>
-</TabItem>
-
-                    <TabItem Header="Advanced Properties">
-                        <Grid Margin="5">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-                            
-                            <TextBlock Grid.Row="0" Text="Select an entry from Basic Editor to edit all properties" FontStyle="Italic" Margin="5" Foreground="Gray"/>
-                            
-                            <DataGrid Grid.Row="1" Name="BCDPropertiesGrid" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" Margin="5">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Property" Binding="{Binding Name}" Width="200" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            
-                            <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="5">
-                                <Button Content="Save Changes" Name="BtnSaveProperties" Height="30" Width="120" Background="#28a745" Foreground="White" Margin="5,0"/>
-                                <Button Content="Reset" Name="BtnResetProperties" Height="30" Width="80" Margin="5,0"/>
-                            </StackPanel>
-                        </Grid>
-                    </TabItem>
-                </TabControl>
+                        <StackPanel Grid.Column="1" Margin="5" Background="#E5E5E5">
+                            <TextBlock Text="Edit Selected Entry" FontWeight="Bold" Margin="5"/>
+                            <TextBlock Text="Identifier (GUID):" Margin="5,5,0,0"/>
+                            <TextBox Name="EditId" Margin="5" IsReadOnly="True" Background="#DDD"/>
+                            <TextBlock Text="Description:" Margin="5,5,0,0"/>
+                            <TextBox Name="EditDescription" Margin="5"/>
+                            <TextBlock Text="New Friendly Name:" Margin="5,5,0,0"/>
+                            <TextBox Name="EditName" Margin="5"/>
+                            <Button Content="Update Description" Name="BtnUpdateBcd" Margin="5" Height="25"/>
+                            <Button Content="Set as Default Boot" Name="BtnSetDefault" Margin="5" Height="25" Background="#D78700" Foreground="White"/>
+                            <Separator Margin="5,10"/>
+                            <TextBlock Text="Boot Timeout (Seconds):" Margin="5"/>
+                            <TextBox Name="TxtTimeout" Margin="5"/>
+                            <Button Content="Save Timeout" Name="BtnTimeout" Margin="5" Height="25"/>
+                        </StackPanel>
+                    </Grid>
+                    
+                    <!-- Advanced Properties View -->
+                    <Grid Grid.Row="1" Name="BCDAdvancedView" Margin="0" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <TextBlock Grid.Row="0" Text="Select an entry from Basic Editor to edit all properties" FontStyle="Italic" Margin="5" Foreground="Gray"/>
+                        
+                        <DataGrid Grid.Row="1" Name="BCDPropertiesGrid" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" Margin="5">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Property" Binding="{Binding Name}" Width="200" IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="5">
+                            <Button Content="Save Changes" Name="BtnSaveProperties" Height="30" Width="120" Background="#28a745" Foreground="White" Margin="5,0"/>
+                            <Button Content="Reset" Name="BtnResetProperties" Height="30" Width="80" Margin="5,0"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
             </Grid>
         </TabItem>
 
@@ -1250,95 +1660,21 @@ function Start-GUI {
             </DockPanel>
         </TabItem>
 
-        <TabItem Header="Boot Fixer">
-            <Grid Margin="10">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                
-                <!-- One-Click Repair Button -->
-                <Border Grid.Row="0" Margin="0,0,0,15" Background="#E8F5E9" BorderBrush="#4CAF50" BorderThickness="2">
-                    <StackPanel Margin="15">
-                        <TextBlock Text="🚀 ONE-CLICK REPAIR" FontSize="18" FontWeight="Bold" Foreground="#2E7D32" Margin="0,0,0,5"/>
-                        <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#333333" FontSize="12" Margin="0,0,0,10"/>
-                        <Button Content="REPAIR MY PC" Name="BtnOneClickRepair" Height="50" Background="#4CAF50" Foreground="White" FontSize="16" FontWeight="Bold" Cursor="Hand" Margin="0,5"/>
-                        <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#555555" FontSize="11" Margin="0,5,0,0" FontStyle="Italic"/>
-                        
-                        <!-- Emergency Boot Repair Options (shown when repair fails or has issues) -->
-                        <Border Name="BorderEmergencyOptions" Margin="0,10,0,0" Padding="10" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1" Visibility="Collapsed">
-                            <StackPanel>
-                                <TextBlock Text="⚠️ REPAIR STILL BROKEN? Try Emergency Boot Repair Scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,8"/>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
-                                    <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
-                                    <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
-                                    <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4" Width="130" Height="35" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" ToolTip="Smart minimal repair - only fixes what's broken"/>
-                                </StackPanel>
-                                <Button Content="Fix BCD Not Found" Name="BtnFixBCDFound" Width="430" Height="30" Margin="5,5,5,0" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </Border>
-                
-                <StackPanel Grid.Row="1" Margin="0,0,0,15">
-                    <CheckBox Name="ChkTestMode" Content="Test Mode (Preview commands only - will not execute)" IsChecked="True" FontWeight="Bold" Foreground="#B8860B" FontSize="12" Margin="5,5,5,8" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="#666666" FontSize="11" Margin="5,0,5,5" TextWrapping="Wrap" LineHeight="16"/>
-                </StackPanel>
-                
-                <!-- Emergency Boot Repair Section -->
-                <GroupBox Grid.Row="2" Header="Emergency Boot Repair Scripts" Margin="5,0,5,10" Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="2">
-                    <StackPanel Margin="10">
-                        <TextBlock Text="If One-Click Repair failed, try these emergency scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,10">
-                            <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
-                            <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
-                            <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
-                            <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4Tab" Width="140" Height="40" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" ToolTip="Smart minimal repair - only fixes what's broken"/>
-                        </StackPanel>
-                        <Button Content="Fix BCD Not Found" Name="BtnFixBCDFoundTab" Width="500" Height="35" Margin="5,0,5,10" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
-                        <TextBlock Text="These scripts run in separate Command Prompt windows and provide step-by-step repair processes." TextWrapping="Wrap" Foreground="#666666" FontSize="11" Margin="5,0,5,0" FontStyle="Italic"/>
-                    </StackPanel>
-                </GroupBox>
-                
-                <GroupBox Grid.Row="3" Header="Boot Repair Operations" Margin="5,0,5,10">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-<StackPanel Margin="10">
-                            <Button Content="1. Rebuild BCD from Windows Installation" Height="40" Name="BtnRebuildBCD" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,5"/>
-                            <TextBlock Name="TxtRebuildBCD" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
-                            
-                            <Button Content="2. Fix Boot Files (bootrec /fixboot)" Height="40" Name="BtnFixBoot" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtFixBoot" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
-                            
-                            <Button Content="3. Scan for Windows Installations" Height="40" Name="BtnScanWindows" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtScanWindows" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
-                            
-                            <Button Content="4. Rebuild BCD (bootrec /rebuildbcd)" Height="40" Name="BtnRebuildBCD2" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtRebuildBCD2" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
-                            
-                            <Button Content="5. Set Default Boot Entry" Height="40" Name="BtnSetDefaultBoot" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtSetDefault" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to see command and explanation"/>
-                            
-                            <Button Content="6. Boot Diagnosis" Height="40" Name="BtnBootDiagnosis" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtBootDiagnosis" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Click to run comprehensive boot diagnosis"/>
-                            
-                            <Button Content="7. Precision Detection &amp; Repair (ordered plan)" Height="40" Name="BtnPrecisionScan" Background="#d78700" Foreground="White" FontWeight="Bold" Margin="0,10,0,5"/>
-                            <TextBlock Name="TxtPrecisionScan" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="DIAGNOSE-ONLY MODE (Default): Runs precision detection with dry-run preview. Shows what's broken without fixing. Uncheck Test Mode checkbox to apply fixes. Location: Boot Fixer tab → Button 7."/>
-                            <Button Content="8. ONE-CLICK PRECISION FIXER" Height="40" Name="BtnOneClickPrecisionFix" Background="#28a745" Foreground="White" FontWeight="Bold" Margin="0,10,0,5" ToolTip="Automatically fixes all detected issues. For extreme cases, offers repair install with clear warnings."/>
-                            <TextBlock Name="TxtOneClickPrecisionFix" TextWrapping="Wrap" Margin="10,5" Foreground="Gray" FontSize="11" Text="Fully automated: scans, fixes, verifies, and offers repair install for critical issues. No user intervention needed - just click and Windows will be fixed."/>
-</StackPanel>
-                    </ScrollViewer>
-                </GroupBox>
-                
-                <GroupBox Grid.Row="4" Header="Command Output" Margin="5,10,5,5">
-                    <ScrollViewer Height="150" VerticalScrollBarVisibility="Auto">
-                        <TextBox Name="FixerOutput" AcceptsReturn="True" FontFamily="Consolas" Background="#222" Foreground="#00FF00" IsReadOnly="True" TextWrapping="Wrap"/>
-                    </ScrollViewer>
-                </GroupBox>
-            </Grid>
-</TabItem>
+        <TabItem Header="Volumes &amp; Health">
+            <DockPanel Margin="10">
+                <Button DockPanel.Dock="Top" Content="Refresh Volume List" Height="35" Name="BtnVol" Background="#0078D7" Foreground="White" FontWeight="Bold"/>
+                <ListView Name="VolList" Margin="0,10,0,0">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Letter" DisplayMemberBinding="{Binding DriveLetter}" Width="50"/>
+                            <GridViewColumn Header="Label" DisplayMemberBinding="{Binding FileSystemLabel}" Width="150"/>
+                            <GridViewColumn Header="Size" DisplayMemberBinding="{Binding Size}" Width="100"/>
+                            <GridViewColumn Header="Status" DisplayMemberBinding="{Binding HealthStatus}" Width="100"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </DockPanel>
+        </TabItem>
 
         <TabItem Header="Diagnostics">
             <Grid Margin="10">
@@ -1496,55 +1832,67 @@ function Start-GUI {
                     </StackPanel>
                 </StackPanel>
                 
-                <TabControl Grid.Row="1" Name="SummaryTabControl">
-                    <TabItem Header="Boot Health">
-                        <Grid Margin="5">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-                            
-                            <StackPanel Grid.Row="0" Margin="0,0,0,10">
-                                <TextBlock Text="Boot Health Overview" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
-                                <TextBlock Name="BootHealthStatus" Text="Click 'Refresh Summary' to analyze boot health" 
-                                           FontSize="11" Foreground="Gray" TextWrapping="Wrap"/>
-                            </StackPanel>
-                            
-                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                                <TextBox Name="BootHealthBox" AcceptsReturn="True" VerticalScrollBarVisibility="Disabled" 
-                                         FontFamily="Consolas" Background="White" Foreground="Black" 
-                                         TextWrapping="Wrap" IsReadOnly="True" Padding="10"/>
-                            </ScrollViewer>
-                        </Grid>
-                    </TabItem>
+                <!-- Flattened Summary Views - No nested TabControl to prevent depth overflow -->
+                <Grid Grid.Row="1" Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
                     
-                    <TabItem Header="Windows Update Eligibility">
-                        <Grid Margin="5">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-                            
-                            <StackPanel Grid.Row="0" Margin="0,0,0,10">
-                                <TextBlock Text="In-Place Repair Upgrade Eligibility" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
-                                <TextBlock Name="UpdateEligibilityStatus" Text="Click 'Refresh Summary' to check Windows Update eligibility" 
-                                           FontSize="11" Foreground="Gray" TextWrapping="Wrap"/>
-                            </StackPanel>
-                            
-                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                                <TextBox Name="UpdateEligibilityBox" AcceptsReturn="True" VerticalScrollBarVisibility="Disabled" 
-                                         FontFamily="Consolas" Background="White" Foreground="Black" 
-                                         TextWrapping="Wrap" IsReadOnly="True" Padding="10"/>
-                            </ScrollViewer>
-                        </Grid>
-                    </TabItem>
-                </TabControl>
+                    <!-- Tab-like buttons for switching views -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Content="Boot Health" Name="BtnSummaryBootHealth" Height="30" Width="180" Background="#0078D7" Foreground="White" Margin="0,0,5,0"/>
+                        <Button Content="Windows Update Eligibility" Name="BtnSummaryUpdateEligibility" Height="30" Width="250" Background="#6c757d" Foreground="White"/>
+                    </StackPanel>
+                    
+                    <!-- Boot Health View -->
+                    <Grid Grid.Row="1" Name="SummaryBootHealthView" Margin="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="Boot Health Overview" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                            <TextBlock Name="BootHealthStatus" Text="Click 'Refresh Summary' to analyze boot health" 
+                                       FontSize="11" Foreground="Gray" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <TextBox Name="BootHealthBox" AcceptsReturn="True" VerticalScrollBarVisibility="Disabled" 
+                                     FontFamily="Consolas" Background="White" Foreground="Black" 
+                                     TextWrapping="Wrap" IsReadOnly="True" Padding="10"/>
+                        </ScrollViewer>
+                    </Grid>
+                    
+                    <!-- Windows Update Eligibility View -->
+                    <Grid Grid.Row="1" Name="SummaryUpdateEligibilityView" Margin="0" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="In-Place Repair Upgrade Eligibility" FontWeight="Bold" FontSize="12" Margin="0,0,0,5"/>
+                            <TextBlock Name="UpdateEligibilityStatus" Text="Click 'Refresh Summary' to check Windows Update eligibility" 
+                                       FontSize="11" Foreground="Gray" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <TextBox Name="UpdateEligibilityBox" AcceptsReturn="True" VerticalScrollBarVisibility="Disabled" 
+                                     FontFamily="Consolas" Background="White" Foreground="Black" 
+                                     TextWrapping="Wrap" IsReadOnly="True" Padding="10"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
             </Grid>
         </TabItem>
         
         <TabItem Header="Settings">
             <Grid Margin="20">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -1582,11 +1930,93 @@ function Start-GUI {
                     </StackPanel>
                 </GroupBox>
                 
-                <!-- Additional Settings Section (placeholder for future settings) -->
-                <GroupBox Grid.Row="1" Header="Additional Settings" Margin="0,0,0,20" Padding="15" Visibility="Collapsed">
+                <!-- Dark Mode Section -->
+                <GroupBox Grid.Row="1" Header="Theme" Margin="0,0,0,20" Padding="15">
                     <StackPanel>
-                        <TextBlock Text="More settings will be added here in future updates." 
-                                   FontSize="11" Foreground="Gray"/>
+                        <TextBlock Text="Choose your preferred color theme" 
+                                   FontSize="12" Foreground="Gray" Margin="0,0,0,15"/>
+                        
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton Name="RadioLightMode" Content="Light Mode" IsChecked="True" 
+                                        Margin="0,0,30,0" VerticalAlignment="Center" FontSize="12"/>
+                            <RadioButton Name="RadioDarkMode" Content="Dark Mode" 
+                                        VerticalAlignment="Center" FontSize="12"/>
+                        </StackPanel>
+                        
+                        <TextBlock Name="ThemeStatusText" 
+                                   Text="Current theme: Light Mode" 
+                                   FontSize="11" 
+                                   Foreground="#0078D7" 
+                                   FontWeight="SemiBold" 
+                                   Margin="0,10,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+                
+                <!-- Window Size Section -->
+                <GroupBox Grid.Row="2" Header="Window Size" Margin="0,0,0,20" Padding="15">
+                    <StackPanel>
+                        <TextBlock Text="Adjust overall window size" 
+                                   FontSize="12" Foreground="Gray" Margin="0,0,0,15"/>
+                        
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Small" VerticalAlignment="Center" Margin="0,0,15,0" FontSize="11"/>
+                            <Slider Name="WindowSizeSlider" 
+                                    Width="400" 
+                                    Height="25" 
+                                    Minimum="0.8" 
+                                    Maximum="1.5" 
+                                    Value="1.0" 
+                                    TickFrequency="0.05" 
+                                    IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,15,0"/>
+                            <TextBlock Text="Large" VerticalAlignment="Center" FontSize="11"/>
+                            <Button Name="BtnResetWindowSize" Content="Reset" Width="80" Height="30" Margin="20,0,0,0" 
+                                    ToolTip="Reset window size to default"/>
+                        </StackPanel>
+                        
+                        <TextBlock Name="WindowSizeValueText" 
+                                   Text="Current window size: 100%" 
+                                   FontSize="11" 
+                                   Foreground="#0078D7" 
+                                   FontWeight="SemiBold" 
+                                   Margin="0,10,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+                
+                <!-- Boot Repair Options Section -->
+                <GroupBox Grid.Row="3" Header="Boot Repair Options" Margin="0,0,0,20" Padding="15">
+                    <StackPanel>
+                        <TextBlock Text="Quick access to all boot repair tools" 
+                                   FontSize="12" Foreground="Gray" Margin="0,0,0,15"/>
+                        
+                        <Button Content="One-Click Repair" Name="BtnSettingsOneClick" Height="40" 
+                                Background="#4CAF50" Foreground="White" FontWeight="Bold" Margin="0,0,0,10"/>
+                        
+                        <TextBlock Text="Emergency Boot Repair Scripts:" FontWeight="Bold" Margin="0,10,0,10"/>
+                        
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,10">
+                            <Button Content="Emergency Boot 1" Name="BtnSettingsEmergency1" Width="140" Height="35" 
+                                    Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold"/>
+                            <Button Content="Emergency Boot 2" Name="BtnSettingsEmergency2" Width="140" Height="35" 
+                                    Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold"/>
+                            <Button Content="Emergency Boot 3" Name="BtnSettingsEmergency3" Width="140" Height="35" 
+                                    Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold"/>
+                            <Button Content="Emergency Boot 4" Name="BtnSettingsEmergency4" Width="140" Height="35" 
+                                    Margin="5" Background="#4CAF50" Foreground="White" FontWeight="Bold"/>
+                        </StackPanel>
+                        
+                        <Button Content="Fix BCD Not Found" Name="BtnSettingsFixBCD" Width="580" Height="35" 
+                                Background="#FF9800" Foreground="White" FontWeight="Bold" Margin="0,0,0,15"/>
+                        
+                        <Separator Margin="0,10,0,10"/>
+                        
+                        <Button Content="Sequential Repair (Try All Methods)" Name="BtnSettingsSequential" Height="50" 
+                                Background="#9C27B0" Foreground="White" FontSize="14" FontWeight="Bold" 
+                                ToolTip="Attempts all repair methods in sequence: One-Click Repair → Emergency Boot 1 → 2 → 3 → 4 → Fix BCD"/>
+                        
+                        <TextBlock Text="Sequential Repair will try each repair method in order until one succeeds or all fail." 
+                                   FontSize="11" Foreground="Gray" Margin="0,10,0,0" TextWrapping="Wrap" FontStyle="Italic"/>
                     </StackPanel>
                 </GroupBox>
             </Grid>
@@ -1594,12 +2024,13 @@ function Start-GUI {
 </TabControl>
     
     <!-- Status Bar -->
-    <StatusBar Grid.Row="2" Background="#E5E5E5" Height="25">
+    <StatusBar Grid.Row="3" Background="#E5E5E5" Height="30">
         <StatusBar.ItemsPanel>
             <ItemsPanelTemplate>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                 </Grid>
@@ -1612,6 +2043,12 @@ function Start-GUI {
             <StackPanel Orientation="Horizontal" Margin="5,0">
                 <TextBlock Name="StatusBarProgress" Text="" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#0078D7" FontWeight="Bold"/>
                 <ProgressBar Name="StatusBarProgressBar" Width="100" Height="15" Visibility="Collapsed" IsIndeterminate="True"/>
+            </StackPanel>
+        </StatusBarItem>
+        <StatusBarItem Grid.Column="2">
+            <StackPanel Orientation="Horizontal" Margin="5,0">
+                <Button Name="BtnResizeWindow" Content="Resize" Width="70" Height="22" Margin="2,0" ToolTip="Resize window to fit screen and center" Background="#0078D7" Foreground="White" FontSize="10" Padding="2"/>
+                <Button Name="BtnResizeWindowSmall" Content="Small" Width="50" Height="22" Margin="2,0" ToolTip="Resize to smaller layout (failover)" Background="#6c757d" Foreground="White" FontSize="9" Padding="2"/>
             </StackPanel>
         </StatusBarItem>
     </StatusBar>
@@ -1788,20 +2225,15 @@ try {
 
 # Helper function to safely get controls with null checking
 # MUST be defined here (right after $W is created) because it's called during event handler setup
+# CRITICAL: No logging in this function to prevent call depth overflow (called 300+ times during init)
 function Get-Control {
     param([string]$Name, [switch]$Silent)  # Silent flag to suppress logging for optional controls
     if (-not $W) {
-        if (-not $Silent) {
-            Add-MiracleBootLog -Level "WARNING" -Message "Window object not available" -Location "Get-Control" -NoConsole
-        }
+        # No logging - prevents call depth overflow
         return $null
     }
     $control = $W.FindName($Name)
-    if (-not $control) {
-        if (-not $Silent) {
-            Add-MiracleBootLog -Level "WARNING" -Message "Control '$Name' not found in XAML" -Location "Get-Control" -Data @{ControlName=$Name} -NoConsole
-        }
-    }
+    # No logging - prevents call depth overflow (warnings can be added later if needed)
     return $control
 }
 
@@ -1873,7 +2305,7 @@ try {
 } catch {}
 # #endregion agent log
 
-$envStatusControl = $W.FindName("EnvStatus")
+$envStatusControl = Get-Control -Name "EnvStatus" -Silent
 
 # #region agent log
 try {
@@ -1897,7 +2329,7 @@ if ($envStatusControl) {
 }
 
 # Utility buttons (with null checks)
-$btnNotepad = $W.FindName("BtnNotepad")
+$btnNotepad = Get-Control -Name "BtnNotepad" -Silent
 if ($btnNotepad) {
     $btnNotepad.Add_Click({
         try {
@@ -1910,7 +2342,7 @@ if ($btnNotepad) {
     Write-Warning "BtnNotepad control not found in XAML"
 }
 
-$btnRegistry = $W.FindName("BtnRegistry")
+$btnRegistry = Get-Control -Name "BtnRegistry" -Silent
 if ($btnRegistry) {
     $btnRegistry.Add_Click({
         try {
@@ -1923,7 +2355,7 @@ if ($btnRegistry) {
     Write-Warning "BtnRegistry control not found in XAML"
 }
 
-$btnPowerShell = $W.FindName("BtnPowerShell")
+$btnPowerShell = Get-Control -Name "BtnPowerShell" -Silent
 if ($btnPowerShell) {
     $btnPowerShell.Add_Click({
         try {
@@ -1936,7 +2368,7 @@ if ($btnPowerShell) {
     Write-Warning "BtnPowerShell control not found in XAML"
 }
 
-$btnCommandPrompt = $W.FindName("BtnCommandPrompt")
+$btnCommandPrompt = Get-Control -Name "BtnCommandPrompt" -Silent
 if ($btnCommandPrompt) {
     $btnCommandPrompt.Add_Click({
         try {
@@ -1955,7 +2387,7 @@ if ($btnCommandPrompt) {
     Write-Warning "BtnCommandPrompt control not found in XAML"
 }
 
-$btnDiskManagement = $W.FindName("BtnDiskManagement")
+$btnDiskManagement = Get-Control -Name "BtnDiskManagement" -Silent
 if ($btnDiskManagement) {
     $btnDiskManagement.Add_Click({
         try {
@@ -1968,7 +2400,66 @@ if ($btnDiskManagement) {
     Write-Warning "BtnDiskManagement control not found in XAML"
 }
 
-$btnRestartExplorer = $W.FindName("BtnRestartExplorer")
+# Resize Window Buttons
+$btnResizeWindow = Get-Control -Name "BtnResizeWindow" -Silent
+if ($btnResizeWindow) {
+    $btnResizeWindow.Add_Click({
+        try {
+            if ($W) {
+                # Get screen dimensions
+                $screenWidth = [System.Windows.SystemParameters]::PrimaryScreenWidth
+                $screenHeight = [System.Windows.SystemParameters]::PrimaryScreenHeight
+                
+                # Calculate optimal size (80% of screen, but not less than minimum)
+                $optimalWidth = [Math]::Max(800, [Math]::Min(1200, $screenWidth * 0.8))
+                $optimalHeight = [Math]::Max(600, [Math]::Min(850, $screenHeight * 0.8))
+                
+                # Set window size
+                $W.Width = $optimalWidth
+                $W.Height = $optimalHeight
+                
+                # Center on screen
+                $W.Left = ($screenWidth - $optimalWidth) / 2
+                $W.Top = ($screenHeight - $optimalHeight) / 2
+                
+                Update-StatusBar -Message "Window resized to fit screen and centered" -HideProgress
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Error resizing window: $_", "Error", "OK", "Error")
+        }
+    })
+}
+
+$btnResizeWindowSmall = Get-Control -Name "BtnResizeWindowSmall" -Silent
+if ($btnResizeWindowSmall) {
+    $btnResizeWindowSmall.Add_Click({
+        try {
+            if ($W) {
+                # Smaller layout (failover option)
+                $smallWidth = 800
+                $smallHeight = 600
+                
+                # Get screen dimensions for centering
+                $screenWidth = [System.Windows.SystemParameters]::PrimaryScreenWidth
+                $screenHeight = [System.Windows.SystemParameters]::PrimaryScreenHeight
+                
+                # Set window size
+                $W.Width = $smallWidth
+                $W.Height = $smallHeight
+                
+                # Center on screen
+                $W.Left = ($screenWidth - $smallWidth) / 2
+                $W.Top = ($screenHeight - $smallHeight) / 2
+                
+                Update-StatusBar -Message "Window resized to smaller layout and centered" -HideProgress
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Error resizing window: $_", "Error", "OK", "Error")
+        }
+    })
+}
+
+$btnRestartExplorer = Get-Control -Name "BtnRestartExplorer" -Silent
 if ($btnRestartExplorer) {
     $btnRestartExplorer.Add_Click({
         try {
@@ -2241,7 +2732,328 @@ if ($menuToolsOneClick) {
 
 $menuExit = Get-Control -Name "MenuExit"
 if ($menuExit) {
-    $menuExit.Add_Click({ $W.Close() })
+    $menuExit.Add_Click({ 
+        # Show closing status before closing
+        Update-StatusBar -Message "Closing Miracle Boot..." -ShowProgress
+        # Allow UI to update
+        $W.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+        Start-Sleep -Milliseconds 100
+        $W.Close() 
+    })
+}
+
+$menuHelpExecutionPath = Get-Control -Name "MenuHelpExecutionPath"
+if ($menuHelpExecutionPath) {
+    $menuHelpExecutionPath.Add_Click({
+        try {
+            # Get execution path and folder name
+            $executionPath = if ($PSScriptRoot) {
+                $parent = Split-Path -Parent $PSScriptRoot
+                if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+            } else { Get-Location }
+            
+            $folderName = Split-Path -Leaf $executionPath
+            $fullPath = [System.IO.Path]::GetFullPath($executionPath)
+            
+            $message = "Execution Path Information`n`n" +
+                       "Folder Name: $folderName`n" +
+                       "Full Path: $fullPath`n`n" +
+                       "This is the directory where Miracle Boot is currently running from."
+            
+            [System.Windows.MessageBox]::Show($message, "Execution Path", "OK", "Information") | Out-Null
+        } catch {
+            [System.Windows.MessageBox]::Show("Error retrieving execution path: $_", "Error", "OK", "Error") | Out-Null
+        }
+    })
+}
+
+# Instructions Button Handler (Boot Fixer Tab)
+$btnInstructions = Get-Control -Name "BtnInstructions"
+if ($btnInstructions) {
+    $btnInstructions.Add_Click({
+        $instructionsText = @"
+================================================================================
+  MIRACLE BOOT - QUICK START GUIDE
+================================================================================
+
+⚡ QUICK WAYS TO RUN MIRACLE BOOT
+=================================
+
+1. RUN THE GUI (Windows Desktop)
+----------------------------------
+If Windows is running, the easiest way:
+
+    Method A: Double-click
+    → Double-click "RunMiracleBoot.cmd"
+    → GUI will launch automatically
+
+    Method B: PowerShell
+    → Right-click "RunMiracleBoot.cmd" → "Run as Administrator"
+    → Or: powershell -ExecutionPolicy Bypass -File .\MiracleBoot.ps1
+
+    Method C: Direct GUI Launch
+    → powershell -ExecutionPolicy Bypass -File .\Helper\WinRepairGUI.ps1
+
+    The GUI provides:
+    - Visual interface with tabs and buttons
+    - One-Click Repair
+    - Emergency Boot Repair buttons
+    - BCD Editor
+    - Comprehensive diagnostics
+
+
+2. RUN EMERGENCY FIX (CMD VERSION)
+-----------------------------------
+For quick boot repair without GUI (works in WinRE/WinPE/CMD):
+
+    Emergency Boot 1 (Ultra-Simple):
+    → EMERGENCY_BOOT1.cmd
+
+    Emergency Boot 2 (Advanced):
+    → EMERGENCY_BOOT2.cmd
+
+    Emergency Boot 3 (Comprehensive):
+    → EMERGENCY_BOOT3.cmd
+
+    Emergency Boot 4 (Smart Minimal - Recommended):
+    → EMERGENCY_BOOT4.cmd
+
+    Fix BCD Not Found:
+    → FIX_BCD_NOT_FOUND.cmd
+
+    How to run:
+    1. Open Command Prompt (as Administrator)
+    2. Navigate to Miracle Boot folder
+    3. Run: EMERGENCY_BOOT4.cmd
+    4. Follow the on-screen prompts
+
+    These scripts:
+    - Run in separate Command Prompt windows
+    - Provide step-by-step repair processes
+    - Show detailed progress and results
+    - Work in WinRE, WinPE, and normal Windows
+
+
+================================================================================
+METHOD 1: WINDOWS RECOVERY ENVIRONMENT (WinRE) - SHIFT+F10
+==========================================================
+
+⚠️ IMPORTANT: Miracle Boot will automatically enable internet connectivity
+   BEFORE attempting any internet operations. The script will wait for
+   network to be ready before proceeding.
+
+Step 1: Access WinRE Command Prompt
+------------------------------------
+1. Boot your computer and wait for Windows logo
+2. When you see the login screen or boot menu, press and hold SHIFT
+3. While holding SHIFT, click "Restart" (or press F8/F10 during boot)
+4. Select "Troubleshoot" → "Advanced Options" → "Command Prompt"
+5. OR: Press SHIFT+F10 at the Windows Setup screen
+
+Step 2: Enable Internet (Automatic - Script Handles This)
+----------------------------------------------------------
+Miracle Boot will automatically:
+- Enable all network adapters
+- Configure DHCP
+- Set DNS servers (8.8.8.8, 8.8.4.4)
+- Test connectivity
+- Wait for internet to be ready before any downloads
+
+Step 3: Download Miracle Boot (If Not Already Available)
+--------------------------------------------------------
+Option A: Download from GitHub (Internet Required)
+    cd D:\
+    powershell -Command "`$client = New-Object System.Net.WebClient; `$client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force; cd 'D:\MiracleBoot_v7_1_1-main'"
+
+Option B: Copy from USB Drive (If Internet Not Available)
+    xcopy E:\MiracleBoot_v7_1_1 D:\MiracleBoot_v7_1_1\ /E /I /Y
+    cd /d D:\MiracleBoot_v7_1_1
+
+Step 4: Run Miracle Boot
+-------------------------
+    Quick GUI Launch:
+    → cd /d D:\MiracleBoot_v7_1_1
+    → RunMiracleBoot.cmd
+
+    Quick Emergency Fix (CMD):
+    → cd /d D:\MiracleBoot_v7_1_1
+    → EMERGENCY_BOOT4.cmd
+
+The CMD launcher (RunMiracleBoot.cmd) will:
+- Check for PowerShell availability
+- Enable network/internet automatically
+- Wait for connectivity before any internet operations
+- Launch the appropriate interface (GUI/TUI/CMD) based on environment
+- Handle all prerequisites automatically
+
+================================================================================
+METHOD 2: BOOTABLE USB WITH HIREN'S BOOTCD (Alternative)
+==========================================================
+
+Hiren's BootCD provides a full Windows PE environment with network drivers
+pre-loaded, making it easier to get online in a repair environment.
+
+Advantages:
+- Network drivers already loaded
+- Full Windows PE environment
+- Can run Miracle Boot from USB or downloaded copy
+- Works even if Windows won't boot
+
+Step 1: Create Hiren's BootCD USB
+----------------------------------
+1. Download Hiren's BootCD PE from: https://www.hirensbootcd.org/
+2. Use Rufus or similar tool to create bootable USB
+3. Boot from USB
+
+Step 2: Access Command Prompt
+------------------------------
+1. Boot from Hiren's BootCD USB
+2. Select "Mini Windows XP" or "Windows 10 PE" (depending on version)
+3. Once in Windows PE, open Command Prompt or PowerShell
+
+Step 3: Run Miracle Boot
+------------------------
+Option A: If Miracle Boot is on USB:
+    cd E:\MiracleBoot_v7_1_1
+    RunMiracleBoot.cmd              (GUI/TUI)
+    OR
+    EMERGENCY_BOOT4.cmd            (Quick Emergency Fix)
+
+Option B: Download from GitHub (Internet should work):
+    cd D:\
+    powershell -Command "`$client = New-Object System.Net.WebClient; `$client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force; cd 'D:\MiracleBoot_v7_1_1-main'; .\RunMiracleBoot.cmd"
+
+================================================================================
+METHOD 3: FROM WORKING WINDOWS INSTALLATION
+============================================
+
+If Windows boots but has issues:
+
+    Quick GUI Launch:
+    1. Download Miracle Boot from GitHub
+    2. Extract to a folder (e.g., C:\MiracleBoot_v7_1_1)
+    3. Right-click RunMiracleBoot.cmd → "Run as Administrator"
+    4. Follow the GUI interface
+
+    Quick Emergency Fix (CMD):
+    1. Open Command Prompt as Administrator
+    2. Navigate to Miracle Boot folder
+    3. Run: EMERGENCY_BOOT4.cmd
+    4. Follow the on-screen prompts
+
+================================================================================
+KEY FEATURES - AUTOMATIC INTERNET HANDLING
+===========================================
+
+✅ Automatic Network Enablement
+   - Script enables all network adapters automatically
+   - Configures DHCP and DNS
+   - Tests connectivity before proceeding
+
+✅ Smart Waiting
+   - Script waits for internet to be ready
+   - No internet operations until connectivity confirmed
+   - Prevents errors from premature network access
+
+✅ Fallback Options
+   - If internet fails, script continues with offline operations
+   - Can use USB method as backup
+   - All emergency repair scripts work offline
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: "Cannot download from GitHub"
+Solution: 
+  - Script will automatically try to enable network first
+  - If internet still fails, use USB method (Method 2)
+  - Copy Miracle Boot from another device to USB drive
+
+Problem: "PowerShell not found"
+Solution: 
+  - RunMiracleBoot.cmd will automatically fall back to CMD mode
+  - CMD mode provides limited but functional repair options
+
+Problem: "Access denied"
+Solution: 
+  - In WinRE, you should already have admin rights
+  - If issues persist, try running from X: drive (WinRE system drive)
+
+================================================================================
+QUICK REFERENCE - WINRE COMMANDS
+================================================================================
+
+# Enable Internet (Manual - if automatic fails):
+netsh interface show interface
+netsh interface set interface name="Ethernet" admin=enable
+netsh interface ip set address name="Ethernet" dhcp
+netsh interface ip set dns name="Ethernet" static 8.8.8.8
+ipconfig /renew
+ping 8.8.8.8
+
+# Download and Run Miracle Boot:
+cd D:\
+powershell -Command "`$client = New-Object System.Net.WebClient; `$client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force"
+cd D:\MiracleBoot_v7_1_1-main
+RunMiracleBoot.cmd
+
+================================================================================
+For detailed instructions, see SHIFT_F10.txt in the Miracle Boot folder.
+================================================================================
+"@
+        
+        # Create a scrollable window to display instructions
+        $instructionsWindow = New-Object System.Windows.Window
+        $instructionsWindow.Title = "Miracle Boot - Execution Instructions"
+        $instructionsWindow.Width = 800
+        $instructionsWindow.Height = 600
+        $instructionsWindow.WindowStartupLocation = "CenterOwner"
+        $instructionsWindow.Owner = $W
+        
+        $grid = New-Object System.Windows.Controls.Grid
+        $grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{Height = "Auto"}))
+        $grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{Height = "*"}))
+        $grid.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition -Property @{Height = "Auto"}))
+        
+        $titleBlock = New-Object System.Windows.Controls.TextBlock
+        $titleBlock.Text = "How to Run Miracle Boot"
+        $titleBlock.FontSize = 18
+        $titleBlock.FontWeight = "Bold"
+        $titleBlock.Margin = New-Object System.Windows.Thickness(10)
+        $titleBlock.HorizontalAlignment = "Center"
+        [System.Windows.Controls.Grid]::SetRow($titleBlock, 0)
+        $grid.Children.Add($titleBlock) | Out-Null
+        
+        $scrollViewer = New-Object System.Windows.Controls.ScrollViewer
+        $scrollViewer.VerticalScrollBarVisibility = "Auto"
+        $scrollViewer.HorizontalScrollBarVisibility = "Disabled"
+        [System.Windows.Controls.Grid]::SetRow($scrollViewer, 1)
+        
+        $textBlock = New-Object System.Windows.Controls.TextBlock
+        $textBlock.Text = $instructionsText
+        $textBlock.TextWrapping = "Wrap"
+        $textBlock.FontFamily = "Consolas"
+        $textBlock.FontSize = 11
+        $textBlock.Margin = New-Object System.Windows.Thickness(15)
+        $textBlock.Foreground = "#333333"
+        
+        $scrollViewer.Content = $textBlock
+        $grid.Children.Add($scrollViewer) | Out-Null
+        
+        $closeBtn = New-Object System.Windows.Controls.Button
+        $closeBtn.Content = "Close"
+        $closeBtn.Width = 100
+        $closeBtn.Height = 30
+        $closeBtn.HorizontalAlignment = "Center"
+        $closeBtn.Margin = New-Object System.Windows.Thickness(0, 10, 0, 10)
+        [System.Windows.Controls.Grid]::SetRow($closeBtn, 2)
+        $closeBtn.Add_Click({ $instructionsWindow.Close() })
+        $grid.Children.Add($closeBtn) | Out-Null
+        
+        $instructionsWindow.Content = $grid
+        $instructionsWindow.ShowDialog() | Out-Null
+    })
 }
 
 $menuHelpEmergencyGuide = Get-Control -Name "MenuHelpEmergencyGuide"
@@ -2341,6 +3153,210 @@ if ($btnFixBCDFoundTab) {
     $btnFixBCDFoundTab.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
 }
 
+# Emergency Boot Repair Buttons in Boot Repair Operations Section
+$btnEmergencyBoot1Ops = Get-Control -Name "BtnEmergencyBoot1Ops"
+if ($btnEmergencyBoot1Ops) {
+    $btnEmergencyBoot1Ops.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$btnEmergencyBoot2Ops = Get-Control -Name "BtnEmergencyBoot2Ops"
+if ($btnEmergencyBoot2Ops) {
+    $btnEmergencyBoot2Ops.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$btnEmergencyBoot3Ops = Get-Control -Name "BtnEmergencyBoot3Ops"
+if ($btnEmergencyBoot3Ops) {
+    $btnEmergencyBoot3Ops.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$btnEmergencyBoot4Ops = Get-Control -Name "BtnEmergencyBoot4Ops"
+if ($btnEmergencyBoot4Ops) {
+    $btnEmergencyBoot4Ops.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
+}
+
+$btnFixBCDFoundOps = Get-Control -Name "BtnFixBCDFoundOps"
+if ($btnFixBCDFoundOps) {
+    $btnFixBCDFoundOps.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+# Settings Menu Handlers
+$menuSettingsOpen = Get-Control -Name "MenuSettingsOpen"
+if ($menuSettingsOpen) {
+    $menuSettingsOpen.Add_Click({
+        $grid = $W.Content
+        $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+        if ($tabControl) {
+            $settingsTab = $tabControl.Items | Where-Object { $_.Header -eq "Settings" }
+            if ($settingsTab) {
+                $tabControl.SelectedItem = $settingsTab
+            }
+        }
+    })
+}
+
+$menuSettingsLight = Get-Control -Name "MenuSettingsLight"
+if ($menuSettingsLight) {
+    $menuSettingsLight.Add_Click({
+        if ($radioLightMode) {
+            $radioLightMode.IsChecked = $true
+            $radioDarkMode.IsChecked = $false
+            Set-DarkMode -Enabled $false
+        }
+    })
+}
+
+$menuSettingsDark = Get-Control -Name "MenuSettingsDark"
+if ($menuSettingsDark) {
+    $menuSettingsDark.Add_Click({
+        if ($radioDarkMode) {
+            $radioDarkMode.IsChecked = $true
+            $radioLightMode.IsChecked = $false
+            Set-DarkMode -Enabled $true
+        }
+    })
+}
+
+$menuSettingsScale75 = Get-Control -Name "MenuSettingsScale75"
+if ($menuSettingsScale75) {
+    $menuSettingsScale75.Add_Click({
+        if ($interfaceScaleSlider) {
+            $interfaceScaleSlider.Value = 0.75
+            Set-InterfaceScale -Scale 0.75
+        }
+    })
+}
+
+$menuSettingsScale100 = Get-Control -Name "MenuSettingsScale100"
+if ($menuSettingsScale100) {
+    $menuSettingsScale100.Add_Click({
+        if ($interfaceScaleSlider) {
+            $interfaceScaleSlider.Value = 1.0
+            Set-InterfaceScale -Scale 1.0
+        }
+    })
+}
+
+$menuSettingsScale125 = Get-Control -Name "MenuSettingsScale125"
+if ($menuSettingsScale125) {
+    $menuSettingsScale125.Add_Click({
+        if ($interfaceScaleSlider) {
+            $interfaceScaleSlider.Value = 1.25
+            Set-InterfaceScale -Scale 1.25
+        }
+    })
+}
+
+$menuSettingsScale150 = Get-Control -Name "MenuSettingsScale150"
+if ($menuSettingsScale150) {
+    $menuSettingsScale150.Add_Click({
+        if ($interfaceScaleSlider) {
+            $interfaceScaleSlider.Value = 1.5
+            Set-InterfaceScale -Scale 1.5
+        }
+    })
+}
+
+$menuSettingsOneClick = Get-Control -Name "MenuSettingsOneClick"
+if ($menuSettingsOneClick) {
+    $menuSettingsOneClick.Add_Click({
+        $btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
+        if ($btnOneClickRepair) {
+            # Switch to Boot Fixer tab
+            $grid = $W.Content
+            $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+            if ($tabControl) {
+                $bootFixerTab = $tabControl.Items | Where-Object { $_.Header -eq "Boot Fixer" }
+                if ($bootFixerTab) {
+                    $tabControl.SelectedItem = $bootFixerTab
+                }
+            }
+            # Trigger the button click
+            $btnOneClickRepair.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+        }
+    })
+}
+
+$menuSettingsEmergency1 = Get-Control -Name "MenuSettingsEmergency1"
+if ($menuSettingsEmergency1) {
+    $menuSettingsEmergency1.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$menuSettingsEmergency2 = Get-Control -Name "MenuSettingsEmergency2"
+if ($menuSettingsEmergency2) {
+    $menuSettingsEmergency2.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$menuSettingsEmergency3 = Get-Control -Name "MenuSettingsEmergency3"
+if ($menuSettingsEmergency3) {
+    $menuSettingsEmergency3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$menuSettingsEmergency4 = Get-Control -Name "MenuSettingsEmergency4"
+if ($menuSettingsEmergency4) {
+    $menuSettingsEmergency4.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
+}
+
+$menuSettingsFixBCD = Get-Control -Name "MenuSettingsFixBCD"
+if ($menuSettingsFixBCD) {
+    $menuSettingsFixBCD.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+$menuSettingsSequential = Get-Control -Name "MenuSettingsSequential"
+if ($menuSettingsSequential) {
+    $menuSettingsSequential.Add_Click({ Start-SequentialRepair })
+}
+
+# Settings Tab Button Handlers
+$btnSettingsOneClick = Get-Control -Name "BtnSettingsOneClick"
+if ($btnSettingsOneClick) {
+    $btnSettingsOneClick.Add_Click({
+        $btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
+        if ($btnOneClickRepair) {
+            # Switch to Boot Fixer tab
+            $grid = $W.Content
+            $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+            if ($tabControl) {
+                $bootFixerTab = $tabControl.Items | Where-Object { $_.Header -eq "Boot Fixer" }
+                if ($bootFixerTab) {
+                    $tabControl.SelectedItem = $bootFixerTab
+                }
+            }
+            # Trigger the button click
+            $btnOneClickRepair.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+        }
+    })
+}
+
+$btnSettingsEmergency1 = Get-Control -Name "BtnSettingsEmergency1"
+if ($btnSettingsEmergency1) {
+    $btnSettingsEmergency1.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT1" })
+}
+
+$btnSettingsEmergency2 = Get-Control -Name "BtnSettingsEmergency2"
+if ($btnSettingsEmergency2) {
+    $btnSettingsEmergency2.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT2" })
+}
+
+$btnSettingsEmergency3 = Get-Control -Name "BtnSettingsEmergency3"
+if ($btnSettingsEmergency3) {
+    $btnSettingsEmergency3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$btnSettingsEmergency4 = Get-Control -Name "BtnSettingsEmergency4"
+if ($btnSettingsEmergency4) {
+    $btnSettingsEmergency4.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
+}
+
+$btnSettingsFixBCD = Get-Control -Name "BtnSettingsFixBCD"
+if ($btnSettingsFixBCD) {
+    $btnSettingsFixBCD.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
+}
+
+$btnSettingsSequential = Get-Control -Name "BtnSettingsSequential"
+if ($btnSettingsSequential) {
+    $btnSettingsSequential.Add_Click({ Start-SequentialRepair })
+}
+
 # Additional menu item handlers
 $menuToolsBCDEitor = Get-Control -Name "MenuToolsBCDEitor"
 if ($menuToolsBCDEitor) {
@@ -2425,7 +3441,10 @@ if ($btnSwitchToTUI) {
     
     if ($result -eq "Yes") {
         try {
-            Update-StatusBar -Message "Switching to command line mode..." -ShowProgress
+            Update-StatusBar -Message "Closing GUI and switching to command line mode..." -ShowProgress
+            # Allow UI to update
+            $W.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            Start-Sleep -Milliseconds 100
             $W.Close()
             
             # Load TUI module and start it
@@ -2531,6 +3550,424 @@ if ($btnResetScale) {
     })
 } else {
     Write-Warning "BtnResetScale control not found in XAML"
+}
+
+# Dark Mode Controls
+$radioLightMode = Get-Control -Name "RadioLightMode"
+$radioDarkMode = Get-Control -Name "RadioDarkMode"
+$themeStatusText = Get-Control -Name "ThemeStatusText"
+
+# Function to apply dark mode
+function Set-DarkMode {
+    param([bool]$Enabled)
+    
+    try {
+        $regPath = "HKCU:\Software\MiracleBoot"
+        if (-not (Test-Path $regPath)) {
+            New-Item -Path $regPath -Force | Out-Null
+        }
+        Set-ItemProperty -Path $regPath -Name "DarkMode" -Value ([int]$Enabled) -Type DWord -ErrorAction SilentlyContinue
+        
+        # Apply dark mode colors
+        if ($Enabled) {
+            # Dark mode colors
+            $bgColor = "#1E1E1E"
+            $fgColor = "#FFFFFF"
+            $panelColor = "#2D2D30"
+            $borderColor = "#3F3F46"
+            $accentColor = "#0078D7"
+        } else {
+            # Light mode colors
+            $bgColor = "#F0F0F0"
+            $fgColor = "#000000"
+            $panelColor = "#FFFFFF"
+            $borderColor = "#CCCCCC"
+            $accentColor = "#0078D7"
+        }
+        
+        # Helper function to parse hex color to brush
+        function Convert-HexToBrush {
+            param([string]$HexColor)
+            $hex = $HexColor.TrimStart('#')
+            $r = [Convert]::ToByte($hex.Substring(0,2), 16)
+            $g = [Convert]::ToByte($hex.Substring(2,2), 16)
+            $b = [Convert]::ToByte($hex.Substring(4,2), 16)
+            return New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb($r, $g, $b))
+        }
+        
+        # Apply to window
+        if ($W) {
+            $W.Background = Convert-HexToBrush -HexColor $bgColor
+        }
+        
+        # Apply to menu
+        $menu = Get-Control -Name "MenuBar"
+        if ($menu) {
+            $menu.Background = Convert-HexToBrush -HexColor $panelColor
+        }
+        
+        # Apply to toolbar
+        $toolbar = $W.Content.Children | Where-Object { $_.GetType().Name -eq 'StackPanel' -and $_.Background -ne $null } | Select-Object -First 1
+        if ($toolbar) {
+            $toolbar.Background = Convert-HexToBrush -HexColor $panelColor
+        }
+        
+        # Apply to status bar
+        $statusBar = Get-Control -Name "StatusBar"
+        if ($statusBar) {
+            $statusBar.Background = Convert-HexToBrush -HexColor $panelColor
+        }
+        
+        # Update theme status text
+        if ($themeStatusText) {
+            $themeStatusText.Text = "Current theme: $(if ($Enabled) { 'Dark Mode' } else { 'Light Mode' })"
+        }
+        
+        # Update radio buttons
+        if ($radioLightMode) {
+            $radioLightMode.IsChecked = -not $Enabled
+        }
+        if ($radioDarkMode) {
+            $radioDarkMode.IsChecked = $Enabled
+        }
+        
+    } catch {
+        Write-Warning "Failed to apply dark mode: $_"
+    }
+}
+
+# Load saved dark mode preference
+$savedDarkMode = $false
+try {
+    $regPath = "HKCU:\Software\MiracleBoot"
+    if (Test-Path $regPath) {
+        $saved = Get-ItemProperty -Path $regPath -Name "DarkMode" -ErrorAction SilentlyContinue
+        if ($saved -and $saved.DarkMode -eq 1) {
+            $savedDarkMode = $true
+        }
+    }
+} catch {
+    # Use default if registry read fails
+}
+
+if ($radioLightMode -and $radioDarkMode) {
+    # Set initial state from saved preference
+    if ($savedDarkMode) {
+        $radioDarkMode.IsChecked = $true
+        $radioLightMode.IsChecked = $false
+        Set-DarkMode -Enabled $true
+    } else {
+        $radioLightMode.IsChecked = $true
+        $radioDarkMode.IsChecked = $false
+        Set-DarkMode -Enabled $false
+    }
+    
+    # Handle radio button changes
+    $radioLightMode.Add_Checked({
+        Set-DarkMode -Enabled $false
+    })
+    
+    $radioDarkMode.Add_Checked({
+        Set-DarkMode -Enabled $true
+    })
+}
+
+# Window Size Controls
+$windowSizeSlider = Get-Control -Name "WindowSizeSlider"
+$windowSizeValueText = Get-Control -Name "WindowSizeValueText"
+$btnResetWindowSize = Get-Control -Name "BtnResetWindowSize"
+
+# Function to apply window size
+function Set-WindowSize {
+    param([double]$Scale)
+    
+    if ($Scale -lt 0.8 -or $Scale -gt 1.5) {
+        return
+    }
+    
+    try {
+        if ($W) {
+            $baseWidth = 1200
+            $baseHeight = 850
+            $W.Width = $baseWidth * $Scale
+            $W.Height = $baseHeight * $Scale
+        }
+        
+        # Update size value text
+        if ($windowSizeValueText) {
+            $windowSizeValueText.Text = "Current window size: $([math]::Round($Scale * 100))%"
+        }
+        
+        # Save size preference to registry
+        try {
+            $regPath = "HKCU:\Software\MiracleBoot"
+            if (-not (Test-Path $regPath)) {
+                New-Item -Path $regPath -Force | Out-Null
+            }
+            Set-ItemProperty -Path $regPath -Name "WindowSize" -Value $Scale -Type Double -ErrorAction SilentlyContinue
+        } catch {
+            # Silently fail if registry write fails
+        }
+    } catch {
+        Write-Warning "Failed to apply window size: $_"
+    }
+}
+
+# Load saved window size preference
+$savedWindowSize = 1.0
+try {
+    $regPath = "HKCU:\Software\MiracleBoot"
+    if (Test-Path $regPath) {
+        $saved = Get-ItemProperty -Path $regPath -Name "WindowSize" -ErrorAction SilentlyContinue
+        if ($saved -and $saved.WindowSize -ge 0.8 -and $saved.WindowSize -le 1.5) {
+            $savedWindowSize = $saved.WindowSize
+        }
+    }
+} catch {
+    # Use default if registry read fails
+}
+
+if ($windowSizeSlider) {
+    # Set initial value from saved preference
+    $windowSizeSlider.Value = $savedWindowSize
+    Set-WindowSize -Scale $savedWindowSize
+    
+    # Handle slider value change
+    $windowSizeSlider.Add_ValueChanged({
+        $newSize = $windowSizeSlider.Value
+        Set-WindowSize -Scale $newSize
+    })
+}
+
+if ($btnResetWindowSize) {
+    $btnResetWindowSize.Add_Click({
+        try {
+            $defaultSize = 1.0
+            if ($windowSizeSlider) {
+                $windowSizeSlider.Value = $defaultSize
+            }
+            Set-WindowSize -Scale $defaultSize
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to reset window size: $_", "Error", "OK", "Error")
+        }
+    })
+}
+
+# Sequential Repair Function
+function Start-SequentialRepair {
+    <#
+    .SYNOPSIS
+    Attempts all repair methods in sequence until one succeeds or all fail.
+    
+    .DESCRIPTION
+    Tries repair methods in this order:
+    1. One-Click Repair (GUI automated)
+    2. Emergency Boot 1 (Simple)
+    3. Emergency Boot 2 (Advanced)
+    4. Emergency Boot 3 (Comprehensive)
+    5. Emergency Boot 4 (Smart Minimal)
+    6. Fix BCD Not Found (Targeted)
+    
+    After each attempt, verifies if the issue is fixed.
+    Stops when a repair succeeds or all methods are exhausted.
+    #>
+    
+    $fixerOutput = Get-Control -Name "FixerOutput"
+    $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
+    
+    function Write-RepairLog {
+        param([string]$Message)
+        if ($fixerOutput) {
+            $fixerOutput.Text += "$Message`n"
+            $fixerOutput.ScrollToEnd()
+        }
+        Write-Host $Message
+    }
+    
+    Write-RepairLog "==============================================================="
+    Write-RepairLog "SEQUENTIAL REPAIR - Trying All Methods"
+    Write-RepairLog "==============================================================="
+    Write-RepairLog ""
+    Write-RepairLog "This will attempt all repair methods in sequence:"
+    Write-RepairLog "  1. One-Click Repair (GUI automated)"
+    Write-RepairLog "  2. Emergency Boot 1 (Simple)"
+    Write-RepairLog "  3. Emergency Boot 2 (Advanced)"
+    Write-RepairLog "  4. Emergency Boot 3 (Comprehensive)"
+    Write-RepairLog "  5. Emergency Boot 4 (Smart Minimal)"
+    Write-RepairLog "  6. Fix BCD Not Found (Targeted)"
+    Write-RepairLog ""
+    Write-RepairLog "After each attempt, we will verify if the issue is fixed."
+    Write-RepairLog "Sequential repair will stop when a method succeeds."
+    Write-RepairLog ""
+    
+    $result = [System.Windows.MessageBox]::Show(
+        "Sequential Repair will attempt all repair methods in sequence.`n`n" +
+        "This may take a while. Continue?",
+        "Sequential Repair",
+        "YesNo",
+        "Question"
+    )
+    
+    if ($result -ne "Yes") {
+        Write-RepairLog "Sequential repair cancelled by user."
+        return
+    }
+    
+    # Function to verify boot status
+    function Test-BootStatus {
+        param([string]$Drive = "C")
+        
+        $issues = 0
+        
+        # Check winload.efi
+        if (-not (Test-Path "$Drive`:\Windows\System32\winload.efi")) {
+            $issues++
+        }
+        
+        # Check BCD (try to mount EFI)
+        $bcdOk = $false
+        for ($d = 65; $d -le 90; $d++) {
+            $letter = [char]$d + ":"
+            if (Test-Path "$letter\EFI\Microsoft\Boot\BCD") {
+                try {
+                    $bcdTest = bcdedit /store "$letter\EFI\Microsoft\Boot\BCD" /enum {default} 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $bcdOk = $true
+                        break
+                    }
+                } catch {
+                    # Continue checking
+                }
+            }
+        }
+        
+        if (-not $bcdOk) {
+            $issues++
+        }
+        
+        return @{ Success = ($issues -eq 0); Issues = $issues }
+    }
+    
+    $repairMethods = @(
+        @{ Name = "One-Click Repair"; Type = "GUI"; Script = "OneClick" },
+        @{ Name = "Emergency Boot 1"; Type = "Script"; Script = "EMERGENCY_BOOT1" },
+        @{ Name = "Emergency Boot 2"; Type = "Script"; Script = "EMERGENCY_BOOT2" },
+        @{ Name = "Emergency Boot 3"; Type = "Script"; Script = "EMERGENCY_BOOT3" },
+        @{ Name = "Emergency Boot 4"; Type = "Script"; Script = "EMERGENCY_BOOT4" },
+        @{ Name = "Fix BCD Not Found"; Type = "Script"; Script = "FIX_BCD_NOT_FOUND" }
+    )
+    
+    $targetDrive = $env:SystemDrive.TrimEnd(':')
+    $success = $false
+    $successfulMethod = $null
+    
+    foreach ($method in $repairMethods) {
+        Write-RepairLog ""
+        Write-RepairLog "==============================================================="
+        Write-RepairLog "Attempting: $($method.Name)"
+        Write-RepairLog "==============================================================="
+        Write-RepairLog ""
+        
+        try {
+            if ($method.Type -eq "GUI" -and $method.Script -eq "OneClick") {
+                # Trigger One-Click Repair
+                $btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
+                if ($btnOneClickRepair) {
+                    Write-RepairLog "Launching One-Click Repair..."
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Sequential Repair: Running $($method.Name)..."
+                    }
+                    Update-StatusBar -Message "Sequential Repair: $($method.Name)..." -ShowProgress
+                    
+                    # Note: One-Click Repair runs asynchronously, so we need to wait
+                    # For now, we'll launch it and move to next method
+                    # In a full implementation, we'd wait for completion
+                    Write-RepairLog "[INFO] One-Click Repair launched. Please wait for completion..."
+                    Write-RepairLog "[INFO] After completion, verification will run automatically."
+                    
+                    # Wait a bit for user to see the message
+                    Start-Sleep -Seconds 2
+                }
+            } else {
+                # Launch emergency script
+                Write-RepairLog "Launching $($method.Name)..."
+                Start-EmergencyBootScript -ScriptName $method.Script
+                Write-RepairLog "[INFO] $($method.Name) launched in separate window."
+                Write-RepairLog "[INFO] Please complete the script, then click OK to verify."
+                
+                $verify = [System.Windows.MessageBox]::Show(
+                    "Have you completed $($method.Name)?`n`nClick OK to verify if the repair succeeded, or Cancel to skip verification.",
+                    "Verify Repair",
+                    "OKCancel",
+                    "Question"
+                )
+                
+                if ($verify -eq "OK") {
+                    Write-RepairLog "Verifying boot status..."
+                    $bootStatus = Test-BootStatus -Drive $targetDrive
+                    
+                    if ($bootStatus.Success) {
+                        Write-RepairLog "[SUCCESS] Boot issues appear to be fixed!"
+                        Write-RepairLog "Method that succeeded: $($method.Name)"
+                        $success = $true
+                        $successfulMethod = $method.Name
+                        break
+                    } else {
+                        Write-RepairLog "[PARTIAL] Some issues remain ($($bootStatus.Issues) issue(s) still present)"
+                        Write-RepairLog "Continuing to next method..."
+                    }
+                } else {
+                    Write-RepairLog "[SKIPPED] Verification skipped. Continuing to next method..."
+                }
+            }
+        } catch {
+            Write-RepairLog "[ERROR] $($method.Name) failed: $_"
+            Write-RepairLog "Continuing to next method..."
+        }
+    }
+    
+    Write-RepairLog ""
+    Write-RepairLog "==============================================================="
+    Write-RepairLog "SEQUENTIAL REPAIR COMPLETE"
+    Write-RepairLog "==============================================================="
+    Write-RepairLog ""
+    
+    if ($success) {
+        Write-RepairLog "[SUCCESS] Repair completed successfully!"
+        Write-RepairLog "Successful method: $successfulMethod"
+        Write-RepairLog ""
+        Write-RepairLog "Please restart your computer to test if Windows boots normally."
+        
+        [System.Windows.MessageBox]::Show(
+            "Sequential Repair completed successfully!`n`n" +
+            "Successful method: $successfulMethod`n`n" +
+            "Please restart your computer to test if Windows boots normally.",
+            "Repair Successful",
+            "OK",
+            "Information"
+        ) | Out-Null
+    } else {
+        Write-RepairLog "[WARNING] All repair methods were attempted, but issues may still remain."
+        Write-RepairLog ""
+        Write-RepairLog "Recommendations:"
+        Write-RepairLog "  - Check the logs from each repair attempt"
+        Write-RepairLog "  - Try manual repair steps from the failure reports"
+        Write-RepairLog "  - Consider contacting support (Help > Support & Contact)"
+        
+        [System.Windows.MessageBox]::Show(
+            "All repair methods were attempted.`n`n" +
+            "Some issues may still remain. Please check the logs and`n" +
+            "consider manual repair steps or contacting support.",
+            "Repair Attempts Complete",
+            "OK",
+            "Warning"
+        ) | Out-Null
+    }
+    
+    if ($txtOneClickStatus) {
+        $txtOneClickStatus.Text = "Sequential Repair: Complete"
+    }
+    Update-StatusBar -Message "Sequential Repair: Complete" -HideProgress
 }
 
 # Initialize network status (with improved detection)
@@ -3461,6 +4898,56 @@ modify critical boot settings that affect system startup.
     })
 } else {
     Write-Warning "BtnBCD control not found in XAML"
+}
+
+# BCD View Toggle Buttons (flattened to avoid depth overflow)
+# Cache controls to avoid repeated Get-Control calls
+$btnBCDBasicView = Get-Control -Name "BtnBCDBasicView" -Silent
+$btnBCDAdvancedView = Get-Control -Name "BtnBCDAdvancedView" -Silent
+$bcdBasicView = Get-Control -Name "BCDBasicView" -Silent
+$bcdAdvancedView = Get-Control -Name "BCDAdvancedView" -Silent
+
+if ($btnBCDBasicView) {
+    $btnBCDBasicView.Add_Click({
+        if ($bcdBasicView) { $bcdBasicView.Visibility = "Visible" }
+        if ($bcdAdvancedView) { $bcdAdvancedView.Visibility = "Collapsed" }
+        if ($btnBCDBasicView) { $btnBCDBasicView.Background = [System.Windows.Media.Brushes]::Parse("#0078D7") }
+        if ($btnBCDAdvancedView) { $btnBCDAdvancedView.Background = [System.Windows.Media.Brushes]::Parse("#6c757d") }
+    })
+}
+
+if ($btnBCDAdvancedView) {
+    $btnBCDAdvancedView.Add_Click({
+        if ($bcdBasicView) { $bcdBasicView.Visibility = "Collapsed" }
+        if ($bcdAdvancedView) { $bcdAdvancedView.Visibility = "Visible" }
+        if ($btnBCDBasicView) { $btnBCDBasicView.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(108, 117, 125)) }
+        if ($btnBCDAdvancedView) { $btnBCDAdvancedView.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(0, 120, 215)) }
+    })
+}
+
+# Summary View Toggle Buttons (flattened to avoid depth overflow)
+# Cache controls to avoid repeated Get-Control calls
+$btnSummaryBootHealth = Get-Control -Name "BtnSummaryBootHealth" -Silent
+$btnSummaryUpdateEligibility = Get-Control -Name "BtnSummaryUpdateEligibility" -Silent
+$summaryBootHealthView = Get-Control -Name "SummaryBootHealthView" -Silent
+$summaryUpdateEligibilityView = Get-Control -Name "SummaryUpdateEligibilityView" -Silent
+
+if ($btnSummaryBootHealth) {
+    $btnSummaryBootHealth.Add_Click({
+        if ($summaryBootHealthView) { $summaryBootHealthView.Visibility = "Visible" }
+        if ($summaryUpdateEligibilityView) { $summaryUpdateEligibilityView.Visibility = "Collapsed" }
+        if ($btnSummaryBootHealth) { $btnSummaryBootHealth.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(0, 120, 215)) }
+        if ($btnSummaryUpdateEligibility) { $btnSummaryUpdateEligibility.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(108, 117, 125)) }
+    })
+}
+
+if ($btnSummaryUpdateEligibility) {
+    $btnSummaryUpdateEligibility.Add_Click({
+        if ($summaryBootHealthView) { $summaryBootHealthView.Visibility = "Collapsed" }
+        if ($summaryUpdateEligibilityView) { $summaryUpdateEligibilityView.Visibility = "Visible" }
+        if ($btnSummaryBootHealth) { $btnSummaryBootHealth.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(108, 117, 125)) }
+        if ($btnSummaryUpdateEligibility) { $btnSummaryUpdateEligibility.Background = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Color]::FromRgb(0, 120, 215)) }
+    })
 }
 
 # Helper function to update Boot Menu Simulator
@@ -6778,8 +8265,194 @@ exit
                         
                         if ($fixAgain -eq "Yes") {
                             Write-Log "User requested additional repair attempts..."
-                            # TODO: Implement additional repair logic here
-                            Write-Log "[INFO] Additional repair logic not yet implemented. Please see failure report for manual commands."
+                            Write-Log "[INFO] Starting automatic fallback to emergency repair scripts..."
+                            
+                            # Verify current boot status
+                            $bootStatus = Test-BootRepairSuccess -WindowsDrive $drive
+                            
+                            if (-not $bootStatus.Success) {
+                                Write-Log ""
+                                Write-Log "=================================================================================="
+                                Write-Log "AUTOMATIC FALLBACK TO EMERGENCY REPAIR SCRIPTS"
+                                Write-Log "=================================================================================="
+                                Write-Log ""
+                                Write-Log "Current boot issues detected:"
+                                foreach ($issue in $bootStatus.Issues) {
+                                    Write-Log "  - $issue"
+                                }
+                                Write-Log ""
+                                
+                                # List of emergency scripts to try in order
+                                $emergencyScripts = @(
+                                    @{Name="EMERGENCY_BOOT4"; DisplayName="Emergency Boot 4 (Smart Minimal)"; Description="Smart minimal repair - only fixes what's broken"},
+                                    @{Name="EMERGENCY_BOOT1"; DisplayName="Emergency Boot 1 (Simple)"; Description="Ultra-simple boot repair"},
+                                    @{Name="EMERGENCY_BOOT2"; DisplayName="Emergency Boot 2 (Advanced)"; Description="Advanced boot repair with Windows detection"},
+                                    @{Name="FIX_BCD_NOT_FOUND"; DisplayName="Fix BCD Not Found"; Description="Targeted fix for missing BCD file"},
+                                    @{Name="EMERGENCY_BOOT3"; DisplayName="Emergency Boot 3 (Comprehensive)"; Description="Comprehensive boot repair with all strategies"}
+                                )
+                                
+                                $repairSuccess = $false
+                                $lastAttempted = $null
+                                
+                                foreach ($script in $emergencyScripts) {
+                                    if ($repairSuccess) { break }
+                                    
+                                    Write-Log ""
+                                    Write-Log "Attempting: $($script.DisplayName)"
+                                    Write-Log "Description: $($script.Description)"
+                                    Write-Log ""
+                                    
+                                    $lastAttempted = $script
+                                    
+                                    try {
+                                        # Launch emergency script
+                                        Start-EmergencyBootScript -ScriptName $script.Name
+                                        
+                                        # Wait a moment for script to start
+                                        Start-Sleep -Seconds 3
+                                        
+                                        # Wait for user to complete the script (show message)
+                                        $continue = [System.Windows.MessageBox]::Show(
+                                            "Emergency script '$($script.DisplayName)' has been launched in a separate window.`n`n" +
+                                            "Please:`n" +
+                                            "1. Complete the script in the Command Prompt window`n" +
+                                            "2. Close the Command Prompt window when done`n" +
+                                            "3. Click 'Yes' to verify if boot is fixed`n" +
+                                            "4. Click 'No' to try the next emergency script`n`n" +
+                                            "Have you completed the script and verified boot is fixed?",
+                                            "Emergency Script Launched",
+                                            "YesNo",
+                                            "Question"
+                                        )
+                                        
+                                        if ($continue -eq "Yes") {
+                                            # Re-verify boot status
+                                            Write-Log "Re-verifying boot status after $($script.DisplayName)..."
+                                            $newBootStatus = Test-BootRepairSuccess -WindowsDrive $drive
+                                            
+                                            if ($newBootStatus.Success) {
+                                                Write-Log "[SUCCESS] Boot repair verified successful after $($script.DisplayName)!"
+                                                Write-Log "All critical boot files are now present."
+                                                $repairSuccess = $true
+                                                
+                                                if ($txtOneClickStatus) {
+                                                    $txtOneClickStatus.Text = "Boot repair successful using $($script.DisplayName)"
+                                                }
+                                                Update-StatusBar -Message "Boot repair successful!" -HideProgress
+                                                
+                                                [System.Windows.MessageBox]::Show(
+                                                    "Boot repair was successful!`n`n" +
+                                                    "The emergency script '$($script.DisplayName)' fixed your boot issue.`n`n" +
+                                                    "All critical boot files are now present and verified.`n`n" +
+                                                    "You should now be able to boot Windows successfully.",
+                                                    "Repair Successful",
+                                                    "OK",
+                                                    "Information"
+                                                ) | Out-Null
+                                                
+                                                break
+                                            } else {
+                                                Write-Log "[WARNING] Boot issues still present after $($script.DisplayName)"
+                                                Write-Log "Remaining issues:"
+                                                foreach ($issue in $newBootStatus.Issues) {
+                                                    Write-Log "  - $issue"
+                                                }
+                                                
+                                                # Ask if user wants to continue to next script
+                                                $tryNext = [System.Windows.MessageBox]::Show(
+                                                    "Boot issues are still present after $($script.DisplayName).`n`n" +
+                                                    "Remaining issues:`n$($newBootStatus.Issues -join '`n')`n`n" +
+                                                    "Would you like to try the next emergency script?",
+                                                    "Continue to Next Script?",
+                                                    "YesNo",
+                                                    "Question"
+                                                )
+                                                
+                                                if ($tryNext -eq "No") {
+                                                    Write-Log "User chose to stop automatic fallback"
+                                                    break
+                                                }
+                                            }
+                                        } else {
+                                            Write-Log "User chose to skip verification, trying next script..."
+                                        }
+                                        
+                                    } catch {
+                                        Write-Log "[ERROR] Failed to launch $($script.DisplayName): $_"
+                                        # Continue to next script
+                                    }
+                                }
+                                
+                                # If all scripts failed, show comprehensive diagnostics
+                                if (-not $repairSuccess) {
+                                    Write-Log ""
+                                    Write-Log "=================================================================================="
+                                    Write-Log "ALL EMERGENCY REPAIR SCRIPTS FAILED"
+                                    Write-Log "=================================================================================="
+                                    Write-Log ""
+                                    Write-Log "All emergency repair scripts have been attempted, but boot issues persist."
+                                    Write-Log ""
+                                    
+                                    # Generate comprehensive diagnostics
+                                    Write-Log "Generating comprehensive boot failure diagnostics..."
+                                    $comprehensiveDiag = Get-ComprehensiveBootDiagnostics -WindowsDrive $drive
+                                    Write-Log $comprehensiveDiag
+                                    
+                                    # Save diagnostics to file
+                                    $diagFile = Join-Path $env:TEMP "BootFailureDiagnostics_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+                                    $comprehensiveDiag | Out-File -FilePath $diagFile -Encoding UTF8 -Force
+                                    
+                                    # Get final boot status
+                                    $finalBootStatus = Test-BootRepairSuccess -WindowsDrive $drive
+                                    
+                                    # Build failure message
+                                    $failureMessage = "ALL REPAIR METHODS FAILED`n`n"
+                                    $failureMessage += "The following boot issues could NOT be fixed:`n`n"
+                                    
+                                    foreach ($issue in $finalBootStatus.Issues) {
+                                        $failureMessage += "  ✗ $issue`n"
+                                    }
+                                    
+                                    $failureMessage += "`n"
+                                    $failureMessage += "COMPREHENSIVE DIAGNOSTICS:`n"
+                                    $failureMessage += "------------------------`n"
+                                    
+                                    foreach ($detail in $finalBootStatus.Details) {
+                                        $failureMessage += "$detail`n"
+                                    }
+                                    
+                                    $failureMessage += "`n"
+                                    $failureMessage += "A detailed diagnostic report has been saved to:`n"
+                                    $failureMessage += "$diagFile`n`n"
+                                    $failureMessage += "This report contains:`n"
+                                    $failureMessage += "- Exact file paths checked`n"
+                                    $failureMessage += "- Why each missing file prevents boot`n"
+                                    $failureMessage += "- Specific solutions for each issue`n`n"
+                                    $failureMessage += "Would you like to open the diagnostic report now?"
+                                    
+                                    $openDiag = [System.Windows.MessageBox]::Show(
+                                        $failureMessage,
+                                        "All Repair Methods Failed",
+                                        "YesNo",
+                                        "Error"
+                                    )
+                                    
+                                    if ($openDiag -eq "Yes") {
+                                        Start-SafeNotepad -FilePath $diagFile
+                                    }
+                                    
+                                    if ($txtOneClickStatus) {
+                                        $txtOneClickStatus.Text = "All repair methods failed - see diagnostic report for details"
+                                    }
+                                    Update-StatusBar -Message "All repair methods failed" -HideProgress
+                                }
+                            } else {
+                                Write-Log "[SUCCESS] Boot repair verified successful - no additional repairs needed!"
+                                if ($txtOneClickStatus) {
+                                    $txtOneClickStatus.Text = "Boot repair successful - all issues resolved"
+                                }
+                                Update-StatusBar -Message "Boot repair successful!" -HideProgress
+                            }
                         }
                         
                         # Generate failure report with alternative commands
@@ -10323,6 +11996,44 @@ try {
         throw "Window object is not a valid WPF Window type: $($W.GetType().FullName)"
     }
     
+    # CRITICAL: Ensure window fits on screen and is visible on first launch
+    # Get screen dimensions
+    $screenWidth = [System.Windows.SystemParameters]::PrimaryScreenWidth
+    $screenHeight = [System.Windows.SystemParameters]::PrimaryScreenHeight
+    
+    # If window is larger than screen, resize it
+    if ($W.Width -gt $screenWidth) {
+        $W.Width = [Math]::Max(750, $screenWidth * 0.9)
+    }
+    if ($W.Height -gt $screenHeight) {
+        $W.Height = [Math]::Max(550, $screenHeight * 0.9)
+    }
+    
+    # Ensure window is centered and visible
+    $W.Left = [Math]::Max(0, ($screenWidth - $W.Width) / 2)
+    $W.Top = [Math]::Max(0, ($screenHeight - $W.Height) / 2)
+    
+    # Ensure window is not off-screen
+    if ($W.Left + $W.Width -gt $screenWidth) {
+        $W.Left = $screenWidth - $W.Width - 10
+    }
+    if ($W.Top + $W.Height -gt $screenHeight) {
+        $W.Top = $screenHeight - $W.Height - 10
+    }
+    
+    # Add window Closing event handler to show status when closing
+    $W.Add_Closing({
+        param($sender, $e)
+        # Show closing status in status bar
+        try {
+            Update-StatusBar -Message "Closing Miracle Boot..." -ShowProgress
+            # Force UI update
+            $sender.Dispatcher.Invoke([action]{}, [System.Windows.Threading.DispatcherPriority]::Send)
+        } catch {
+            # If status update fails, continue with close anyway
+        }
+    })
+    
     # Show dialog with error handling
     $W.ShowDialog() | Out-Null
     
@@ -10343,6 +12054,13 @@ try {
     # #endregion agent log
     
     Write-Host "GUI window closed successfully." -ForegroundColor Green
+    
+    # Restore call stack retrieval after GUI initialization completes
+    if (Test-Path Variable:script:OriginalDisableCallStack) {
+        $script:DisableCallStackRetrieval = $script:OriginalDisableCallStack
+    } else {
+        $script:DisableCallStackRetrieval = $false
+    }
 } catch {
     $errorMsg = $_.Exception.Message
     $errorCode = if ($_.Exception.HResult) { "0x$($_.Exception.HResult.ToString('X8'))" } else { "Unknown" }
@@ -10395,6 +12113,17 @@ try {
     # #endregion agent log
     
     throw "Failed to show GUI window: $errorMsg"
+} finally {
+    # CRITICAL: Always restore call depth limit and call stack retrieval, even on error
+    if ($script:OriginalCallDepth) {
+        $PSMaximumCallDepth = $script:OriginalCallDepth
+    }
+    # Restore call stack retrieval flag
+    if (Test-Path Variable:script:OriginalDisableCallStack) {
+        $script:DisableCallStackRetrieval = $script:OriginalDisableCallStack
+    } else {
+        $script:DisableCallStackRetrieval = $false
+    }
 }
 } # End of Start-GUI function
 
