@@ -912,7 +912,7 @@ function Start-SafeNotepad {
 function Start-EmergencyBootScript {
     param(
         [Parameter(Mandatory=$true)]
-        [ValidateSet("EMERGENCY_BOOT1", "EMERGENCY_BOOT2", "EMERGENCY_BOOT3", "FIX_BCD_NOT_FOUND")]
+        [ValidateSet("EMERGENCY_BOOT1", "EMERGENCY_BOOT2", "EMERGENCY_BOOT3", "EMERGENCY_BOOT4", "FIX_BCD_NOT_FOUND")]
         [string]$ScriptName
     )
     
@@ -1048,6 +1048,7 @@ function Start-GUI {
                 <MenuItem Header="Emergency Boot 1 (Simple)" Name="MenuEmergencyBoot1" ToolTip="Ultra-simple boot repair with minimal logic"/>
                 <MenuItem Header="Emergency Boot 2 (Advanced)" Name="MenuEmergencyBoot2" ToolTip="Advanced boot repair with Windows detection"/>
                 <MenuItem Header="Emergency Boot 3 (Comprehensive)" Name="MenuEmergencyBoot3" ToolTip="Comprehensive boot repair with all strategies"/>
+                <MenuItem Header="Emergency Boot 4 (Smart Minimal)" Name="MenuEmergencyBoot4" ToolTip="Smart minimal repair - only fixes what's broken"/>
                 <Separator/>
                 <MenuItem Header="Fix BCD Not Found" Name="MenuFixBCDFound" ToolTip="Targeted fix for missing BCD file"/>
             </MenuItem>
@@ -1061,6 +1062,7 @@ function Start-GUI {
                 <MenuItem Header="Emergency Boot 1" Name="MenuToolsEmergency1"/>
                 <MenuItem Header="Emergency Boot 2" Name="MenuToolsEmergency2"/>
                 <MenuItem Header="Emergency Boot 3" Name="MenuToolsEmergency3"/>
+                <MenuItem Header="Emergency Boot 4 (Smart Minimal)" Name="MenuToolsEmergency4"/>
                 <MenuItem Header="Fix BCD Not Found" Name="MenuToolsFixBCD"/>
             </MenuItem>
             <MenuItem Header="BCD Editor" Name="MenuToolsBCDEitor" ToolTip="Edit Boot Configuration Data"/>
@@ -1269,9 +1271,10 @@ function Start-GUI {
                             <StackPanel>
                                 <TextBlock Text="⚠️ REPAIR STILL BROKEN? Try Emergency Boot Repair Scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,8"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                    <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
-                                    <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
-                                    <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3" Width="140" Height="35" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                                    <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
+                                    <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
+                                    <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3" Width="130" Height="35" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                                    <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4" Width="130" Height="35" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" ToolTip="Smart minimal repair - only fixes what's broken"/>
                                 </StackPanel>
                                 <Button Content="Fix BCD Not Found" Name="BtnFixBCDFound" Width="430" Height="30" Margin="5,5,5,0" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
                             </StackPanel>
@@ -1289,9 +1292,10 @@ function Start-GUI {
                     <StackPanel Margin="10">
                         <TextBlock Text="If One-Click Repair failed, try these emergency scripts:" FontWeight="Bold" Foreground="#856404" Margin="0,0,0,10" TextWrapping="Wrap"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,10">
-                            <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
-                            <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
-                            <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3Tab" Width="160" Height="40" Margin="5" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                            <Button Content="Emergency Boot 1" Name="BtnEmergencyBoot1Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Ultra-simple boot repair"/>
+                            <Button Content="Emergency Boot 2" Name="BtnEmergencyBoot2Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Advanced boot repair with Windows detection"/>
+                            <Button Content="Emergency Boot 3" Name="BtnEmergencyBoot3Tab" Width="140" Height="40" Margin="3" Background="#FFC107" Foreground="Black" FontWeight="Bold" ToolTip="Comprehensive boot repair with all strategies"/>
+                            <Button Content="Emergency Boot 4" Name="BtnEmergencyBoot4Tab" Width="140" Height="40" Margin="3" Background="#4CAF50" Foreground="White" FontWeight="Bold" ToolTip="Smart minimal repair - only fixes what's broken"/>
                         </StackPanel>
                         <Button Content="Fix BCD Not Found" Name="BtnFixBCDFoundTab" Width="500" Height="35" Margin="5,0,5,10" Background="#FF9800" Foreground="White" FontWeight="Bold" ToolTip="Targeted fix for missing BCD file"/>
                         <TextBlock Text="These scripts run in separate Command Prompt windows and provide step-by-step repair processes." TextWrapping="Wrap" Foreground="#666666" FontSize="11" Margin="5,0,5,0" FontStyle="Italic"/>
@@ -2179,6 +2183,11 @@ if ($menuEmergencyBoot3) {
     $menuEmergencyBoot3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
 }
 
+$menuEmergencyBoot4 = Get-Control -Name "MenuEmergencyBoot4"
+if ($menuEmergencyBoot4) {
+    $menuEmergencyBoot4.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
+}
+
 $menuFixBCDFound = Get-Control -Name "MenuFixBCDFound"
 if ($menuFixBCDFound) {
     $menuFixBCDFound.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
@@ -2197,6 +2206,11 @@ if ($menuToolsEmergency2) {
 $menuToolsEmergency3 = Get-Control -Name "MenuToolsEmergency3"
 if ($menuToolsEmergency3) {
     $menuToolsEmergency3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$menuToolsEmergency4 = Get-Control -Name "MenuToolsEmergency4"
+if ($menuToolsEmergency4) {
+    $menuToolsEmergency4.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
 }
 
 $menuToolsFixBCD = Get-Control -Name "MenuToolsFixBCD"
@@ -2265,6 +2279,11 @@ if ($btnEmergencyBoot3) {
     $btnEmergencyBoot3.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
 }
 
+$btnEmergencyBoot4 = Get-Control -Name "BtnEmergencyBoot4"
+if ($btnEmergencyBoot4) {
+    $btnEmergencyBoot4.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
+}
+
 $btnFixBCDFound = Get-Control -Name "BtnFixBCDFound"
 if ($btnFixBCDFound) {
     $btnFixBCDFound.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
@@ -2284,6 +2303,11 @@ if ($btnEmergencyBoot2Tab) {
 $btnEmergencyBoot3Tab = Get-Control -Name "BtnEmergencyBoot3Tab"
 if ($btnEmergencyBoot3Tab) {
     $btnEmergencyBoot3Tab.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT3" })
+}
+
+$btnEmergencyBoot4Tab = Get-Control -Name "BtnEmergencyBoot4Tab"
+if ($btnEmergencyBoot4Tab) {
+    $btnEmergencyBoot4Tab.Add_Click({ Start-EmergencyBootScript -ScriptName "EMERGENCY_BOOT4" })
 }
 
 $btnFixBCDFoundTab = Get-Control -Name "BtnFixBCDFoundTab"
