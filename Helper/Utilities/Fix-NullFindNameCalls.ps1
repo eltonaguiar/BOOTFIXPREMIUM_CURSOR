@@ -5,7 +5,7 @@ $guiFile = "Helper\WinRepairGUI.ps1"
 $content = Get-Content $guiFile -Raw
 
 # Pattern: $W.FindName("ControlName").Property
-$pattern = '\$W\.FindName\(["\']([^"\']+)["\']\)\.(\w+)'
+$pattern = '\$W\.FindName\([''"]([^''"]+)[''"]\)\.(\w+)'
 
 $matches = [regex]::Matches($content, $pattern)
 

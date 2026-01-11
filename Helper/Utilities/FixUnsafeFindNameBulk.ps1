@@ -65,7 +65,11 @@ foreach ($controlName in $controlsToFix) {
                     $value = $matches[0] -replace '^=\s*', ''
                     
                     # Create safe version
-                    $indent = $line -match '^(\s+)' ? $matches[1] : ''
+                    if ($line -match '^(\s+)') {
+                        $indent = $matches[1]
+                    } else {
+                        $indent = ''
+                    }
                     $safeCode = "$varName = Get-Control -Name `"$controlName`"`n$indent" + 
                                 "if ($varName) {`n$indent    $varName.$property = $value`n$indent}"
                     

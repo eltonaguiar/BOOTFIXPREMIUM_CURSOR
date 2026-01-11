@@ -5,7 +5,7 @@ $guiFile = "Helper\WinRepairGUI.ps1"
 $content = Get-Content $guiFile -Raw
 
 # Pattern: $W.FindName("ControlName").Add_Click({
-$pattern = '\$W\.FindName\(["\']([^"\']+)["\']\)\.Add_Click\(\{'
+$pattern = '\$W\.FindName\([''"]([^''"]+)[''"]\)\.Add_Click\(\{'
 
 $matches = [regex]::Matches($content, $pattern)
 

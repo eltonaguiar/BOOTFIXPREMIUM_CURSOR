@@ -8,18 +8,18 @@ Write-Host "Fixing unsafe FindName calls..." -ForegroundColor Cyan
 
 # Pattern 1: $W.FindName("X").Property = value (assignment)
 # Replace with: $control = Get-Control "X"; if ($control) { $control.Property = value }
-$pattern1 = [regex]::Escape('$W.FindName(') + '(["\'])([^"\']+)\1\)\.(\w+)\s*='
+$pattern1 = [regex]::Escape('$W.FindName(') + '([''")([^''"]+)\1\)\.(\w+)\s*='
 $replacements1 = [regex]::Matches($content, $pattern1)
 Write-Host "Found $($replacements1.Count) unsafe property assignments" -ForegroundColor Yellow
 
 # Pattern 2: $W.FindName("X").Property (read access)
 # Replace with: $control = Get-Control "X"; if ($control) { $control.Property }
-$pattern2 = [regex]::Escape('$W.FindName(') + '(["\'])([^"\']+)\1\)\.(\w+)(?!\s*=)'
+$pattern2 = [regex]::Escape('$W.FindName(') + '([''")([^''"]+)\1\)\.(\w+)(?!\s*=)'
 $replacements2 = [regex]::Matches($content, $pattern2)
 Write-Host "Found $($replacements2.Count) unsafe property reads" -ForegroundColor Yellow
 
 # Pattern 3: $W.FindName("X").Method(...) (method calls)
-$pattern3 = [regex]::Escape('$W.FindName(') + '(["\'])([^"\']+)\1\)\.(\w+)\('
+$pattern3 = [regex]::Escape('$W.FindName(') + '([''")([^''"]+)\1\)\.(\w+)\('
 $replacements3 = [regex]::Matches($content, $pattern3)
 Write-Host "Found $($replacements3.Count) unsafe method calls" -ForegroundColor Yellow
 
@@ -75,7 +75,7 @@ foreach ($item in $allMatches) {
         $safeVar = "`$ctrl_$varName"
         $safeCode = "$safeVar = Get-Control -Name `"$controlName`"`n"
         $safeCode += "if ($safeVar) { "
-        $safeCode += $fullAssignment -replace '\$W\.FindName\((["\'])' + [regex]::Escape($controlName) + '\1\)\.' + [regex]::Escape($property), "$safeVar.$property"
+        $safeCode += $fullAssignment -replace '\$W\.FindName\(([''"])' + [regex]::Escape($controlName) + '\1\)\.' + [regex]::Escape($property), "$safeVar.$property"
         $safeCode += " }"
         
         $content = $content.Substring(0, $match.Index) + $safeCode + $content.Substring($match.Index + $match.Length + $valueEnd)
@@ -86,7 +86,7 @@ foreach ($item in $allMatches) {
         # This is more complex - need to see the context
         # For now, just wrap in null check
         $safeVar = "`$ctrl_$varName"
-        $safeCode = "(($safeVar = Get-Control -Name `"$controlName`") ? $safeVar.$property : `$null)"
+        $safeCode = "(`$tempCtrl = Get-Control -Name `"$controlName`"; if (`$tempCtrl) { `$tempCtrl.$property } else { `$null })"
         
         $content = $content.Substring(0, $match.Index) + $safeCode + $content.Substring($match.Index + $match.Length)
         $fixedCount++
