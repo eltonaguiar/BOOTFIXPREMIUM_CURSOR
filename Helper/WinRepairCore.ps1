@@ -2621,6 +2621,23 @@ function Test-Administrator {
 }
 
 function Get-BCDEntriesParsed {
+    <#
+    .SYNOPSIS
+    Parses BCD entries from live system or offline BCD file.
+    
+    .PARAMETER BCDStorePath
+    Optional path to offline BCD file (e.g., "Z:\EFI\Microsoft\Boot\BCD").
+    If not provided, uses live system BCD.
+    
+    .DESCRIPTION
+    FLAW-002 FIX: Now supports offline BCD parsing for WinRE/WinPE environments.
+    When running from WinRE/WinPE, bcdedit /enum returns the PE's BCD, not the
+    target system's BCD. Use BCDStorePath to specify the target system's BCD file.
+    #>
+    param(
+        [string]$BCDStorePath = $null
+    )
+    
     # Production-grade BCD parser - captures ALL properties
     # #region agent log
     try {
@@ -2631,7 +2648,7 @@ function Get-BCDEntriesParsed {
             hypothesisId = "BCD-ACCESS"
             location = "WinRepairCore.ps1:Get-BCDEntriesParsed"
             message = "About to call bcdedit"
-            data = @{ isAdmin = (Test-Administrator) }
+            data = @{ isAdmin = (Test-Administrator); bcdStorePath = $BCDStorePath }
             timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
         } | ConvertTo-Json -Compress
         Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
@@ -2650,7 +2667,18 @@ function Get-BCDEntriesParsed {
     }
     
     try {
-        $raw = bcdedit /enum /v 2>&1
+        # FLAW-002 FIX: Support offline BCD parsing
+        if ($BCDStorePath) {
+            # Validate BCD file exists
+            if (-not (Test-Path $BCDStorePath)) {
+                throw "BCD store file not found: $BCDStorePath"
+            }
+            # Use /store parameter for offline BCD
+            $raw = bcdedit /store $BCDStorePath /enum /v 2>&1
+        } else {
+            # Use live system BCD
+            $raw = bcdedit /enum /v 2>&1
+        }
         # Check if the output contains access denied error
         if ($raw -is [System.Array]) {
             $errorLines = $raw | Where-Object { $_ -match "access is denied|Access is denied|ERROR|The boot configuration data store could not be opened" }

@@ -309,18 +309,18 @@ function Start-GUI {
                 <Border Grid.Row="0" Margin="0,0,0,15" Background="#E8F5E9" BorderBrush="#4CAF50" BorderThickness="2">
                     <StackPanel Margin="15">
                         <TextBlock Text="🚀 ONE-CLICK REPAIR" FontSize="18" FontWeight="Bold" Foreground="#2E7D32" Margin="0,0,0,5"/>
-                        <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#1B5E20" Margin="0,0,0,10"/>
+                        <TextBlock Text="Automatically diagnose and repair common boot issues. Perfect for non-technical users." TextWrapping="Wrap" Foreground="#333333" FontSize="12" Margin="0,0,0,10"/>
                         <Button Content="REPAIR MY PC" Name="BtnOneClickRepair" Height="50" Background="#4CAF50" Foreground="White" FontSize="16" FontWeight="Bold" Cursor="Hand" Margin="0,5"/>
-                        <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#2E7D32" Margin="0,5,0,0" FontStyle="Italic"/>
+                        <TextBlock Name="TxtOneClickStatus" Text="Click the button above to start automated repair" TextWrapping="Wrap" Foreground="#555555" FontSize="11" Margin="0,5,0,0" FontStyle="Italic"/>
                     </StackPanel>
                 </Border>
                 
-                <StackPanel Grid.Row="1" Margin="0,0,0,10">
-                    <CheckBox Name="ChkTestMode" Content="Test Mode (Preview commands only - will not execute)" IsChecked="True" FontWeight="Bold" Foreground="#d78700" Margin="5"/>
-                    <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="Gray" Margin="5,0,0,5" TextWrapping="Wrap"/>
+                <StackPanel Grid.Row="1" Margin="0,0,0,15">
+                    <CheckBox Name="ChkTestMode" Content="Test Mode (Preview commands only - will not execute)" IsChecked="True" FontWeight="Bold" Foreground="#B8860B" FontSize="12" Margin="5,5,5,8" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="When Test Mode is enabled, commands are displayed but not executed. Uncheck to apply fixes." Foreground="#666666" FontSize="11" Margin="5,0,5,5" TextWrapping="Wrap" LineHeight="16"/>
                 </StackPanel>
                 
-                <GroupBox Grid.Row="1" Header="Boot Repair Operations" Margin="5">
+                <GroupBox Grid.Row="2" Header="Boot Repair Operations" Margin="5,0,5,10">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
 <StackPanel Margin="10">
                             <Button Content="1. Rebuild BCD from Windows Installation" Height="40" Name="BtnRebuildBCD" Background="#0078D7" Foreground="White" FontWeight="Bold" Margin="0,5"/>
@@ -349,7 +349,7 @@ function Start-GUI {
                     </ScrollViewer>
                 </GroupBox>
                 
-                <GroupBox Grid.Row="2" Header="Command Output" Margin="5,10,5,5">
+                <GroupBox Grid.Row="3" Header="Command Output" Margin="5,10,5,5">
                     <ScrollViewer Height="150" VerticalScrollBarVisibility="Auto">
                         <TextBox Name="FixerOutput" AcceptsReturn="True" FontFamily="Consolas" Background="#222" Foreground="#00FF00" IsReadOnly="True" TextWrapping="Wrap"/>
                     </ScrollViewer>
@@ -558,6 +558,56 @@ function Start-GUI {
                 </TabControl>
             </Grid>
         </TabItem>
+        
+        <TabItem Header="Settings">
+            <Grid Margin="20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                
+                <!-- Interface Scale Section -->
+                <GroupBox Grid.Row="0" Header="Interface Scale" Margin="0,0,0,20" Padding="15">
+                    <StackPanel>
+                        <TextBlock Text="Make interface elements bigger or smaller" 
+                                   FontSize="12" Foreground="Gray" Margin="0,0,0,15"/>
+                        
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Small" VerticalAlignment="Center" Margin="0,0,15,0" FontSize="11"/>
+                            <Slider Name="InterfaceScaleSlider" 
+                                    Width="400" 
+                                    Height="25" 
+                                    Minimum="0.75" 
+                                    Maximum="1.5" 
+                                    Value="1.0" 
+                                    TickFrequency="0.05" 
+                                    IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,15,0"/>
+                            <TextBlock Text="Big" VerticalAlignment="Center" FontSize="11"/>
+                            <Button Name="BtnResetScale" Content="Reset" Width="80" Height="30" Margin="20,0,0,0" 
+                                    ToolTip="Reset interface scale to default (100%)"/>
+                        </StackPanel>
+                        
+                        <TextBlock Name="ScaleValueText" 
+                                   Text="Current scale: 100%" 
+                                   FontSize="11" 
+                                   Foreground="#0078D7" 
+                                   FontWeight="SemiBold" 
+                                   Margin="0,10,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+                
+                <!-- Additional Settings Section (placeholder for future settings) -->
+                <GroupBox Grid.Row="1" Header="Additional Settings" Margin="0,0,0,20" Padding="15" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock Text="More settings will be added here in future updates." 
+                                   FontSize="11" Foreground="Gray"/>
+                    </StackPanel>
+                </GroupBox>
+            </Grid>
+        </TabItem>
 </TabControl>
     
     <!-- Status Bar -->
@@ -686,6 +736,10 @@ try {
             }
             
             Write-Host "XAML parsed successfully. Window object created." -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Initializing GUI components..." -ForegroundColor Yellow
+            Write-Host "This may take 30-60 seconds. Please wait..." -ForegroundColor Yellow
+            Write-Host ""
         } catch {
             $errorMsg = $_.Exception.Message
             $innerError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $null }
@@ -1145,6 +1199,90 @@ if ($btnSwitchToTUI) {
         }
     }
     })
+}
+
+# Interface Scale Controls
+$interfaceScaleSlider = Get-Control -Name "InterfaceScaleSlider"
+$scaleValueText = Get-Control -Name "ScaleValueText"
+$btnResetScale = Get-Control -Name "BtnResetScale"
+
+# Function to apply interface scale
+function Apply-InterfaceScale {
+    param([double]$Scale)
+    
+    if ($Scale -lt 0.75 -or $Scale -gt 1.5) {
+        return
+    }
+    
+    try {
+        # Apply scale to the main grid (window content) using LayoutTransform
+        $mainGrid = $W.Content
+        if ($mainGrid) {
+            $mainGrid.LayoutTransform = [System.Windows.Media.ScaleTransform]::new($Scale, $Scale)
+        }
+        
+        # Update scale value text
+        if ($scaleValueText) {
+            $scaleValueText.Text = "Current scale: $([math]::Round($Scale * 100))%"
+        }
+        
+        # Save scale preference to registry
+        try {
+            $regPath = "HKCU:\Software\MiracleBoot"
+            if (-not (Test-Path $regPath)) {
+                New-Item -Path $regPath -Force | Out-Null
+            }
+            Set-ItemProperty -Path $regPath -Name "InterfaceScale" -Value $Scale -Type Double -ErrorAction SilentlyContinue
+        } catch {
+            # Silently fail if registry write fails
+        }
+    } catch {
+        Write-Warning "Failed to apply interface scale: $_"
+    }
+}
+
+# Load saved scale preference
+$savedScale = 1.0
+try {
+    $regPath = "HKCU:\Software\MiracleBoot"
+    if (Test-Path $regPath) {
+        $saved = Get-ItemProperty -Path $regPath -Name "InterfaceScale" -ErrorAction SilentlyContinue
+        if ($saved -and $saved.InterfaceScale -ge 0.75 -and $saved.InterfaceScale -le 1.5) {
+            $savedScale = $saved.InterfaceScale
+        }
+    }
+} catch {
+    # Use default if registry read fails
+}
+
+if ($interfaceScaleSlider) {
+    # Set initial value from saved preference
+    $interfaceScaleSlider.Value = $savedScale
+    Apply-InterfaceScale -Scale $savedScale
+    
+    # Handle slider value change
+    $interfaceScaleSlider.Add_ValueChanged({
+        $newScale = $interfaceScaleSlider.Value
+        Apply-InterfaceScale -Scale $newScale
+    })
+} else {
+    Write-Warning "InterfaceScaleSlider control not found in XAML"
+}
+
+if ($btnResetScale) {
+    $btnResetScale.Add_Click({
+        try {
+            $defaultScale = 1.0
+            if ($interfaceScaleSlider) {
+                $interfaceScaleSlider.Value = $defaultScale
+            }
+            Apply-InterfaceScale -Scale $defaultScale
+        } catch {
+            [System.Windows.MessageBox]::Show("Failed to reset interface scale: $_", "Error", "OK", "Error")
+        }
+    })
+} else {
+    Write-Warning "BtnResetScale control not found in XAML"
 }
 
 # Initialize network status (with improved detection)
@@ -2941,9 +3079,28 @@ if ($W.FindName("BtnFindMatchingDrivers")) {
 }
 
 # One-Click Repair Handler
+# FLAW-007 FIX: Mutual exclusion for repair operations
+# Static variable to track if repair is in progress (prevents race conditions)
+# Initialize unconditionally to prevent "variable not set" errors
+$script:repairInProgress = $false
+
 $btnOneClickRepair = Get-Control -Name "BtnOneClickRepair"
 if ($btnOneClickRepair) {
     $btnOneClickRepair.Add_Click({
+        # FLAW-007 FIX: Check if repair is already in progress
+        if ($script:repairInProgress) {
+            [System.Windows.MessageBox]::Show(
+                "A repair operation is already in progress.`n`nPlease wait for the current repair to complete before starting another one.`n`nThis prevents conflicts and potential BCD corruption.",
+                "Repair Already In Progress",
+                "OK",
+                "Warning"
+            )
+            return
+        }
+        
+        # Set flag to prevent concurrent repairs
+        $script:repairInProgress = $true
+        
         $txtOneClickStatus = Get-Control -Name "TxtOneClickStatus"
         $fixerOutput = Get-Control -Name "FixerOutput"
         $chkTestMode = Get-Control -Name "ChkTestMode"
@@ -2958,6 +3115,23 @@ if ($btnOneClickRepair) {
         $logFile = Join-Path $env:TEMP "OneClickRepair_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
         $logContent = New-Object System.Text.StringBuilder
         
+        # Determine target drive (will be updated after user selection)
+        $targetDrive = $env:SystemDrive.TrimEnd(':')
+        
+        # Load report generator module
+        $reportGeneratorPath = Join-Path $scriptRoot "RepairReportGenerator.ps1"
+        if (Test-Path $reportGeneratorPath) {
+            try {
+                . $reportGeneratorPath
+                $repairReport = New-RepairReport -TargetDrive $targetDrive -ReportPath "$env:TEMP\BootRepairReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
+            } catch {
+                Write-Warning "Could not load report generator: $_"
+                $repairReport = $null
+            }
+        } else {
+            $repairReport = $null
+        }
+        
         function Write-Log {
             param([string]$Message)
             $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -2970,7 +3144,26 @@ if ($btnOneClickRepair) {
         }
         
         function Write-CommandLog {
-            param([string]$Command, [string]$Description, [switch]$IsRepairCommand)
+            param(
+                [string]$Command, 
+                [string]$Description, 
+                [switch]$IsRepairCommand,
+                [string]$Output = "",
+                [int]$ExitCode = 0,
+                [string]$Error = ""
+            )
+            
+            $success = ($ExitCode -eq 0 -and -not $Error)
+            
+            # Track in report generator if available
+            if ($repairReport) {
+                try {
+                    Add-RepairCommand -Report $repairReport -Command $Command -Description $Description -Output $Output -ExitCode $ExitCode -Success $success -Error $Error -IsRepairCommand $IsRepairCommand | Out-Null
+                } catch {
+                    # Silently fail if report tracking fails
+                }
+            }
+            
             if ($IsRepairCommand) {
                 # Repair commands (write operations) - skip in test mode
                 if ($testMode) {
@@ -2980,11 +3173,81 @@ if ($btnOneClickRepair) {
                 } else {
                     Write-Log "[EXECUTING REPAIR] Command: $Command"
                     Write-Log "  Description: $Description"
+                    if ($Output) {
+                        Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                    }
+                    if (-not $success) {
+                        Write-Log "  [FAILED] Exit Code: $ExitCode"
+                        if ($Error) {
+                            Write-Log "  Error: $Error"
+                        }
+                    }
                 }
             } else {
                 # Diagnostic commands (read-only) - always run
                 Write-Log "[DIAGNOSTIC] Running: $Command"
                 Write-Log "  Description: $Description (read-only check)"
+                if ($Output -and $Output.Length -gt 0) {
+                    Write-Log "  Output: $($Output.Substring(0, [Math]::Min(200, $Output.Length)))..."
+                }
+            }
+        }
+        
+        function Invoke-TrackedCommand {
+            <#
+            .SYNOPSIS
+            Executes a command and automatically tracks it in the repair report.
+            #>
+            param(
+                [Parameter(Mandatory=$true)]
+                [string]$Command,
+                [string]$Description = "",
+                [switch]$IsRepairCommand,
+                [scriptblock]$ScriptBlock
+            )
+            
+            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand
+            
+            if ($IsRepairCommand -and $testMode) {
+                Write-Log "  [SKIPPED] Command not executed (Test Mode Active)"
+                return @{
+                    Success = $true
+                    Output = ""
+                    ExitCode = 0
+                    Error = ""
+                }
+            }
+            
+            $output = ""
+            $errorMsg = ""
+            $exitCode = 0
+            $success = $false
+            
+            try {
+                if ($ScriptBlock) {
+                    $output = & $ScriptBlock 2>&1 | Out-String
+                    $exitCode = $LASTEXITCODE
+                    $success = ($exitCode -eq 0)
+                } else {
+                    # Execute as string command
+                    $output = Invoke-Expression $Command 2>&1 | Out-String
+                    $exitCode = $LASTEXITCODE
+                    $success = ($exitCode -eq 0)
+                }
+            } catch {
+                $errorMsg = $_.Exception.Message
+                $output = $_.Exception.ToString()
+                $success = $false
+            }
+            
+            # Update command log with results
+            Write-CommandLog -Command $Command -Description $Description -IsRepairCommand:$IsRepairCommand -Output $output -ExitCode $exitCode -Error $errorMsg
+            
+            return @{
+                Success = $success
+                Output = $output
+                ExitCode = $exitCode
+                Error = $errorMsg
             }
         }
         
@@ -3977,9 +4240,9 @@ if ($btnOneClickRepair) {
                     
                     if ($winloadMissing) {
                         Write-Log "[WARNING] winload.efi is missing from Windows directory: $winloadWindowsPath"
-                        Write-Log "Step 1: Checking source template folder..."
+                        Write-Log "Step 3: Checking source template folder (C:\Windows\System32\Boot\winload.efi)..."
                         
-                        # Check if source template exists in Boot folder (bcdboot source)
+                        # Step 3: Check the "Source" folder - bcdboot works by copying files from C:\Windows\System32\Boot
                         if (Test-Path $winloadBootPath) {
                             Write-Log "[INFO] Source template found in Boot folder: $winloadBootPath"
                             Write-Log "Copying from Boot folder to System32..."
@@ -3991,11 +4254,14 @@ if ($btnOneClickRepair) {
                                     }
                                 } catch {
                                     Write-Log "[WARNING] Failed to copy from Boot folder: $_"
+                                    Write-Log "The issue may be that the destination (EFI Partition) is write-protected or out of space."
                                 }
+                            } else {
+                                Write-CommandLog -Command "Copy-Item $winloadBootPath $winloadWindowsPath" -Description "Copy winload.efi from Boot folder to System32" -IsRepairCommand:$true
                             }
                         } else {
                             Write-Log "[WARNING] Source template missing from Boot folder: $winloadBootPath"
-                            Write-Log "Attempting to restore winload.efi from Windows Component Store..."
+                            Write-Log "The 'template' is gone. Attempting to restore winload.efi from Windows Component Store..."
                             
                             if (-not $testMode) {
                                 try {
@@ -4014,13 +4280,56 @@ if ($btnOneClickRepair) {
                                     if (Test-Path $winloadWindowsPath) {
                                         Write-Log "[SUCCESS] winload.efi restored to Windows directory"
                                     } else {
-                                    Write-Log "[WARNING] winload.efi still missing after DISM/SFC."
-                                    Write-Log "May need to extract from Windows installation media (see Step 5 in repair guide)."
+                                        Write-Log "[WARNING] winload.efi still missing after DISM/SFC."
+                                        Write-Log "Step 5: Attempting manual extraction from Windows installation media (install.wim/install.esd)..."
+                                        
+                                        # Step 5: Manual Extraction (The "Infallible" Fix)
+                                        # Search for install.wim or install.esd in common locations
+                                        $installMediaPaths = @(
+                                            "X:\sources\install.wim",
+                                            "X:\sources\install.esd",
+                                            "D:\sources\install.wim",
+                                            "D:\sources\install.esd",
+                                            "E:\sources\install.wim",
+                                            "E:\sources\install.esd"
+                                        )
+                                        
+                                        $foundMedia = $false
+                                        foreach ($mediaPath in $installMediaPaths) {
+                                            if (Test-Path $mediaPath) {
+                                                Write-Log "[INFO] Found Windows installation media: $mediaPath"
+                                                Write-Log "Attempting to extract winload.efi using DISM..."
+                                                
+                                                # Get WIM info to find the correct index
+                                                $wimInfo = & dism /Get-WimInfo /WimFile:$mediaPath 2>&1 | Out-String
+                                                Write-Log "WIM Info: $wimInfo"
+                                                
+                                                # Try index 1 (usually Windows Pro/Home)
+                                                $extractCmd = "dism /Image:$drive`: /RestoreHealth /Source:$mediaPath`:1"
+                                                Write-Log "Running: $extractCmd"
+                                                $extractOutput = & dism /Image:"$drive`:" /RestoreHealth /Source:"$mediaPath`:1" 2>&1 | Out-String
+                                                Write-Log "Extract Output: $extractOutput"
+                                                
+                                                Start-Sleep -Seconds 2
+                                                if (Test-Path $winloadWindowsPath) {
+                                                    Write-Log "[SUCCESS] winload.efi extracted from installation media"
+                                                    $foundMedia = $true
+                                                    break
+                                                }
+                                            }
+                                        }
+                                        
+                                        if (-not $foundMedia) {
+                                            Write-Log "[ERROR] Could not find Windows installation media (install.wim/install.esd)"
+                                            Write-Log "Please attach Windows ISO/USB and ensure it's accessible, then retry."
+                                        }
                                     }
                                 } catch {
                                     Write-Log "[ERROR] Failed to restore winload.efi: $_"
                                 }
                             } else {
+                                Write-CommandLog -Command "DISM /Image:$drive`: /RestoreHealth" -Description "Restore winload.efi from Component Store" -IsRepairCommand:$true
+                                Write-CommandLog -Command "SFC /ScanNow /OffBootDir=$drive`: /OffWinDir=$drive`:\Windows" -Description "Restore system files using SFC" -IsRepairCommand:$true
                                 Write-Log "  [SKIPPED] winload.efi restore not executed (Test Mode Active)"
                             }
                         }
@@ -4059,55 +4368,165 @@ if ($btnOneClickRepair) {
                                     Write-Log "[SUCCESS] Verified: winload.efi is now present in EFI partition"
                                 } else {
                                     Write-Log "[WARNING] winload.efi not found in EFI partition after bcdboot."
-                                    Write-Log "Step 4: Attempting to format EFI partition and retry..."
+                                    Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
                                     
-                                    # Step 4: Force clean EFI partition if bcdboot failed
+                                    # Step 4: Force Clean EFI Partition
+                                    # Check if EFI partition is write-protected, out of space, or corrupted
                                     try {
-                                        Write-Log "Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
-                                        $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
-                                        Write-Log "Format Output: $formatOutput"
+                                        $efiVolume = Get-Volume -DriveLetter $efiDrive -ErrorAction SilentlyContinue
+                                        $efiPartition = Get-Partition -DriveLetter $efiDrive -ErrorAction SilentlyContinue
                                         
-                                        Start-Sleep -Seconds 2
+                                        $needsFormat = $false
+                                        $formatReason = ""
                                         
-                                        # Retry bcdboot after format
-                                        Write-Log "Retrying bcdboot after EFI partition format..."
-                                        $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
-                                        Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                        if ($efiVolume) {
+                                            # Check filesystem type
+                                            if ($efiVolume.FileSystemType -eq "RAW" -or [string]::IsNullOrWhiteSpace($efiVolume.FileSystemType)) {
+                                                $needsFormat = $true
+                                                $formatReason = "EFI partition has no filesystem (RAW)"
+                                            }
+                                            
+                                            # Check health status
+                                            if ($efiVolume.HealthStatus -ne "Healthy") {
+                                                $needsFormat = $true
+                                                $formatReason = "EFI partition health is not optimal: $($efiVolume.HealthStatus)"
+                                            }
+                                            
+                                            # Check free space (EFI partition should have at least 10MB free)
+                                            if ($efiVolume.SizeRemaining -lt 10MB) {
+                                                $needsFormat = $true
+                                                $formatReason = "EFI partition is out of space (only $([math]::Round($efiVolume.SizeRemaining/1MB, 2)) MB free)"
+                                            }
+                                        }
                                         
-                                        if (Test-Path $winloadEfiPath) {
-                                            Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+                                        # Check if partition is read-only
+                                        if ($efiPartition -and $efiPartition.IsReadOnly) {
+                                            $needsFormat = $true
+                                            $formatReason = "EFI partition is read-only (write-protected)"
+                                        }
+                                        
+                                        # If bcdboot failed, the EFI partition may be corrupted
+                                        if ($LASTEXITCODE -ne 0 -and -not $needsFormat) {
+                                            $needsFormat = $true
+                                            $formatReason = "bcdboot failed - EFI partition may be corrupted"
+                                        }
+                                        
+                                        if ($needsFormat) {
+                                            Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
+                                            Write-Log "Step 4: Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
+                                            Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
+                                            
+                                            if (-not $testMode) {
+                                                $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
+                                                Write-Log "Format Output: $formatOutput"
+                                                
+                                                Start-Sleep -Seconds 2
+                                                
+                                                # Retry bcdboot after format
+                                                Write-Log "Retrying bcdboot after EFI partition format..."
+                                                $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                                                Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                                
+                                                if (Test-Path $winloadEfiPath) {
+                                                    Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+                                                } else {
+                                                    Write-Log "[ERROR] winload.efi still missing after format and retry."
+                                                    Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
+                                                    Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
+                                                }
+                                            } else {
+                                                Write-CommandLog -Command "format $efiDrive`: /fs:FAT32 /q /y" -Description "Format EFI partition (Step 4)" -IsRepairCommand:$true
+                                                Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI" -Description "Retry bcdboot after format" -IsRepairCommand:$true
+                                            }
                                         } else {
-                                            Write-Log "[ERROR] winload.efi still missing after format and retry."
+                                            Write-Log "[WARNING] EFI partition appears healthy, but winload.efi was not copied."
+                                            Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
                                             Write-Log "Step 5: Manual extraction from Windows installation media may be required."
                                         }
                                     } catch {
-                                        Write-Log "[ERROR] EFI partition format failed: $_"
+                                        Write-Log "[ERROR] EFI partition check/format failed: $_"
                                     }
                                 }
                             } else {
                                 Write-Log "[WARNING] bcdboot reported issues. Check output above."
                                 
-                                # If bcdboot failed, check if EFI partition is corrupted
-                                Write-Log "Step 4: Checking EFI partition health..."
+                                # Step 4: Force Clean EFI Partition (if bcdboot failed)
+                                Write-Log "Step 4: Checking EFI partition health (write-protection, space, corruption)..."
                                 try {
                                     $efiVolume = Get-Volume -DriveLetter $efiDrive -ErrorAction SilentlyContinue
-                                    if ($efiVolume -and $efiVolume.HealthStatus -ne 'Healthy') {
-                                        Write-Log "[WARNING] EFI partition health is not optimal. Attempting format..."
+                                    $efiPartition = Get-Partition -DriveLetter $efiDrive -ErrorAction SilentlyContinue
+                                    
+                                    $needsFormat = $false
+                                    $formatReason = ""
+                                    
+                                    if ($efiVolume) {
+                                        # Check filesystem type
+                                        if ($efiVolume.FileSystemType -eq "RAW" -or [string]::IsNullOrWhiteSpace($efiVolume.FileSystemType)) {
+                                            $needsFormat = $true
+                                            $formatReason = "EFI partition has no filesystem (RAW)"
+                                        }
                                         
-                                        # Format EFI partition
-                                        Write-Log "Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
-                                        $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
-                                        Write-Log "Format Output: $formatOutput"
+                                        # Check health status
+                                        if ($efiVolume.HealthStatus -ne "Healthy") {
+                                            $needsFormat = $true
+                                            $formatReason = "EFI partition health is not optimal: $($efiVolume.HealthStatus)"
+                                        }
                                         
-                                        Start-Sleep -Seconds 2
+                                        # Check free space (EFI partition should have at least 10MB free)
+                                        if ($efiVolume.SizeRemaining -lt 10MB) {
+                                            $needsFormat = $true
+                                            $formatReason = "EFI partition is out of space (only $([math]::Round($efiVolume.SizeRemaining/1MB, 2)) MB free)"
+                                        }
+                                    }
+                                    
+                                    # Check if partition is read-only
+                                    if ($efiPartition -and $efiPartition.IsReadOnly) {
+                                        $needsFormat = $true
+                                        $formatReason = "EFI partition is read-only (write-protected)"
+                                    }
+                                    
+                                    # If bcdboot failed, the EFI partition may be corrupted
+                                    if (-not $needsFormat) {
+                                        $needsFormat = $true
+                                        $formatReason = "bcdboot failed - EFI partition may be corrupted or write-protected"
+                                    }
+                                    
+                                    if ($needsFormat) {
+                                        Write-Log "[WARNING] EFI partition needs formatting: $formatReason"
+                                        Write-Log "Step 4: Formatting EFI partition $efiDrive`: as FAT32 (quick format)..."
+                                        Write-Log "WARNING: This will wipe the EFI partition (safe if Windows partition is intact)"
                                         
-                                        # Retry bcdboot
-                                        Write-Log "Retrying bcdboot after EFI partition format..."
-                                        $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
-                                        Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                        if (-not $testMode) {
+                                            $formatOutput = & format "$efiDrive`:" /fs:FAT32 /q /y 2>&1 | Out-String
+                                            Write-Log "Format Output: $formatOutput"
+                                            
+                                            Start-Sleep -Seconds 2
+                                            
+                                            # Retry bcdboot after format
+                                            Write-Log "Retrying bcdboot after EFI partition format..."
+                                            $bcdbootRetry = & bcdboot "$drive`:\Windows" /s "$efiDrive`:" /f UEFI 2>&1 | Out-String
+                                            Write-Log "bcdboot Retry Output: $bcdbootRetry"
+                                            
+                                            # Verify winload.efi was copied
+                                            $winloadEfiPath = "$efiDrive`:\EFI\Microsoft\Boot\winload.efi"
+                                            if (Test-Path $winloadEfiPath) {
+                                                Write-Log "[SUCCESS] winload.efi copied to EFI partition after format"
+                                            } else {
+                                                Write-Log "[ERROR] winload.efi still missing after format and retry."
+                                                Write-Log "The source template (C:\Windows\System32\Boot\winload.efi) may be missing."
+                                                Write-Log "Step 5: Manual extraction from Windows installation media (install.wim/install.esd) is required."
+                                            }
+                                        } else {
+                                            Write-CommandLog -Command "format $efiDrive`: /fs:FAT32 /q /y" -Description "Format EFI partition (Step 4)" -IsRepairCommand:$true
+                                            Write-CommandLog -Command "bcdboot $drive`:\Windows /s $efiDrive`: /f UEFI" -Description "Retry bcdboot after format" -IsRepairCommand:$true
+                                        }
+                                    } else {
+                                        Write-Log "[WARNING] EFI partition appears healthy, but bcdboot failed."
+                                        Write-Log "The issue may be that the source template (C:\Windows\System32\Boot\winload.efi) is missing."
+                                        Write-Log "Step 5: Manual extraction from Windows installation media may be required."
                                     }
                                 } catch {
-                                    Write-Log "[WARNING] Could not check EFI partition health: $_"
+                                    Write-Log "[ERROR] EFI partition check/format failed: $_"
                                 }
                             }
                         } catch {
@@ -4432,12 +4851,104 @@ if ($btnOneClickRepair) {
                 $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
                 Write-Log ""
                 Write-Log "[INFO] Log file saved to: $logFile"
-                
-                # Open log file in Notepad
+            } catch {
+                Write-Log "[WARNING] Could not save log file: $_"
+            }
+            
+            # Generate comprehensive repair report
+            if ($repairReport) {
+                try {
+                    # Update target drive if it was changed during repair
+                    if (Get-Variable -Name "drive" -ErrorAction SilentlyContinue) {
+                        $targetDrive = $drive.TrimEnd(':')
+                        $repairReport.TargetDrive = $targetDrive
+                    }
+                    
+                    # Add remaining issues to report
+                    if ($remainingIssues -gt 0) {
+                        # Re-check what's still wrong
+                        Write-Log ""
+                        Write-Log "Performing post-repair verification..."
+                        
+                        # Check winload.efi
+                        $winloadPath = "$targetDrive`:\Windows\System32\winload.efi"
+                        if (-not (Test-Path $winloadPath)) {
+                            Add-RepairIssue -Report $repairReport -Issue "winload.efi is still missing from Windows directory" -Category "Boot Files" -Fixed $false | Out-Null
+                        }
+                        
+                        # Check BCD
+                        try {
+                            $bcdCheck = bcdedit /enum all 2>&1 | Out-String
+                            if ($bcdCheck -match "could not be opened|corrupt|error") {
+                                Add-RepairIssue -Report $repairReport -Issue "BCD is still corrupted or inaccessible" -Category "BCD" -Fixed $false | Out-Null
+                            }
+                        } catch {
+                            Add-RepairIssue -Report $repairReport -Issue "BCD verification failed: $_" -Category "BCD" -Fixed $false | Out-Null
+                        }
+                        
+                        # Check EFI partition
+                        if (Get-Variable -Name "efiDrive" -ErrorAction SilentlyContinue) {
+                            $efiBcdPath = "$efiDrive`:\EFI\Microsoft\Boot\BCD"
+                            if (-not (Test-Path $efiBcdPath)) {
+                                Add-RepairIssue -Report $repairReport -Issue "BCD file missing from EFI partition" -Category "EFI Partition" -Fixed $false | Out-Null
+                            }
+                        }
+                    }
+                    
+                    # Set post-repair verification
+                    $verificationText = "Post-repair verification completed.`n"
+                    if ($remainingIssues -eq 0) {
+                        $verificationText += "All issues appear to be resolved.`n"
+                    } else {
+                        $verificationText += "$remainingIssues issue(s) still remain.`n"
+                    }
+                    if ($repairReport.PostRepairVerification) {
+                        $verificationText += $repairReport.PostRepairVerification
+                    }
+                    Set-PostRepairVerification -Report $repairReport -VerificationResult $verificationText | Out-Null
+                    
+                    # Export report
+                    $reportPath = Export-RepairReport -Report $repairReport -OpenInNotepad:$true
+                    Write-Log ""
+                    Write-Log "[INFO] Comprehensive repair report generated: $reportPath"
+                    Write-Log "[INFO] Report opened in Notepad"
+                    
+                    # If there are remaining issues, offer to fix them and generate failure report
+                    if ($repairReport.IssuesRemaining.Count -gt 0) {
+                        Write-Log ""
+                        Write-Log "[WARNING] Some issues could not be fixed automatically."
+                        
+                        $fixAgain = [System.Windows.MessageBox]::Show(
+                            "Some issues could not be fixed automatically.`n`n" +
+                            "Remaining issues: $($repairReport.IssuesRemaining.Count)`n`n" +
+                            "Would you like to attempt additional repair steps?`n`n" +
+                            "Yes = Try additional fixes`n" +
+                            "No = View failure report with manual commands",
+                            "Additional Repair Needed",
+                            "YesNo",
+                            "Question"
+                        )
+                        
+                        if ($fixAgain -eq "Yes") {
+                            Write-Log "User requested additional repair attempts..."
+                            # TODO: Implement additional repair logic here
+                            Write-Log "[INFO] Additional repair logic not yet implemented. Please see failure report for manual commands."
+                        }
+                        
+                        # Generate failure report with alternative commands
+                        $failureReportPath = Export-FailureReport -Report $repairReport -TargetDrive $targetDrive -OpenInNotepad:$true
+                        Write-Log "[INFO] Failure report generated: $failureReportPath"
+                        Write-Log "[INFO] Failure report opened in Notepad with alternative commands to try"
+                    }
+                } catch {
+                    Write-Log "[WARNING] Could not generate comprehensive report: $_"
+                    # Fall back to opening basic log file
+                    Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
+                }
+            } else {
+                # Fall back to opening basic log file if report generator not available
                 Start-Process notepad.exe -ArgumentList $logFile -ErrorAction SilentlyContinue
                 Write-Log "[INFO] Log file opened in Notepad"
-            } catch {
-                Write-Log "[WARNING] Could not save/open log file: $_"
             }
             
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
@@ -4468,6 +4979,8 @@ if ($btnOneClickRepair) {
             }
             Update-StatusBar -Message "One-Click Repair: Failed - $($_.Exception.Message)" -HideProgress
         } finally {
+            # FLAW-007 FIX: Always reset repair flag, even on error
+            $script:repairInProgress = $false
             # Re-enable button
             $btnOneClickRepair.IsEnabled = $true
         }

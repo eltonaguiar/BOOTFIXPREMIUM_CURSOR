@@ -377,6 +377,15 @@ try {
     exit 1
 }
 
+# Load GUI failure diagnostics module early (needed for fallback scenarios)
+try {
+    if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+        . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+    }
+} catch {
+    Write-Warning "Could not load GUIFailureDiagnostics.ps1: $_"
+}
+
 # Load additional modules (if available)
 try {
     if (Test-Path "$PSScriptRoot\Helper\NetworkDiagnostics.ps1") {
@@ -470,6 +479,24 @@ if ($canLaunchGUI) {
     } catch {
         Write-Host "WARNING: WPF assemblies not available: $_" -ForegroundColor Yellow
         Write-Host "Falling back to MS-DOS Style mode..." -ForegroundColor Yellow
+        
+        # Generate and show diagnostic report
+        try {
+            if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                Show-GUIFailureReport -FailureReason "WPF assemblies not available" `
+                                      -ErrorDetails $_ `
+                                      -Exception $_ `
+                                      -FailurePoint "WPF_Assemblies"
+            }
+        } catch {
+            Write-Warning "Could not generate GUI failure report: $_"
+        }
+        
+        Write-Host ""
+        Write-Host "Press any key to continue with TUI mode..." -ForegroundColor Yellow
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        
         . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
         Start-TUI
         exit
@@ -486,11 +513,25 @@ if ($canLaunchGUI) {
                 Write-Host ""
                 Write-Host "❌ READINESS GATE FAILED - GUI LAUNCH BLOCKED" -ForegroundColor Red
                 Write-Host "The following issues must be fixed before GUI can launch:" -ForegroundColor Yellow
+                $blockersList = $readiness.Blockers -join "; "
                 foreach ($blocker in $readiness.Blockers) {
                     Write-Host "  - $blocker" -ForegroundColor Yellow
                 }
                 Write-Host ""
                 Write-Host "Falling back to TUI mode..." -ForegroundColor Yellow
+                
+                # Generate and show diagnostic report
+                try {
+                    if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                        . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                        Show-GUIFailureReport -FailureReason "Readiness gate failed" `
+                                              -ErrorDetails $blockersList `
+                                              -FailurePoint "Readiness_Gate"
+                    }
+                } catch {
+                    Write-Warning "Could not generate GUI failure report: $_"
+                }
+                
                 throw "Readiness gate failed - GUI launch blocked"
             }
         }
@@ -525,11 +566,37 @@ if ($canLaunchGUI) {
         } catch {
             Write-Host "ERROR: Failed to load GUI module: $_" -ForegroundColor Red
             Write-Host "Falling back to TUI mode..." -ForegroundColor Yellow
+            
+            # Generate and show diagnostic report
+            try {
+                if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                    . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                    Show-GUIFailureReport -FailureReason "GUI module load failed" `
+                                          -ErrorDetails $_ `
+                                          -Exception $_ `
+                                          -FailurePoint "GUI_Module_Load"
+                }
+            } catch {
+                Write-Warning "Could not generate GUI failure report: $_"
+            }
+            
             throw "GUI module load failed: $_"
         }
         
         # Verify Start-GUI function exists (use Stop to fail fast if missing)
         if (-not (Get-Command Start-GUI -ErrorAction SilentlyContinue)) {
+            # Generate and show diagnostic report
+            try {
+                if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                    . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                    Show-GUIFailureReport -FailureReason "Start-GUI function not found" `
+                                          -ErrorDetails "The Start-GUI function is missing from Helper\WinRepairGUI.ps1" `
+                                          -FailurePoint "Start_GUI_Function"
+                }
+            } catch {
+                Write-Warning "Could not generate GUI failure report: $_"
+            }
+            
             throw "Start-GUI function not found in WinRepairGUI.ps1"
         }
         
@@ -547,6 +614,20 @@ if ($canLaunchGUI) {
         } catch {
             $guiErrors = $_.Exception.Message
             Write-Host "ERROR: GUI module validation failed: $guiErrors" -ForegroundColor Red
+            
+            # Generate and show diagnostic report
+            try {
+                if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                    . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                    Show-GUIFailureReport -FailureReason "GUI module validation failed" `
+                                          -ErrorDetails $guiErrors `
+                                          -Exception $_ `
+                                          -FailurePoint "GUI_Module_Validation"
+                }
+            } catch {
+                Write-Warning "Could not generate GUI failure report: $_"
+            }
+            
             throw "GUI module validation failed: $guiErrors"
         }
         #region agent log - GUI starting
@@ -603,6 +684,21 @@ if ($canLaunchGUI) {
         Write-Host "Note: GUI module loaded successfully, but the window failed to launch." -ForegroundColor Gray
         Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host ""
+        
+        # Generate and show diagnostic report
+        try {
+            if (Test-Path "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1") {
+                . "$PSScriptRoot\Helper\GUIFailureDiagnostics.ps1"
+                Show-GUIFailureReport -FailureReason "GUI window launch failed" `
+                                      -ErrorDetails "GUI module loaded but window failed to launch" `
+                                      -Exception $_ `
+                                      -FailurePoint "GUI_Window_Launch"
+            }
+        } catch {
+            Write-Warning "Could not generate GUI failure report: $_"
+        }
+        
+        Write-Host ""
         Write-Host "Error Details:" -ForegroundColor Yellow
         Write-Host "  $($_.Exception.Message)" -ForegroundColor White
         if ($_.Exception.InnerException) {
@@ -614,6 +710,7 @@ if ($canLaunchGUI) {
         Write-Host "  - GUI module has syntax errors" -ForegroundColor Gray
         Write-Host "  - Missing .NET Framework components" -ForegroundColor Gray
         Write-Host ""
+        Write-Host "A diagnostic report has been opened in Notepad with full details." -ForegroundColor Cyan
         Write-Host "Press any key to continue with TUI mode..." -ForegroundColor Yellow
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         . "$PSScriptRoot\Helper\WinRepairTUI.ps1"
