@@ -2148,6 +2148,77 @@ if ($btnFixBCDFoundTab) {
     $btnFixBCDFoundTab.Add_Click({ Start-EmergencyBootScript -ScriptName "FIX_BCD_NOT_FOUND" })
 }
 
+# Additional menu item handlers
+$menuToolsBCDEitor = Get-Control -Name "MenuToolsBCDEitor"
+if ($menuToolsBCDEitor) {
+    $menuToolsBCDEitor.Add_Click({
+        $grid = $W.Content
+        $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+        if ($tabControl) {
+            $bcdTab = $tabControl.Items | Where-Object { $_.Header -eq "BCD Editor" }
+            if ($bcdTab) {
+                $tabControl.SelectedItem = $bcdTab
+            }
+        }
+    })
+}
+
+$menuToolsSystemFile = Get-Control -Name "MenuToolsSystemFile"
+if ($menuToolsSystemFile) {
+    $menuToolsSystemFile.Add_Click({
+        $grid = $W.Content
+        $tabControl = $grid.Children | Where-Object { $_.GetType().Name -eq 'TabControl' } | Select-Object -First 1
+        if ($tabControl) {
+            $systemFileTab = $tabControl.Items | Where-Object { $_.Header -eq "System File / Disk Repair" }
+            if ($systemFileTab) {
+                $tabControl.SelectedItem = $systemFileTab
+            }
+        }
+    })
+}
+
+$menuToolsCMD = Get-Control -Name "MenuToolsCMD"
+if ($menuToolsCMD) {
+    $menuToolsCMD.Add_Click({
+        try {
+            Start-Process cmd.exe -Verb RunAs -ErrorAction SilentlyContinue
+        } catch {
+            [System.Windows.MessageBox]::Show("Command Prompt not available.", "Error", "OK", "Error")
+        }
+    })
+}
+
+$menuToolsPowerShell = Get-Control -Name "MenuToolsPowerShell"
+if ($menuToolsPowerShell) {
+    $menuToolsPowerShell.Add_Click({
+        try {
+            Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle = 'MiracleBoot - PowerShell'" -ErrorAction SilentlyContinue
+        } catch {
+            [System.Windows.MessageBox]::Show("PowerShell not available.", "Error", "OK", "Error")
+        }
+    })
+}
+
+$menuHelpAbout = Get-Control -Name "MenuHelpAbout"
+if ($menuHelpAbout) {
+    $menuHelpAbout.Add_Click({
+        [System.Windows.MessageBox]::Show(
+            "Miracle Boot v7.2.0`n`n" +
+            "Advanced Windows Boot Repair Tool`n`n" +
+            "Features:`n" +
+            "- One-Click Automated Repair`n" +
+            "- Emergency Boot Repair Scripts`n" +
+            "- BCD Editor`n" +
+            "- System File Repair`n" +
+            "- Boot Diagnostics`n`n" +
+            "For support, see EMERGENCY_BOOT_REPAIR_GUIDE.md",
+            "About Miracle Boot",
+            "OK",
+            "Information"
+        ) | Out-Null
+    })
+}
+
 $btnSwitchToTUI = Get-Control -Name "BtnSwitchToTUI"
 if ($btnSwitchToTUI) {
     $btnSwitchToTUI.Add_Click({
