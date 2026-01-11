@@ -4051,6 +4051,52 @@ if ($btnOneClickRepair) {
         # Disable button during repair
         $btnOneClickRepair.IsEnabled = $false
         
+        # CRITICAL: Validate script syntax before execution
+        $scriptPath = $MyInvocation.MyCommand.Path
+        $syntaxValid = Test-ScriptSyntax -ScriptPath $scriptPath
+        
+        if (-not $syntaxValid) {
+            Write-Log "==============================================================="
+            Write-Log "CRITICAL: SYNTAX ERRORS DETECTED IN PRIMARY ROUTINE"
+            Write-Log "==============================================================="
+            Write-Log "The primary repair routine contains syntax errors."
+            Write-Log "Falling back to simplified backup repair routine..."
+            Write-Log ""
+            
+            if ($txtOneClickStatus) {
+                $txtOneClickStatus.Text = "SYNTAX ERROR DETECTED - Using backup repair routine..."
+            }
+            Update-StatusBar -Message "One-Click Repair: Syntax error - using backup routine" -ShowProgress
+            
+            try {
+                $backupResult = Invoke-BackupRepairRoutine -Drive $drive -WriteLogFunction ${function:Write-Log} -TestMode $testMode
+                
+                if ($backupResult.Success) {
+                    Write-Log "[SUCCESS] Backup repair routine completed successfully"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Repair completed (backup routine)"
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Completed (backup routine)" -HideProgress
+                } else {
+                    Write-Log "[WARNING] Backup repair routine completed with issues"
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Repair completed with issues (backup routine)"
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Completed with issues" -HideProgress
+                }
+            } catch {
+                Write-Log "[ERROR] Backup repair routine also failed: $_"
+                if ($txtOneClickStatus) {
+                    $txtOneClickStatus.Text = "Both primary and backup repair routines failed"
+                }
+                Update-StatusBar -Message "One-Click Repair: Failed" -HideProgress
+            } finally {
+                $script:repairInProgress = $false
+                $btnOneClickRepair.IsEnabled = $true
+            }
+            return
+        }
+        
         try {
             Write-Log "==============================================================="
             Write-Log "ONE-CLICK REPAIR - AUTOMATED DIAGNOSIS AND REPAIR"
@@ -6205,12 +6251,79 @@ exit
             Update-StatusBar -Message "One-Click Repair: Complete" -HideProgress
             
         } catch {  # End of try block started at line 3419
+            $errorMessage = $_.Exception.Message
+            $errorCategory = $_.CategoryInfo.Category
+            
             Write-Log ""
             Write-Log "==============================================================="
             Write-Log "[ERROR] One-Click Repair failed"
-            Write-Log "Error: $($_.Exception.Message)"
+            Write-Log "Error: $errorMessage"
+            Write-Log "Category: $errorCategory"
             Write-Log "Stack trace: $($_.ScriptStackTrace)"
             Write-Log "==============================================================="
+            
+            # Check if this is a syntax error or parsing error
+            $isSyntaxError = ($errorMessage -match "syntax|parse|else.*not recognized|missing.*brace|unexpected.*token|The term.*is not recognized") -or 
+                            ($errorCategory -eq "ParseError" -or $errorCategory -eq "ParserError")
+            
+            if ($isSyntaxError) {
+                Write-Log ""
+                Write-Log "==============================================================="
+                Write-Log "SYNTAX ERROR DETECTED - ACTIVATING BACKUP ROUTINE"
+                Write-Log "==============================================================="
+                Write-Log "The primary repair routine encountered a syntax error."
+                Write-Log "This indicates a problem with the script structure."
+                Write-Log "Falling back to simplified backup repair routine..."
+                Write-Log ""
+                
+                if ($txtOneClickStatus) {
+                    $txtOneClickStatus.Text = "SYNTAX ERROR - Using backup repair routine..."
+                }
+                Update-StatusBar -Message "One-Click Repair: Syntax error - using backup routine" -ShowProgress
+                
+                try {
+                    $backupResult = Invoke-BackupRepairRoutine -Drive $drive -WriteLogFunction ${function:Write-Log} -TestMode $testMode
+                    
+                    if ($backupResult.Success) {
+                        Write-Log "[SUCCESS] Backup repair routine completed successfully"
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "Repair completed (backup routine)"
+                        }
+                        Update-StatusBar -Message "One-Click Repair: Completed (backup routine)" -HideProgress
+                    } else {
+                        Write-Log "[WARNING] Backup repair routine completed with issues"
+                        if ($backupResult.Errors.Count -gt 0) {
+                            Write-Log "Backup routine errors:"
+                            foreach ($error in $backupResult.Errors) {
+                                Write-Log "  - $error"
+                            }
+                        }
+                        if ($txtOneClickStatus) {
+                            $txtOneClickStatus.Text = "Repair completed with issues (backup routine)"
+                        }
+                        Update-StatusBar -Message "One-Click Repair: Completed with issues" -HideProgress
+                    }
+                } catch {
+                    Write-Log "[CRITICAL] Backup repair routine also failed: $_"
+                    Write-Log "Both primary and backup repair routines have failed."
+                    Write-Log "Manual intervention required."
+                    if ($txtOneClickStatus) {
+                        $txtOneClickStatus.Text = "Both repair routines failed - manual intervention required"
+                    }
+                    Update-StatusBar -Message "One-Click Repair: Failed" -HideProgress
+                }
+                
+                # Save log and exit early for syntax errors
+                try {
+                    $logContent.ToString() | Out-File -FilePath $logFile -Encoding UTF8 -Force
+                } catch {
+                    # Ignore log save errors
+                }
+                
+                $script:repairInProgress = $false
+                $btnOneClickRepair.IsEnabled = $true
+                return
+            }
             
             # Run advanced diagnostics when repair fails
             Write-Log "[INFO] Running advanced boot diagnostics to identify root cause..."
