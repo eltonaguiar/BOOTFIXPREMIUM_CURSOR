@@ -1,0 +1,170 @@
+[2026-01-10 22:19:33.367] [INFO] [PID:38200] [MiracleBoot.ps1] MiracleBoot.ps1 started
+
+[VALIDATION] Phase 1: Syntax Validation...
+  [PASS] MiracleBoot.ps1
+  [PASS] Helper\WinRepairCore.ps1
+  [PASS] Helper\WinRepairTUI.ps1
+  [FAIL] Helper\WinRepairGUI.ps1 - 1 error(s)
+    Line 4920 : The Try statement is missing its Catch or Finally block.
+  [PASS] Helper\NetworkDiagnostics.ps1
+  [PASS] Helper\KeyboardSymbols.ps1
+  [PASS] Helper\LogAnalysis.ps1
+
+[VALIDATION FAILED] Syntax errors detected. Cannot proceed.
+
+===============================================================
+  PRE-LAUNCH VALIDATION FAILED
+===============================================================
+
+The following errors were detected:
+Warning: Pre-launch validation failed: Cannot overwrite variable Error because it is read-only or constant.
+Continuing anyway...
+Network Diagnostics module loaded.
+Keyboard Symbols module loaded.
+Detected Environment: FullOS
+SystemDrive: C:
+
+Environment Capabilities:
+  PowerShell: PowerShell 5.1 available
+  Network: 6 network adapter(s) found (2 enabled)
+  Browser: Default Browser available
+
+Attempting to launch GUI mode...
+WPF assemblies loaded successfully.
+Running readiness validation...
+
+===============================================================
+  READINESS GATE - VALIDATION
+===============================================================
+
+[CHECK 1/6] Syntax Validation...
+  [PASS] No syntax errors
+
+[CHECK 2/6] XAML Validation (GUI)...
+  [PASS] XAML parses successfully
+
+[CHECK 3/6] Module Loading Test...
+  [PASS] Helper\WinRepairCore.ps1 loaded
+  [PASS] Helper\ErrorLogging.ps1 loaded
+  [PASS] Helper\LogAnalysis.ps1 loaded
+
+[CHECK 4/6] GUI Launch Capability...
+  [PASS] GUI launch capability verified
+
+[CHECK 5/6] Error Message Scan...
+  [PASS] Error handling code is appropriate
+
+[CHECK 6/6] Critical Function Availability...
+  [PASS] Function 'Start-GUI' found in Helper\WinRepairGUI.ps1
+  [PASS] Function 'Start-TUI' found in Helper\WinRepairTUI.ps1
+  [PASS] Function 'Get-EnvironmentType' found in Helper\WinRepairCore.ps1
+
+===============================================================
+  âo. READINESS GATE: PASSED
+  System is ready for client demo
+===============================================================
+
+Loading GUI module...
+ERROR: Failed to load GUI module: At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1:4918 char:14
++             }  # End of if ($efiDrive) block
++              ~
+The Try statement is missing its Catch or Finally block.
+Falling back to TUI mode...
+WARNING: Could not generate GUI failure report:
+ Cannot process argument transformation on 
+parameter 'Exception'. Cannot convert the "At 
+C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Hel
+per\WinRepairGUI.ps1:4918 char:14
+
++             }  # End of if ($efiDrive) block
+
++              ~
+The Try statement is missing its Catch or 
+Finally block." value of type 
+"System.Management.Automation.ErrorRecord" to 
+type "System.Exception".
+
+===============================================================
+GUI WINDOW LAUNCH FAILED - FALLING BACK TO TUI
+===============================================================
+
+Note: GUI module loaded successfully, but the window failed to launch.
+Error: GUI module load failed: At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1:4918 char:14
++             }  # End of if ($efiDrive) block
++              ~
+The Try statement is missing its Catch or Finally block.
+
+WARNING: Could not generate GUI failure report:
+ Cannot process argument transformation on 
+parameter 'Exception'. Cannot convert the "GUI 
+module load failed: At 
+C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Hel
+per\WinRepairGUI.ps1:4918 char:14
+
++             }  # End of if ($efiDrive) block
+
++              ~
+The Try statement is missing its Catch or 
+Finally block." value of type 
+"System.Management.Automation.ErrorRecord" to 
+type "System.Exception".
+
+Error Details:
+  GUI module load failed: At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1:4918 char:14
++             }  # End of if ($efiDrive) block
++              ~
+The Try statement is missing its Catch or Finally block.
+
+This usually means:
+  - WPF assemblies failed to load
+  - GUI module has syntax errors
+  - Missing .NET Framework components
+
+A diagnostic report has been opened in Notepad with full details.
+Press any key to continue with TUI mode...
+===============================================================
+  MIRACLE BOOT v7.2.0 - MS-DOS STYLE MODE (Cursor)
+  Environment: FullOS
+===============================================================
+
+1) List Windows Volumes (Sorted)
+2) Scan Storage Drivers (Detailed)
+3) Inject Drivers Offline (DISM)
+3A) Advanced Driver Tools (2025+ Systems)
+4) Quick View BCD
+5) Edit BCD Entry
+6) Enable Network/Internet
+7) Open ChatGPT Help (Browser/CLI)
+8) Check Windows Install Failure Reasons
+9) Boot Repair (with warnings)
+A) Advanced Diagnostics
+B) Boot Probability / Boot Health Check
+C) Automated Boot Repair
+D) System File Repair (SFC + DISM)
+E) Disk Repair (chkdsk)
+F) Comprehensive Diagnostics
+G) Complete System Repair
+H) In-Place Upgrade Readiness Check
+I) Boot Chain Analysis (View Startup/Boot Logs)
+J) Look Up Windows Error Code (Get troubleshooting help)
+Z) Precision Boot Scan (DIAGNOSE-ONLY: shows what's broken, dry-run default)
+O) ONE-CLICK PRECISION FIXER (automated fix, offers repair install for extreme cases)
+Y) Precision Parity (CLI vs GUI/TUI baseline)
+X) Precision Quick Scan JSON export
+W2) Precision Parity JSON export
+U) Comprehensive Log Analysis (All Tiers - Root Cause)
+V) Open Event Viewer
+W) Crash Dump Analyzer (crashanalyze.exe)
+K) Utilities Menu (Notepad, Registry, PowerShell, etc.)
+L) Port Missing Drivers (Extract & Port Drivers)
+M) Generate SAVE_ME.txt (Recovery Commands FAQ)
+N) Disk Management Helper (diskpart guide)
+O) System Restore Point Management
+P) Network Diagnostics & Driver Management
+R) Keyboard Symbol Helper (ALT codes, copy symbols)
+S) Ensure Repair-Install Ready (Critical for in-place upgrade)
+T) Repair Templates (One-click fixes for common scenarios)
+Q) Quit
+
+
+Exiting...

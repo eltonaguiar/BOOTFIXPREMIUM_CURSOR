@@ -10,3 +10,16 @@
 [2026-01-10 20:13:26.012] [INFO] [PID:42220] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
 [2026-01-10 20:37:29.851] [INFO] [PID:42220] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
 [2026-01-10 20:37:44.388] [INFO] [PID:38188] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-10 22:19:38.279] [WARNING] [PID:38200] [<ScriptBlock>@C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1:580] Could not generate GUI failure report: Cannot process argument transformation on parameter 'Exception'. Cannot convert the "At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1:4918 char:14
++             }  # End of if ($efiDrive) block
++              ~
+The Try statement is missing its Catch or Finally block." value of type "System.Management.Automation.ErrorRecord" to type "System.Exception".
+[2026-01-10 22:19:38.293] [WARNING] [PID:38200] [<ScriptBlock>@C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\MiracleBoot.ps1:698] Could not generate GUI failure report: Cannot process argument transformation on parameter 'Exception'. Cannot convert the "GUI module load failed: At C:\Users\zerou\Downloads\MiracleBoot_v7_1_1\Helper\WinRepairGUI.ps1:4918 char:14
++             }  # End of if ($efiDrive) block
++              ~
+The Try statement is missing its Catch or Finally block." value of type "System.Management.Automation.ErrorRecord" to type "System.Exception".
+[2026-01-10 22:50:15.559] [INFO] [PID:9968] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-10 23:03:42.042] [INFO] [PID:23512] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-10 23:39:44.488] [INFO] [PID:6732] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-10 23:40:04.556] [INFO] [PID:6732] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-10 23:54:21.415] [INFO] [PID:16128] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
