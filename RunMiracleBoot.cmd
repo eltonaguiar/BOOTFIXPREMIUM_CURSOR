@@ -22,8 +22,7 @@ if /I not "%SystemDrive%"=="X" (
 )
 
 REM Get the directory where this batch file is located
-set SCRIPT_DIR=%~dp0
-set "SCRIPT_DIR=%SCRIPT_DIR%"
+set "SCRIPT_DIR=%~dp0"
 
 REM Check if PowerShell is available
 powershell.exe -Command "exit 0" >nul 2>&1
