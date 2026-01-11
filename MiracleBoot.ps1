@@ -679,6 +679,22 @@ if ($canLaunchGUI) {
         } catch {}
         #endregion
         
+        # Terminate any existing MiracleBoot GUI processes before launching
+        try {
+            $existingGUIs = Get-Process | Where-Object { 
+                $_.MainWindowTitle -like '*MiracleBoot*' -or 
+                ($_.ProcessName -eq 'powershell' -and $_.MainWindowTitle -like '*MiracleBoot*') -or
+                ($_.ProcessName -eq 'pwsh' -and $_.MainWindowTitle -like '*MiracleBoot*')
+            }
+            if ($existingGUIs) {
+                Write-Host "Terminating $($existingGUIs.Count) existing MiracleBoot GUI process(es)..." -ForegroundColor Yellow
+                $existingGUIs | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+            }
+        } catch {
+            Write-Warning "Could not check for existing GUI processes: $_"
+        }
+        
         # Call Start-GUI with explicit error handling
         try {
             Start-GUI

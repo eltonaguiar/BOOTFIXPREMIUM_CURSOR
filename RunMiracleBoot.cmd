@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 REM Miracle Boot v7.2.0 Launcher
 REM Compatible with Windows Recovery Environment (WinRE) Shift+F10 command prompt
 
@@ -10,16 +11,14 @@ echo(
 REM Safety interlock: if running in a live Windows OS (not WinRE/WinPE X:),
 REM require explicit confirmation before allowing boot writes.
 if /I not "%SystemDrive%"=="X" (
-    echo SAFETY WARNING: You are running from a live Windows OS ^(%SystemDrive%^).
+    echo SAFETY WARNING: You are running from a live Windows OS drive %SystemDrive%
     echo Destructive boot repairs can brick the system if misused.
     echo To continue, type BRICKME and press Enter. Otherwise, press Ctrl+C to abort.
-    set BRICKME_OK=
-    set /p BRICKME_OK=Type BRICKME to continue: 
-    if /I not "%BRICKME_OK%"=="BRICKME" (
-        echo Aborting by user choice. No changes made.
-        exit /b 1
-    )
+    powershell.exe -NoProfile -Command "$confirm = Read-Host 'Type BRICKME to continue'; if ($confirm -ne 'BRICKME') { Write-Host 'Aborting by user choice. No changes made.'; exit 1 }"
+    if errorlevel 1 exit /b 1
 )
+
+:ContinueScript
 
 REM Get the directory where this batch file is located
 set "SCRIPT_DIR=%~dp0"
@@ -64,6 +63,8 @@ REM Launch the PowerShell script
 echo Launching Miracle Boot (PowerShell mode)...
 echo(
 cd /d "%SCRIPT_DIR%"
+REM Terminate any existing MiracleBoot GUI processes before launching
+powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Get-Process | Where-Object { $_.MainWindowTitle -like '*MiracleBoot*' -or ($_.ProcessName -eq 'powershell' -and $_.MainWindowTitle -like '*MiracleBoot*') } | Stop-Process -Force -ErrorAction SilentlyContinue"
 powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "$Host.UI.RawUI.WindowTitle = 'MiracleBoot v7.2.0'; & '.\MiracleBoot.ps1'"
 
 :end
