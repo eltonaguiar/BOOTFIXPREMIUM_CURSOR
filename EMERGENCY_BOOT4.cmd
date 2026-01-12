@@ -437,6 +437,8 @@ echo.
 
 echo [90%%] Verifying repairs...
 set "VERIFICATION_PASSED=1"
+set "FAILURE_COUNT=0"
+set "FAILURE_DETAILS="
 
 REM Verify winload.efi in Windows
 if !ISSUE_WINLOAD_WIN! EQU 1 (
@@ -446,6 +448,11 @@ if !ISSUE_WINLOAD_WIN! EQU 1 (
     ) else (
         echo   [FAIL] winload.efi still missing from Windows directory
         set "VERIFICATION_PASSED=0"
+        set /a FAILURE_COUNT+=1
+        set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] winload.efi missing from !TARGET_DRIVE!:\Windows\System32\`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: File copy/restore operations failed. DISM and file copy attempts did not succeed.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Windows cannot boot - boot loader cannot find winload.efi.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Run SFC /ScanNow or extract winload.efi from Windows installation media.`n`n"
     )
 )
 
@@ -454,6 +461,11 @@ if !ISSUE_EFI_NOT_MOUNTED! EQU 1 (
     if "!EFI_DRIVE!"=="" (
         echo   [FAIL] EFI partition still not accessible
         set "VERIFICATION_PASSED=0"
+        set /a FAILURE_COUNT+=1
+        set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] EFI partition cannot be mounted`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: mountvol and diskpart methods failed to assign drive letter to EFI partition.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Cannot access or repair boot files in EFI partition.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Manually mount EFI partition using diskpart, or partition may be corrupted.`n`n"
     ) else (
         echo   [OK] EFI partition is accessible
     )
@@ -468,17 +480,30 @@ if not "!EFI_DRIVE!"=="" (
         ) else (
             echo   [FAIL] BCD file still missing
             set "VERIFICATION_PASSED=0"
+            set /a FAILURE_COUNT+=1
+            set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] BCD file missing from !EFI_DRIVE!:\EFI\Microsoft\Boot\`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdboot command failed to create BCD file.`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Boot Configuration Data not found - Windows boot manager cannot start.`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Run bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI manually, or format EFI partition.`n`n"
         )
     )
     
     if !ISSUE_BCD_CORRUPT! EQU 1 (
         echo   Command: bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default}
-        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
+        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >%TEMP%\bcd_verify.txt 2>&1
         if not errorlevel 1 (
             echo   [OK] BCD file is now readable
         ) else (
             echo   [FAIL] BCD file is still corrupted
             set "VERIFICATION_PASSED=0"
+            set /a FAILURE_COUNT+=1
+            REM Capture actual error message
+            set "BCD_ERROR="
+            for /f "delims=" %%a in (%TEMP%\bcd_verify.txt) do set "BCD_ERROR=!BCD_ERROR! %%a"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] BCD file corrupted at !EFI_DRIVE!:\EFI\Microsoft\Boot\BCD`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdedit reports error: !BCD_ERROR!`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Boot Configuration Data is unreadable - Windows cannot determine boot options.`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Delete BCD file and run bcdboot again, or format EFI partition and recreate.`n`n"
         )
     )
     
@@ -490,6 +515,42 @@ if not "!EFI_DRIVE!"=="" (
         ) else (
             echo   [FAIL] winload.efi still missing from EFI partition
             set "VERIFICATION_PASSED=0"
+            set /a FAILURE_COUNT+=1
+            set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] winload.efi missing from !EFI_DRIVE!:\EFI\Microsoft\Boot\`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdboot did not copy winload.efi to EFI partition, or source file was missing.`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: EFI boot manager cannot find winload.efi to start Windows.`n"
+            if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
+                set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Manually copy !TARGET_DRIVE!:\Windows\System32\winload.efi to !EFI_DRIVE!:\EFI\Microsoft\Boot\`n`n"
+            ) else (
+                set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: First restore winload.efi to Windows directory, then run bcdboot again.`n`n"
+            )
+        )
+    )
+)
+
+REM Also verify BCD command works (user reported it works after fix)
+if not "!EFI_DRIVE!"=="" (
+    if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+        echo   Command: bcdedit /enum {default}
+        bcdedit /enum {default} >%TEMP%\bcd_enum.txt 2>&1
+        if errorlevel 1 (
+            REM Check if it's a store path issue
+            bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >%TEMP%\bcd_enum_store.txt 2>&1
+            if errorlevel 1 (
+                echo   [WARNING] bcdedit command failed - checking error details...
+                set "BCD_ENUM_ERROR="
+                for /f "delims=" %%a in (%TEMP%\bcd_enum_store.txt) do set "BCD_ENUM_ERROR=!BCD_ENUM_ERROR! %%a"
+                if "!BCD_ENUM_ERROR!"=="" (
+                    for /f "delims=" %%a in (%TEMP%\bcd_enum.txt) do set "BCD_ENUM_ERROR=!BCD_ENUM_ERROR! %%a"
+                )
+                if not "!BCD_ENUM_ERROR!"=="" (
+                    echo   [INFO] bcdedit error: !BCD_ENUM_ERROR!
+                )
+            ) else (
+                echo   [OK] bcdedit works with /store parameter
+            )
+        ) else (
+            echo   [OK] bcdedit command works
         )
     )
 )
@@ -507,21 +568,46 @@ echo ===========================================================================
 echo.
 echo Issues found: !TOTAL_ISSUES!
 echo Fixes applied: !FIXES_APPLIED!
+echo Verification failures: !FAILURE_COUNT!
 echo.
 
 if !VERIFICATION_PASSED! EQU 1 (
     echo [SUCCESS] All detected issues have been fixed!
     echo.
-    echo Please restart your computer to test if Windows boots normally.
-) else (
-    echo [PARTIAL] Some issues were fixed, but verification failed for some items.
+    echo Verification results:
+    if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
+        echo   [OK] winload.efi exists in Windows directory
+    )
+    if not "!EFI_DRIVE!"=="" (
+        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+            echo   [OK] BCD file exists
+        )
+        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+            echo   [OK] winload.efi exists in EFI partition
+        )
+    )
     echo.
-    echo You may need to:
-    echo   - Run a more comprehensive repair tool (EMERGENCY_BOOT3.cmd)
-    echo   - Manually check the EFI partition
-    echo   - Run SFC /ScanNow if winload.efi issues persist
+    echo Please restart your computer to test if Windows boots normally.
+    echo.
+    pause
+    exit /b 0
+) else (
+    echo [FAILURE] Verification failed - !FAILURE_COUNT! issue(s) remain unresolved.
+    echo.
+    echo ============================================================================
+    echo   DETAILED FAILURE REPORT
+    echo ============================================================================
+    echo.
+    echo !FAILURE_DETAILS!
+    echo ============================================================================
+    echo.
+    echo RECOMMENDED ACTIONS:
+    echo   1. Review the failure details above
+    echo   2. Try running EMERGENCY_BOOT3.cmd for more comprehensive repair
+    echo   3. If winload.efi is missing, run: SFC /ScanNow /OffBootDir=!TARGET_DRIVE!: /OffWinDir=!TARGET_DRIVE!:\Windows
+    echo   4. If BCD issues persist, manually format EFI partition and run bcdboot
+    echo   5. Check disk health: chkdsk !TARGET_DRIVE!: /f /r
+    echo.
+    pause
+    exit /b 1
 )
-
-echo.
-pause
-exit /b 0

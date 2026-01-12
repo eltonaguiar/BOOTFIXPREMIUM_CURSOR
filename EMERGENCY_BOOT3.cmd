@@ -593,10 +593,17 @@ echo ===========================================================================
 echo.
 
 set "FINAL_ISSUES=0"
+set "FAILURE_COUNT=0"
+set "FAILURE_DETAILS="
 
 if not exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
     echo [FAIL] winload.efi still missing from Windows directory
     set /a FINAL_ISSUES+=1
+    set /a FAILURE_COUNT+=1
+    set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] winload.efi missing from !TARGET_DRIVE!:\Windows\System32\`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: All repair strategies failed (file copy, DISM, SFC, install.wim extraction).`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Windows cannot boot - boot loader cannot find winload.efi to start Windows kernel.`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Extract winload.efi from Windows installation media using DISM, or run in-place repair.`n`n"
 ) else (
     echo [OK] winload.efi found in Windows directory
 )
@@ -605,25 +612,60 @@ if not "!EFI_DRIVE!"=="" (
     if not exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
         echo [FAIL] winload.efi still missing from EFI partition
         set /a FINAL_ISSUES+=1
+        set /a FAILURE_COUNT+=1
+        set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] winload.efi missing from !EFI_DRIVE!:\EFI\Microsoft\Boot\`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdboot did not copy winload.efi to EFI partition, or EFI partition is write-protected.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: EFI boot manager cannot find winload.efi to start Windows.`n"
+        if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Manually copy !TARGET_DRIVE!:\Windows\System32\winload.efi to !EFI_DRIVE!:\EFI\Microsoft\Boot\`n`n"
+        ) else (
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: First restore winload.efi to Windows directory, then run bcdboot again.`n`n"
+        )
     ) else (
         echo [OK] winload.efi found in EFI partition
     )
     
     if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
-        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >nul 2>&1
+        bcdedit /store "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" /enum {default} >%TEMP%\bcd_verify_final.txt 2>&1
         if errorlevel 1 (
             echo [FAIL] BCD still corrupted
             set /a FINAL_ISSUES+=1
+            set /a FAILURE_COUNT+=1
+            REM Capture actual error message
+            set "BCD_ERROR="
+            for /f "delims=" %%a in (%TEMP%\bcd_verify_final.txt) do set "BCD_ERROR=!BCD_ERROR! %%a"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] BCD file corrupted at !EFI_DRIVE!:\EFI\Microsoft\Boot\BCD`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdedit reports error: !BCD_ERROR!`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Boot Configuration Data is unreadable - Windows cannot determine boot options.`n"
+            set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Delete BCD file, format EFI partition, and run bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI`n`n"
         ) else (
             echo [OK] BCD is readable
+            REM Also test bcdedit without /store to verify it works
+            echo   Command: bcdedit /enum {default}
+            bcdedit /enum {default} >%TEMP%\bcd_enum_final.txt 2>&1
+            if errorlevel 1 (
+                echo   [INFO] bcdedit works with /store parameter (BCD is accessible)
+            ) else (
+                echo   [OK] bcdedit command works
+            )
         )
     ) else (
         echo [FAIL] BCD still missing
         set /a FINAL_ISSUES+=1
+        set /a FAILURE_COUNT+=1
+        set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] BCD file missing from !EFI_DRIVE!:\EFI\Microsoft\Boot\`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: bcdboot command failed to create BCD file, or EFI partition is write-protected.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Boot Configuration Data not found - Windows boot manager cannot start.`n"
+        set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Run bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI manually, or format EFI partition and recreate.`n`n"
     )
 ) else (
     echo [WARNING] EFI partition not accessible for verification
     set /a FINAL_ISSUES+=1
+    set /a FAILURE_COUNT+=1
+    set "FAILURE_DETAILS=!FAILURE_DETAILS! [FAILURE !FAILURE_COUNT!] EFI partition cannot be mounted`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    REASON: All mounting methods failed (mountvol, diskpart). EFI partition may be corrupted or missing.`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    IMPACT: Cannot access or repair boot files in EFI partition.`n"
+    set "FAILURE_DETAILS=!FAILURE_DETAILS!    SOLUTION: Manually mount EFI partition using diskpart, or partition may need to be recreated.`n`n"
 )
 
 REM ============================================================================
@@ -642,25 +684,47 @@ echo.
 if !FINAL_ISSUES! EQU 0 (
     echo [SUCCESS] All boot issues have been resolved!
     echo.
+    echo Verification results:
+    if exist "!TARGET_DRIVE!:\Windows\System32\winload.efi" (
+        echo   [OK] winload.efi exists in Windows directory
+    )
+    if not "!EFI_DRIVE!"=="" (
+        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\BCD" (
+            echo   [OK] BCD file exists and is readable
+        )
+        if exist "!EFI_DRIVE!:\EFI\Microsoft\Boot\winload.efi" (
+            echo   [OK] winload.efi exists in EFI partition
+        )
+    )
+    echo.
     echo Next steps:
     echo 1. Restart your computer
     echo 2. Test if Windows boots normally
-) else (
-    echo [WARNING] Some issues could not be automatically fixed.
     echo.
-    echo Manual steps you may need to try:
-    echo 1. Ensure Windows installation media (ISO/USB) is accessible
-    echo 2. Try extracting winload.efi manually from install.wim using DISM
-    echo 3. Check if EFI partition has sufficient free space
-    echo 4. Verify disk health using chkdsk
-    echo 5. Consider running an in-place repair installation
+    pause
+    exit /b 0
+) else (
+    echo [FAILURE] Verification failed - !FINAL_ISSUES! issue(s) remain unresolved.
+    echo.
+    echo ============================================================================
+    echo   DETAILED FAILURE REPORT
+    echo ============================================================================
+    echo.
+    echo !FAILURE_DETAILS!
+    echo ============================================================================
+    echo.
+    echo RECOMMENDED ACTIONS:
+    echo   1. Review the failure details above
+    echo   2. If winload.efi is missing, extract from Windows installation media:
+    echo      dism /Image:!TARGET_DRIVE!: /RestoreHealth /Source:X:\sources\install.wim:1 /LimitAccess
+    echo   3. If BCD issues persist, format EFI partition and recreate:
+    echo      format !EFI_DRIVE!: /fs:FAT32 /q
+    echo      bcdboot !TARGET_DRIVE!:\Windows /s !EFI_DRIVE!: /f UEFI
+    echo   4. Check disk health: chkdsk !TARGET_DRIVE!: /f /r
+    echo   5. Consider running an in-place repair installation
+    echo.
+    pause
+    exit /b 1
 )
-
-echo.
-echo ============================================================================
-echo   REPAIR COMPLETE
-echo ============================================================================
-echo.
-pause
 
 endlocal

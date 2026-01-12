@@ -908,11 +908,149 @@ function Start-SafeNotepad {
     }
 }
 
+# Helper function to clear old logs (older than 48 hours)
+function Clear-OldLogs48Hours {
+    <#
+    .SYNOPSIS
+    Clears all log files older than 48 hours from all known log locations.
+    #>
+    param(
+        [int]$HoursOld = 48
+    )
+    
+    $result = @{
+        TotalDeleted = 0
+        TotalSizeFreed = 0
+        LocationsChecked = @()
+        Errors = @()
+    }
+    
+    try {
+        # Determine script root
+        $scriptRoot = if ($PSScriptRoot) {
+            $parent = Split-Path -Parent $PSScriptRoot
+            if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+        } else { Get-Location }
+        
+        # Calculate cutoff time (48 hours ago)
+        $cutoffTime = (Get-Date).AddHours(-$HoursOld)
+        
+        # Define all log locations to check
+        $logLocations = @(
+            @{Path = Join-Path $scriptRoot "Logs\ERROR_LOGS"; Pattern = "*.log"; Description = "Root ERROR_LOGS"},
+            @{Path = Join-Path $scriptRoot "Logs"; Pattern = "*.log"; Description = "Root Logs"},
+            @{Path = Join-Path $scriptRoot "Helper\LOGS\ERROR_LOGS"; Pattern = "*.log"; Description = "Helper ERROR_LOGS"},
+            @{Path = Join-Path $scriptRoot "Helper\LOGS"; Pattern = "*.log"; Description = "Helper Logs"},
+            @{Path = Join-Path $env:TEMP "MiracleBoot_LOGS"; Pattern = "*.log"; Description = "Temp Logs"},
+            @{Path = Join-Path $env:TEMP "MiracleBoot_LOGS\ERROR_LOGS"; Pattern = "*.log"; Description = "Temp ERROR_LOGS"}
+        )
+        
+        foreach ($location in $logLocations) {
+            if (Test-Path $location.Path) {
+                $result.LocationsChecked += $location.Description
+                try {
+                    $logFiles = Get-ChildItem -Path $location.Path -Filter $location.Pattern -ErrorAction SilentlyContinue
+                    
+                    foreach ($logFile in $logFiles) {
+                        # Check if file is older than cutoff time
+                        if ($logFile.LastWriteTime -lt $cutoffTime) {
+                            try {
+                                $fileSize = $logFile.Length
+                                Remove-Item -Path $logFile.FullName -Force -ErrorAction Stop
+                                $result.TotalDeleted++
+                                $result.TotalSizeFreed += $fileSize
+                            } catch {
+                                $result.Errors += "Failed to delete $($logFile.FullName): $_"
+                            }
+                        }
+                    }
+                } catch {
+                    $result.Errors += "Error accessing $($location.Path): $_"
+                }
+            }
+        }
+        
+        return $result
+    } catch {
+        $result.Errors += "Critical error in Clear-OldLogs48Hours: $_"
+        return $result
+    }
+}
+
 # Helper function to verify boot repair success
+# Helper function to validate if a BCD entry points to a real Windows installation (not WinRE)
+function Test-ValidWindowsInstallation {
+    <#
+    .SYNOPSIS
+    Validates if a BCD entry points to a real Windows installation, not WinRE.
+    
+    .PARAMETER BCDEntry
+    A BCD entry object (from Get-BCDEntriesParsed)
+    
+    .PARAMETER BCDStorePath
+    Optional path to BCD store file for offline validation
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$BCDEntry,
+        [string]$BCDStorePath = $null
+    )
+    
+    # Must be a Windows Boot Loader entry
+    if ($BCDEntry.Type -ne "Windows Boot Loader") {
+        return $false
+    }
+    
+    # Check description for WinRE indicators
+    $description = if ($BCDEntry.Description) { $BCDEntry.Description.ToLower() } else { "" }
+    if ($description -match "recovery|winre|windows recovery environment") {
+        return $false
+    }
+    
+    # Extract device/osdevice path
+    $device = $BCDEntry.device -or $BCDEntry.osdevice
+    if (-not $device) {
+        return $false
+    }
+    
+    # Extract drive letter from device/osdevice (format: partition=G: or device=partition=G:)
+    $driveLetter = $null
+    if ($device -match "partition=([A-Z]):") {
+        $driveLetter = $matches[1]
+    } elseif ($device -match "device=partition=([A-Z]):") {
+        $driveLetter = $matches[1]
+    }
+    
+    if (-not $driveLetter) {
+        return $false
+    }
+    
+    # Check for critical Windows files that indicate a real installation
+    $windowsPath = "$driveLetter`:\Windows"
+    $criticalFiles = @(
+        "$windowsPath\System32\ntoskrnl.exe",  # Windows kernel - REQUIRED for real Windows
+        "$windowsPath\System32\winload.efi",   # Boot loader (UEFI)
+        "$windowsPath\System32\winload.exe"    # Boot loader (Legacy)
+    )
+    
+    # At minimum, ntoskrnl.exe must exist for a valid Windows installation
+    $hasKernel = Test-Path "$windowsPath\System32\ntoskrnl.exe" -ErrorAction SilentlyContinue
+    
+    # Check path for WinRE indicators
+    $path = $BCDEntry.path -or ""
+    if ($path -match "recovery|winre|winre\.wim|boot\.wim") {
+        return $false
+    }
+    
+    # Valid Windows installation must have kernel
+    return $hasKernel
+}
+
 function Test-BootRepairSuccess {
     <#
     .SYNOPSIS
     Verifies if boot repair was successful by checking critical boot files and BCD.
+    Now also validates that BCD contains entries for real Windows installations (not just WinRE).
     #>
     param(
         [string]$WindowsDrive = $env:SystemDrive.TrimEnd(':'),
@@ -926,6 +1064,17 @@ function Test-BootRepairSuccess {
     }
     
     try {
+        # First, verify this is a real Windows installation (not WinRE)
+        $windowsPath = "$WindowsDrive`:\Windows"
+        $kernelPath = "$windowsPath\System32\ntoskrnl.exe"
+        if (-not (Test-Path $kernelPath -ErrorAction SilentlyContinue)) {
+            $result.Success = $false
+            $issue = "Windows kernel (ntoskrnl.exe) MISSING - This may not be a valid Windows installation"
+            $result.Issues += $issue
+            $result.Details += "CRITICAL: $issue - Path checked: $kernelPath"
+            $result.Details += "  A valid Windows installation must have ntoskrnl.exe in System32"
+        }
+        
         # Try to mount EFI partition if not provided
         if (-not $EfiDrive) {
             try {
@@ -968,7 +1117,7 @@ function Test-BootRepairSuccess {
             }
         }
         
-        # Check BCD accessibility
+        # Check BCD accessibility and validate it contains real Windows installations
         if ($EfiDrive) {
             $bcdPath = "$EfiDrive`:\EFI\Microsoft\Boot\BCD"
             if (Test-Path $bcdPath) {
@@ -979,6 +1128,47 @@ function Test-BootRepairSuccess {
                         $issue = "BCD file exists but is CORRUPTED or INACCESSIBLE: $bcdPath"
                         $result.Issues += $issue
                         $result.Details += "CRITICAL: $issue - BCD cannot be read or is corrupted"
+                    } else {
+                        # BCD is accessible - now validate it contains real Windows installations
+                        try {
+                            # Load WinRepairCore to get Get-BCDEntriesParsed
+                            $scriptRoot = if ($PSScriptRoot) {
+                                $parent = Split-Path -Parent $PSScriptRoot
+                                if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+                            } else { Get-Location }
+                            
+                            $corePath = Join-Path $scriptRoot "Helper\WinRepairCore.ps1"
+                            if (Test-Path $corePath) {
+                                . $corePath -ErrorAction SilentlyContinue
+                                
+                                $bcdEntries = Get-BCDEntriesParsed -BCDStorePath $bcdPath -ErrorAction SilentlyContinue
+                                if ($bcdEntries) {
+                                    $validWindowsEntries = $bcdEntries | Where-Object { Test-ValidWindowsInstallation -BCDEntry $_ -BCDStorePath $bcdPath }
+                                    
+                                    if ($validWindowsEntries.Count -eq 0) {
+                                        $result.Success = $false
+                                        $issue = "BCD contains NO valid Windows installation entries - only WinRE or invalid entries found"
+                                        $result.Issues += $issue
+                                        $result.Details += "CRITICAL: $issue"
+                                        $result.Details += "  BCD has $($bcdEntries.Count) total entry/entries, but none point to a valid Windows installation"
+                                        $result.Details += "  Valid Windows installations must have ntoskrnl.exe in Windows\System32"
+                                        
+                                        # List what entries were found
+                                        foreach ($entry in $bcdEntries) {
+                                            if ($entry.Type -eq "Windows Boot Loader") {
+                                                $desc = if ($entry.Description) { $entry.Description } else { "Unknown" }
+                                                $result.Details += "  Found entry: '$desc' (not a valid Windows installation)"
+                                            }
+                                        }
+                                    } else {
+                                        $result.Details += "OK: BCD contains $($validWindowsEntries.Count) valid Windows installation entry/entries"
+                                    }
+                                }
+                            }
+                        } catch {
+                            # If we can't validate entries, that's a warning but not a critical failure
+                            $result.Details += "WARNING: Could not validate BCD entries: $_"
+                        }
                     }
                 } catch {
                     $result.Success = $false
@@ -1036,9 +1226,9 @@ function Get-ComprehensiveBootDiagnostics {
     foreach ($file in $bootFiles) {
         $exists = Test-Path $file.Path -ErrorAction SilentlyContinue
         if ($exists) {
-            $diagnostics += "  ✓ $($file.Name) - FOUND at $($file.Path)"
+            $diagnostics += "  [OK] $($file.Name) - FOUND at $($file.Path)"
         } else {
-            $diagnostics += "  ✗ $($file.Name) - MISSING from $($file.Path)"
+            $diagnostics += "  [MISSING] $($file.Name) - MISSING from $($file.Path)"
             $diagnostics += "    CRITICAL: $($file.Description)"
         }
     }
@@ -1054,7 +1244,7 @@ function Get-ComprehensiveBootDiagnostics {
         $efiMount = Mount-EFIPartition -WindowsDrive $WindowsDrive -PreferredLetter "S" -ErrorAction SilentlyContinue
         if ($efiMount -and $efiMount.Success) {
             $efiDrive = $efiMount.DriveLetter
-            $diagnostics += "  ✓ EFI partition mounted: $efiDrive`:"
+            $diagnostics += "  [OK] EFI partition mounted: $efiDrive`:"
             
             # Check EFI boot files
             $efiFiles = @(
@@ -1066,35 +1256,96 @@ function Get-ComprehensiveBootDiagnostics {
             foreach ($file in $efiFiles) {
                 $exists = Test-Path $file.Path -ErrorAction SilentlyContinue
                 if ($exists) {
-                    $diagnostics += "  ✓ $($file.Name) - FOUND in EFI partition"
+                    $diagnostics += "  [OK] $($file.Name) - FOUND in EFI partition"
                     
                     # Verify BCD accessibility
                     if ($file.Name -eq "BCD") {
                         try {
                             $bcdTest = bcdedit /store $file.Path /enum {default} 2>&1 | Out-String
                             if ($LASTEXITCODE -eq 0 -and $bcdTest -notmatch "could not be opened") {
-                                $diagnostics += "    ✓ BCD is readable and accessible"
+                                $diagnostics += "    [OK] BCD is readable and accessible"
                             } else {
-                                $diagnostics += "    ✗ BCD is CORRUPTED or INACCESSIBLE"
+                                $diagnostics += "    [FAIL] BCD is CORRUPTED or INACCESSIBLE"
                                 $diagnostics += "      Error: $($bcdTest.Trim())"
                             }
                         } catch {
-                            $diagnostics += "    ✗ BCD verification FAILED: $_"
+                            $diagnostics += "    [FAIL] BCD verification FAILED: $_"
                         }
                     }
                 } else {
-                    $diagnostics += "  ✗ $($file.Name) - MISSING from EFI partition: $($file.Path)"
+                    $diagnostics += "  [MISSING] $($file.Name) - MISSING from EFI partition: $($file.Path)"
                     if ($file.Critical) {
                         $diagnostics += "    CRITICAL: This file is REQUIRED for boot"
                     }
                 }
             }
         } else {
-            $diagnostics += "  ✗ EFI partition could NOT be mounted"
+            $diagnostics += "  [FAIL] EFI partition could NOT be mounted"
             $diagnostics += "    CRITICAL: Cannot verify EFI boot files"
         }
     } catch {
-        $diagnostics += "  ✗ EFI partition check FAILED: $_"
+        $diagnostics += "  [FAIL] EFI partition check FAILED: $_"
+    }
+    
+    $diagnostics += ""
+    
+    # Validate BCD contains real Windows installations (not just WinRE)
+    $diagnostics += "BCD ENTRY VALIDATION:"
+    $diagnostics += "----------------------"
+    try {
+        $scriptRoot = if ($PSScriptRoot) {
+            $parent = Split-Path -Parent $PSScriptRoot
+            if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+        } else { Get-Location }
+        
+        $corePath = Join-Path $scriptRoot "Helper\WinRepairCore.ps1"
+        if (Test-Path $corePath) {
+            . $corePath -ErrorAction SilentlyContinue
+            
+            $bcdStorePath = $null
+            if ($efiDrive) {
+                $bcdStorePath = "$efiDrive`:\EFI\Microsoft\Boot\BCD"
+            }
+            
+            if ($bcdStorePath -and (Test-Path $bcdStorePath)) {
+                $bcdEntries = Get-BCDEntriesParsed -BCDStorePath $bcdStorePath -ErrorAction SilentlyContinue
+                if ($bcdEntries) {
+                    $validWindowsEntries = $bcdEntries | Where-Object { Test-ValidWindowsInstallation -BCDEntry $_ -BCDStorePath $bcdStorePath }
+                    $winreEntries = $bcdEntries | Where-Object { 
+                        $_.Type -eq "Windows Boot Loader" -and 
+                        -not (Test-ValidWindowsInstallation -BCDEntry $_ -BCDStorePath $bcdStorePath)
+                    }
+                    
+                    $diagnostics += "  Total BCD entries: $($bcdEntries.Count)"
+                    $diagnostics += "  Valid Windows installations: $($validWindowsEntries.Count)"
+                    $diagnostics += "  WinRE/Invalid entries: $($winreEntries.Count)"
+                    
+                    if ($validWindowsEntries.Count -eq 0) {
+                        $diagnostics += "  [CRITICAL] BCD contains NO valid Windows installation entries!"
+                        $diagnostics += "    Only WinRE or invalid entries found. This is not a bootable Windows installation."
+                        if ($winreEntries.Count -gt 0) {
+                            $diagnostics += "    WinRE entries found:"
+                            foreach ($entry in $winreEntries) {
+                                $desc = if ($entry.Description) { $entry.Description } else { "Unknown" }
+                                $diagnostics += "      - $desc"
+                            }
+                        }
+                    } else {
+                        $diagnostics += "  [OK] BCD contains valid Windows installation entry/entries"
+                        foreach ($entry in $validWindowsEntries) {
+                            $desc = if ($entry.Description) { $entry.Description } else { "Unknown" }
+                            $diagnostics += "    - $desc"
+                        }
+                    }
+                } else {
+                    $diagnostics += "  [WARNING] Could not parse BCD entries"
+                }
+            } else {
+                $diagnostics += "  [INFO] BCD file not accessible for entry validation"
+            }
+        }
+    } catch {
+        $diagnostics += "  [WARNING] BCD entry validation failed: $_"
     }
     
     $diagnostics += ""
@@ -1110,23 +1361,23 @@ function Get-ComprehensiveBootDiagnostics {
     $bcdFound = $false
     foreach ($bcdPath in $legacyBcdPaths) {
         if (Test-Path $bcdPath -ErrorAction SilentlyContinue) {
-            $diagnostics += "  ✓ BCD found at: $bcdPath"
+            $diagnostics += "  [OK] BCD found at: $bcdPath"
             $bcdFound = $true
             try {
                 $bcdTest = bcdedit /store $bcdPath /enum {default} 2>&1 | Out-String
                 if ($LASTEXITCODE -eq 0) {
-                    $diagnostics += "    ✓ BCD is readable"
+                    $diagnostics += "    [OK] BCD is readable"
                 } else {
-                    $diagnostics += "    ✗ BCD is CORRUPTED"
+                    $diagnostics += "    [FAIL] BCD is CORRUPTED"
                 }
             } catch {
-                $diagnostics += "    ✗ BCD verification failed: $_"
+                $diagnostics += "    [FAIL] BCD verification failed: $_"
             }
         }
     }
     
     if (-not $bcdFound) {
-        $diagnostics += "  ✗ BCD file NOT FOUND in any legacy location"
+        $diagnostics += "  [FAIL] BCD file NOT FOUND in any legacy location"
     }
     
     $diagnostics += ""
@@ -1392,6 +1643,7 @@ function Start-GUI {
         </MenuItem>
         <MenuItem Header="_Help">
             <MenuItem Header="Show Execution Path" Name="MenuHelpExecutionPath" ToolTip="Display the current execution path and folder name"/>
+            <MenuItem Header="Clear Old Logs" Name="MenuHelpClearLogs" ToolTip="Clear all log files older than 48 hours"/>
             <Separator/>
             <MenuItem Header="Emergency Repair Guide" Name="MenuHelpEmergencyGuide" ToolTip="View emergency boot repair guide"/>
             <Separator/>
@@ -2767,6 +3019,72 @@ if ($menuHelpExecutionPath) {
     })
 }
 
+$menuHelpClearLogs = Get-Control -Name "MenuHelpClearLogs"
+if ($menuHelpClearLogs) {
+    $menuHelpClearLogs.Add_Click({
+        try {
+            # Update status bar
+            Update-StatusBar -Message "Clearing logs older than 48 hours..." -ShowProgress
+            
+            # Confirm with user
+            $confirm = [System.Windows.MessageBox]::Show(
+                "This will delete all log files older than 48 hours from all log locations.`n`n" +
+                "Locations checked:`n" +
+                "- Logs\ERROR_LOGS\`n" +
+                "- Helper\LOGS\ERROR_LOGS\`n" +
+                "- Temporary log directories`n`n" +
+                "Continue?",
+                "Clear Old Logs",
+                "YesNo",
+                "Question"
+            )
+            
+            if ($confirm -eq "Yes") {
+                # Clear old logs
+                $result = Clear-OldLogs48Hours -HoursOld 48
+                
+                # Format size
+                $sizeMB = [math]::Round($result.TotalSizeFreed / 1MB, 2)
+                $sizeKB = [math]::Round($result.TotalSizeFreed / 1KB, 2)
+                $sizeText = if ($sizeMB -ge 1) { "$sizeMB MB" } else { "$sizeKB KB" }
+                
+                # Build result message
+                $message = "Log Cleanup Complete`n`n"
+                $message += "Files Deleted: $($result.TotalDeleted)`n"
+                $message += "Space Freed: $sizeText`n"
+                $message += "Locations Checked: $($result.LocationsChecked.Count)`n`n"
+                
+                if ($result.LocationsChecked.Count -gt 0) {
+                    $message += "Checked:`n"
+                    foreach ($loc in $result.LocationsChecked) {
+                        $message += "  - $loc`n"
+                    }
+                    $message += "`n"
+                }
+                
+                if ($result.Errors.Count -gt 0) {
+                    $message += "Errors: $($result.Errors.Count)`n"
+                    foreach ($err in $result.Errors) {
+                        $message += "  - $err`n"
+                    }
+                } else {
+                    $message += "No errors encountered."
+                }
+                
+                # Update status bar
+                Update-StatusBar -Message "Log cleanup complete: $($result.TotalDeleted) files deleted" -ShowProgress:$false
+                
+                [System.Windows.MessageBox]::Show($message, "Clear Old Logs", "OK", "Information") | Out-Null
+            } else {
+                Update-StatusBar -Message "Log cleanup cancelled" -ShowProgress:$false
+            }
+        } catch {
+            Update-StatusBar -Message "Error clearing logs: $_" -ShowProgress:$false
+            [System.Windows.MessageBox]::Show("Error clearing logs: $_", "Error", "OK", "Error") | Out-Null
+        }
+    })
+}
+
 # Instructions Button Handler (Boot Fixer Tab)
 $btnInstructions = Get-Control -Name "BtnInstructions"
 if ($btnInstructions) {
@@ -3819,13 +4137,20 @@ function Start-SequentialRepair {
         
         $issues = 0
         
+        # First, verify this is a real Windows installation (not WinRE)
+        $kernelPath = "$Drive`:\Windows\System32\ntoskrnl.exe"
+        if (-not (Test-Path $kernelPath -ErrorAction SilentlyContinue)) {
+            $issues++
+        }
+        
         # Check winload.efi
         if (-not (Test-Path "$Drive`:\Windows\System32\winload.efi")) {
             $issues++
         }
         
-        # Check BCD (try to mount EFI)
+        # Check BCD (try to mount EFI) and validate it contains real Windows installations
         $bcdOk = $false
+        $bcdHasValidWindows = $false
         for ($d = 65; $d -le 90; $d++) {
             $letter = [char]$d + ":"
             if (Test-Path "$letter\EFI\Microsoft\Boot\BCD") {
@@ -3833,6 +4158,34 @@ function Start-SequentialRepair {
                     $bcdTest = bcdedit /store "$letter\EFI\Microsoft\Boot\BCD" /enum {default} 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         $bcdOk = $true
+                        
+                        # Validate BCD contains real Windows installations (not just WinRE)
+                        try {
+                            $scriptRoot = if ($PSScriptRoot) {
+                                $parent = Split-Path -Parent $PSScriptRoot
+                                if (Test-Path (Join-Path $parent "MiracleBoot.ps1")) { $parent } else { $PSScriptRoot }
+                            } else { Get-Location }
+                            
+                            $corePath = Join-Path $scriptRoot "Helper\WinRepairCore.ps1"
+                            if (Test-Path $corePath) {
+                                . $corePath -ErrorAction SilentlyContinue
+                                
+                                $bcdPath = "$letter\EFI\Microsoft\Boot\BCD"
+                                $bcdEntries = Get-BCDEntriesParsed -BCDStorePath $bcdPath -ErrorAction SilentlyContinue
+                                if ($bcdEntries) {
+                                    $validWindowsEntries = $bcdEntries | Where-Object { Test-ValidWindowsInstallation -BCDEntry $_ -BCDStorePath $bcdPath }
+                                    $bcdHasValidWindows = ($validWindowsEntries.Count -gt 0)
+                                    
+                                    if (-not $bcdHasValidWindows) {
+                                        $issues++  # BCD exists but has no valid Windows installations
+                                    }
+                                }
+                            }
+                        } catch {
+                            # If validation fails, assume BCD is OK but log warning
+                            $bcdHasValidWindows = $true  # Assume valid if we can't verify
+                        }
+                        
                         break
                     }
                 } catch {
@@ -8410,7 +8763,7 @@ exit
                                     $failureMessage += "The following boot issues could NOT be fixed:`n`n"
                                     
                                     foreach ($issue in $finalBootStatus.Issues) {
-                                        $failureMessage += "  ✗ $issue`n"
+                                        $failureMessage += "  [FAIL] $issue`n"
                                     }
                                     
                                     $failureMessage += "`n"
