@@ -134,11 +134,43 @@ function Add-MiracleBootLog {
     $processId = [System.Diagnostics.Process]::GetCurrentProcess().Id
     
     # Get calling function/script name
-    if ($Location -eq "Unknown") {
-        $callStack = Get-PSCallStack
-        if ($callStack.Count -gt 1) {
-            $caller = $callStack[1]
-            $Location = "$($caller.FunctionName)@$($caller.ScriptName):$($caller.ScriptLineNumber)"
+    # CRITICAL: Disable call stack retrieval during GUI initialization to prevent call depth overflow
+    # Global flag to disable Get-PSCallStack entirely during high-call-depth operations
+    if (-not (Test-Path Variable:script:DisableCallStackRetrieval)) {
+        $script:DisableCallStackRetrieval = $false
+    }
+    
+    # Only get call stack if:
+    # 1. Location is Unknown
+    # 2. Call stack retrieval is not disabled (GUI init mode)
+    # 3. We're not in a deep call chain
+    if ($Location -eq "Unknown" -and -not $script:DisableCallStackRetrieval) {
+        try {
+            # Check current call depth first (without retrieving full stack)
+            # Use a lightweight check to avoid adding to call depth
+            $currentDepth = 0
+            try {
+                $testStack = Get-PSCallStack -ErrorAction SilentlyContinue
+                if ($testStack) { $currentDepth = $testStack.Count }
+            } catch {
+                # If even checking depth fails, skip entirely
+                $Location = "Unknown"
+            }
+            
+            # Only retrieve full call stack if depth is safe (< 50 to prevent overflow)
+            if ($currentDepth -gt 0 -and $currentDepth -lt 50) {
+                $callStack = Get-PSCallStack -ErrorAction SilentlyContinue
+                if ($callStack -and $callStack.Count -gt 1) {
+                    $caller = $callStack[1]
+                    $Location = "$($caller.FunctionName)@$($caller.ScriptName):$($caller.ScriptLineNumber)"
+                }
+            } else {
+                # Depth too high, skip call stack retrieval
+                $Location = "Unknown"
+            }
+        } catch {
+            # Silently fail if call stack retrieval causes issues
+            $Location = "Unknown"
         }
     }
     
@@ -314,7 +346,10 @@ function Write-WarningLog {
 }
 
 # Override Write-Warning to automatically log
+# CRITICAL: Prevent call depth overflow by checking recursion BEFORE calling original
 $originalWriteWarning = Get-Command Write-Warning
+$script:WriteWarningInProgress = $false
+$script:WriteWarningCallCount = 0
 function Write-Warning {
     <#
     .SYNOPSIS
@@ -322,18 +357,44 @@ function Write-Warning {
     #>
     param([string]$Message)
     
-    # Call original Write-Warning
-    & $originalWriteWarning -Message $Message
-    
-    # Also log it
-    $callStack = Get-PSCallStack
-    $location = "Unknown"
-    if ($callStack.Count -gt 1) {
-        $caller = $callStack[1]
-        $location = "$($caller.FunctionName)@$($caller.ScriptName):$($caller.ScriptLineNumber)"
+    # CRITICAL: Prevent recursion by checking flag FIRST, before any operations
+    # If we're already in a Write-Warning call, skip everything to prevent infinite recursion
+    if ($script:WriteWarningInProgress) {
+        # Just output to console directly to avoid recursion
+        [Console]::Error.WriteLine("WARNING: $Message")
+        return
     }
     
-    Add-MiracleBootLog -Level "WARNING" -Message $Message -Location $location -NoConsole
+    # CRITICAL: Check call count to prevent deep recursion chains
+    if ($script:WriteWarningCallCount -gt 10) {
+        # Too many nested calls, skip logging to prevent overflow
+        [Console]::Error.WriteLine("WARNING: $Message")
+        return
+    }
+    
+    # Increment call counter and set flag BEFORE calling original
+    $script:WriteWarningCallCount++
+    $script:WriteWarningInProgress = $true
+    
+    try {
+        # Call original Write-Warning (this may trigger other logging, but we're protected by the flag)
+        & $originalWriteWarning -Message $Message -ErrorAction SilentlyContinue
+        
+        # Also log it (with minimal call stack usage to prevent overflow)
+        # Skip call stack retrieval entirely to prevent call depth overflow
+        # Just log with "Write-Warning" location to avoid Get-PSCallStack overhead
+        # Use -ErrorAction SilentlyContinue to prevent any errors from propagating
+        Add-MiracleBootLog -Level "WARNING" -Message $Message -Location "Write-Warning" -NoConsole -ErrorAction SilentlyContinue
+    } catch {
+        # Silently fail if logging causes issues (prevents recursion)
+        # Don't call Write-Warning here as we're already in Write-Warning
+    } finally {
+        # Always clear the flag and decrement counter
+        $script:WriteWarningInProgress = $false
+        if ($script:WriteWarningCallCount -gt 0) {
+            $script:WriteWarningCallCount--
+        }
+    }
 }
 
 # Initialize on module load

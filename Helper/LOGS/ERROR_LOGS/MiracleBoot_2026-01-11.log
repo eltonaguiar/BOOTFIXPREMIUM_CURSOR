@@ -1,15 +1,6 @@
-[2026-01-11 00:16:53.050] [INFO] [PID:9780] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 00:57:19.331] [INFO] [PID:9780] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 00:57:32.606] [INFO] [PID:27176] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:41:03.196] [INFO] [PID:30732] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:43:29.576] [INFO] [PID:7060] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:43:41.473] [INFO] [PID:19964] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:44:13.226] [INFO] [PID:20732] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:44:37.079] [INFO] [PID:21836] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:44:55.138] [INFO] [PID:21320] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:45:12.984] [INFO] [PID:19548] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:45:27.675] [INFO] [PID:20904] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 03:46:10.744] [INFO] [PID:35972] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 12:13:59.549] [INFO] [PID:34524] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 12:14:33.828] [INFO] [PID:34804] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
-[2026-01-11 12:20:33.910] [INFO] [PID:22076] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-11 19:49:12.998] [INFO] [PID:28656] [WinRepairGUI.ps1] WinRepairGUI.ps1 loaded
+[2026-01-11 19:49:15.385] [WARNING] [PID:28656] [Write-Warning] Failed to process adapter Intel(R) Ethernet Controller I226-V: The property 'DriverVersion' cannot be found on this object. Verify that the property exists.
+[2026-01-11 19:49:15.455] [WARNING] [PID:28656] [Write-Warning] Failed to process adapter Intel(R) Wi-Fi 6E AX211 160MHz: The property 'DriverVersion' cannot be found on this object. Verify that the property exists.
+[2026-01-11 19:49:15.514] [WARNING] [PID:28656] [Write-Warning] Failed to process adapter Bluetooth Device (Personal Area Network) #3: The property 'DriverVersion' cannot be found on this object. Verify that the property exists.
+[2026-01-11 19:49:15.574] [WARNING] [PID:28656] [Write-Warning] Failed to process adapter Realtek PCIe 5GbE Family Controller: The property 'DriverVersion' cannot be found on this object. Verify that the property exists.
+[2026-01-11 19:49:15.642] [WARNING] [PID:28656] [Write-Warning] Failed to process adapter IPVanish Tap Adapter: The property 'DriverVersion' cannot be found on this object. Verify that the property exists.

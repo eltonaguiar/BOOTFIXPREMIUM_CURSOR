@@ -41,12 +41,7 @@ Miracle Boot works in **multiple Windows environments**, automatically detecting
 2. When Windows fails to start, you'll see "Preparing Automatic Repair"
 3. Go to **Advanced Options** → **Troubleshoot** → **Command Prompt**
 4. **Enable Internet** (if needed - see `SHIFT_F10.txt` for commands)
-5. **Download from GitHub** (if not already on USB):
-   ```powershell
-   cd D:\
-   powershell -Command "$client = New-Object System.Net.WebClient; $client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force"
-   cd D:\MiracleBoot_v7_1_1-main
-   ```
+5. Navigate to your Miracle Boot folder (on USB or local drive)
 6. Run: `RunMiracleBoot.cmd`
 
 **Interface:** Text-based menu (MS-DOS Style) - all features available via keyboard navigation.
@@ -83,12 +78,7 @@ See `SHIFT_F10.txt` for complete network troubleshooting guide.
    netsh interface ip set dns name="Ethernet" static 8.8.8.8
    ping 8.8.8.8
    ```
-3. **Download from GitHub** (if not already on USB):
-   ```powershell
-   cd D:\
-   powershell -Command "$client = New-Object System.Net.WebClient; $client.DownloadFile('https://github.com/eltonaguiar/MiracleBoot_v7_1_1/archive/refs/heads/main.zip', 'D:\MiracleBoot.zip'); Expand-Archive -Path 'D:\MiracleBoot.zip' -DestinationPath 'D:\' -Force"
-   cd D:\MiracleBoot_v7_1_1-main
-   ```
+3. Navigate to your Miracle Boot folder (on USB or local drive)
 4. Run: `RunMiracleBoot.cmd`
 
 **Interface:** Text-based menu (MS-DOS Style) - optimized for minimal environments.
@@ -103,7 +93,6 @@ See `SHIFT_F10.txt` for complete network troubleshooting guide.
 - Option to install portable Chrome/Firefox browser for web access
 - Network support for downloading drivers and tools
 - Full offline repair capabilities
-- **GitHub download support** - Download directly in WinPE if internet is enabled
 
 **Note:** If internet doesn't work in WinPE, download on another device and copy via USB (see `SHIFT_F10.txt` Section 2, Option C).
 
@@ -132,10 +121,9 @@ See `SHIFT_F10.txt` for complete network troubleshooting guide.
 
 ## ⚡ Quick Start Guide
 
-### Step 1: Download and Extract
-1. Download Miracle Boot from GitHub
-2. Extract all files to a folder (e.g., `C:\MiracleBoot` or `D:\MiracleBoot`)
-3. **Important:** Keep all `.ps1` and `.cmd` files together in the same folder
+### Step 1: Extract Files
+1. Extract all files to a folder (e.g., `C:\MiracleBoot` or `D:\MiracleBoot`)
+2. **Important:** Keep all `.ps1` and `.cmd` files together in the same folder
 
 ### Step 2: Choose Your Environment
 
@@ -548,50 +536,23 @@ The tool now validates that boot repairs target real Windows installations. If o
 
 ```
 MiracleBoot_v7_1_1/
-├── MiracleBoot.ps1                    # Main PowerShell entry point
-├── RunMiracleBoot.cmd                 # Main CMD entry point
-├── README.md                          # This file (main documentation)
-├── QUICK_START.txt                    # Quick start guide
-├── SHIFT_F10.txt                      # WinRE/WinPE quick reference guide
-├── bitlocker.txt                      # BitLocker recovery guide
-├── EMERGENCY_BOOT_REPAIR_GUIDE.md    # Emergency scripts usage guide
-├── ERROR_PREVENTION_GUIDE.txt         # Error prevention reference
-├── WINLOAD_EFI_REPAIR_COMMANDS.txt    # winload.efi repair commands
-│
-├── Helper/                             # Core modules and engine
-│   ├── WinRepairCore.ps1              # Core functions and repair operations
-│   ├── WinRepairGUI.ps1               # GUI interface (WPF) for FullOS
-│   ├── WinRepairTUI.ps1               # Text-based interface for WinPE/WinRE
-│   ├── WinRepairCore.cmd              # CMD fallback functions
-│   ├── EmergencyRepair.ps1           # Emergency repair functions
-│   ├── ErrorLogging.ps1               # Centralized error logging
+├── MiracleBoot.ps1              # Main PowerShell entry point
+├── RunMiracleBoot.cmd           # Main CMD entry point
+├── Helper/                       # Core modules
+│   ├── WinRepairCore.ps1        # Core functions and repair operations
+│   ├── WinRepairGUI.ps1         # GUI interface (WPF) for FullOS
+│   ├── WinRepairTUI.ps1         # Text-based interface for WinPE/WinRE
+│   ├── WinRepairCore.cmd        # CMD fallback functions
+│   ├── EmergencyRepair.ps1      # Emergency repair functions
+│   ├── ErrorLogging.ps1         # Centralized error logging
 │   └── [Other helper modules]
-│
-├── EMERGENCY_BOOT1.cmd                # Ultra-simple boot repair
-├── EMERGENCY_BOOT2.cmd                # Advanced boot repair
-├── EMERGENCY_BOOT3.cmd                # Comprehensive boot repair
-├── EMERGENCY_BOOT4.cmd                # Smart minimal boot repair (recommended)
-├── FIX_BCD_NOT_FOUND.cmd              # Targeted BCD fix
-│
-├── Test/                               # Testing scripts and test outputs
-│   ├── Integration/                   # Integration tests
-│   ├── Unit/                          # Unit tests
-│   ├── GUI/                           # GUI testing scripts
-│   ├── Production/                   # Production readiness tests
-│   └── [Test output files]
-│
-├── DOCUMENTATION/                      # Additional documentation
-│   ├── Reports/                       # Validation reports, analysis documents
-│   ├── Validation/                    # Validation JSON files
-│   ├── Assets/                        # Images and visual assets
-│   ├── Analysis/                      # Code analysis documents
-│   ├── Plans/                         # Implementation plans
-│   ├── Features/                      # Feature documentation
-│   ├── Guides/                        # User guides
-│   └── [Other documentation]
-│
-└── Logs/                              # Application logs
-    └── ERROR_LOGS/                    # Error log files
+├── EMERGENCY_BOOT1.cmd          # Ultra-simple boot repair
+├── EMERGENCY_BOOT2.cmd          # Advanced boot repair
+├── EMERGENCY_BOOT3.cmd          # Comprehensive boot repair
+├── EMERGENCY_BOOT4.cmd          # Smart minimal boot repair
+├── FIX_BCD_NOT_FOUND.cmd        # Targeted BCD fix
+├── Test/                        # Testing scripts and documentation
+└── DOCUMENTATION/                # Additional documentation
 ```
 
 ---
@@ -608,19 +569,7 @@ MiracleBoot_v7_1_1/
 
 ## 📄 License
 
-This project is provided as-is for educational and recovery purposes.
-
----
-
-## 🤝 Contributing
-
-Contributions, bug reports, and feature requests are welcome!
-
----
-
-## 📞 Support
-
-For issues, questions, or contributions, please open an issue on the GitHub repository.
+This software is provided as-is for Windows recovery and repair purposes.
 
 ---
 
